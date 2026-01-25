@@ -29,6 +29,7 @@ import io.ktor.client.call.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
+import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -62,25 +63,31 @@ val client = HttpClient {
 }
 
 /**
- * NAS 서버 호환성을 위한 URL 보정 함수
+ * NAS 서버 호환성을 위한 URL 보정 함수 (표준 인코딩 적용)
  */
 fun String.toSafeUrl(): String {
     if (this.isBlank()) return this
     
-    val parts = this.split("?", limit = 2)
-    val baseUrl = parts[0].replace(" ", "%20")
-    if (parts.size < 2) return baseUrl
-    
-    val query = parts[1]
-        .replace(" ", "%20")
-        .replace("/", "%2F")
-        .replace("(", "%28")
-        .replace(")", "%29")
-        .replace("[", "%5B")
-        .replace("]", "%5D")
-        .replace("#", "%23")
-    
-    return "$baseUrl?$query"
+    try {
+        // URL을 ? 기준으로 나눕니다.
+        val parts = this.split("?", limit = 2)
+        val baseUrl = parts[0]
+        if (parts.size < 2) return baseUrl
+        
+        val queryString = parts[1]
+        
+        // path= 파라미터가 있는 경우 해당 값만 안전하게 인코딩
+        if (queryString.startsWith("path=")) {
+            val pathValue = queryString.substring(5)
+            // encodeURLParameter는 공백을 %20으로, 특수문자를 안전하게 변환합니다.
+            val encodedPath = pathValue.encodeURLParameter()
+            return "$baseUrl?path=$encodedPath"
+        }
+        
+        return "$baseUrl?${queryString.encodeURLParameter()}"
+    } catch (e: Exception) {
+        return this
+    }
 }
 
 @Composable
@@ -108,7 +115,9 @@ fun App() {
             val response: List<Category> = client.get("http://192.168.0.2:5000/movies").body()
             myCategories = response
             errorMessage = null
+            println("NAS_LOG: 데이터 로드 성공 (카테고리: ${response.size}개)")
         } catch (e: Exception) {
+            println("NAS_LOG: 초기 데이터 로드 실패: ${e.message}")
             errorMessage = "NAS 연결 실패: ${e.message}"
         } finally {
             isLoading = false
@@ -300,7 +309,7 @@ fun MoviePosterCard(movie: Movie, onMovieClick: (Movie) -> Unit) {
                         placeholder = ColorPainter(Color(0xFF222222)),
                         error = ColorPainter(Color(0xFF442222)),
                         onError = { state ->
-                            println("THUMB_ERROR: Card | URL: $thumbUrl | Error: ${state.result.throwable}")
+                            println("THUMB_ERROR: Card [${movie.title}] | URL: $thumbUrl | Error: ${state.result.throwable}")
                         }
                     )
                 } else {
