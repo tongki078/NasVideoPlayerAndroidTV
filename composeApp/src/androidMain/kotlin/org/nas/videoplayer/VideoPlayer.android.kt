@@ -1,6 +1,7 @@
 package org.nas.videoplayer
 
 import androidx.annotation.OptIn
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -12,34 +13,49 @@ import androidx.media3.ui.PlayerView
 
 @OptIn(UnstableApi::class)
 @Composable
-actual fun VideoPlayer(url: String, modifier: Modifier) {
+actual fun VideoPlayer(
+    url: String, 
+    modifier: Modifier,
+    onFullscreenClick: (() -> Unit)?
+) {
     val context = LocalContext.current
     
-    // ExoPlayer 인스턴스 생성 및 관리
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
-            val mediaItem = MediaItem.fromUri(url)
-            setMediaItem(mediaItem)
             prepare()
             playWhenReady = true
         }
     }
 
-    // 화면에서 사라질 때 플레이어 리소스 해제
+    LaunchedEffect(url) {
+        val mediaItem = MediaItem.fromUri(url)
+        exoPlayer.setMediaItem(mediaItem)
+        exoPlayer.prepare()
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             exoPlayer.release()
         }
     }
 
-    // AndroidView를 통해 Media3 PlayerView 연결
-    AndroidView(
-        factory = { ctx ->
-            PlayerView(ctx).apply {
-                player = exoPlayer
-                useController = true // 재생/일시정지 컨트롤러 표시
+    Box(modifier = modifier) {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    player = exoPlayer
+                    useController = true
+                    setFullscreenButtonClickListener {
+                        onFullscreenClick?.invoke()
+                    }
+                }
+            },
+            modifier = Modifier.matchParentSize(),
+            update = { playerView ->
+                playerView.setFullscreenButtonClickListener {
+                    onFullscreenClick?.invoke()
+                }
             }
-        },
-        modifier = modifier
-    )
+        )
+    }
 }

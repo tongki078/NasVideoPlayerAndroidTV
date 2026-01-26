@@ -1,8 +1,6 @@
 package org.nas.videoplayer
 
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.interop.UIKitView
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -13,40 +11,46 @@ import platform.AVFoundation.pause
 import platform.AVKit.AVPlayerViewController
 import platform.Foundation.NSURL
 import platform.UIKit.UIView
+import platform.AVKit.AVPlayerViewControllerDelegateProtocol
+import platform.darwin.NSObject
 
 @OptIn(ExperimentalForeignApi::class)
 @Composable
-actual fun VideoPlayer(url: String, modifier: Modifier) {
-    // URL이 변경될 때만 플레이어 객체를 생성합니다.
+actual fun VideoPlayer(
+    url: String, 
+    modifier: Modifier,
+    onFullscreenClick: (() -> Unit)?
+) {
     val player = remember(url) {
         val nsUrl = NSURL.URLWithString(url)
         nsUrl?.let { AVPlayer(uRL = it) }
     }
 
-    // 플레이어 컨트롤러를 remember로 유지하여 뷰가 다시 그려질 때 초기화되지 않게 합니다.
-    val playerViewController = remember { AVPlayerViewController() }
-
-    if (player != null) {
-        UIKitView(
-            factory = {
-                playerViewController.player = player
-                playerViewController.showsPlaybackControls = true
-                // 영상이 화면 비율에 맞게 꽉 차도록 설정 (검은 화면 방지)
-                playerViewController.videoGravity = AVLayerVideoGravityResizeAspect
-                
-                player.play()
-                playerViewController.view
-            },
-            modifier = modifier,
-            onRelease = {
-                player.pause()
-                playerViewController.player = null
-            },
-            interactive = true
-        )
+    val playerViewController = remember { 
+        AVPlayerViewController().apply {
+            showsPlaybackControls = true
+            videoGravity = AVLayerVideoGravityResizeAspect
+        }
     }
 
-    // 컴포저블이 화면에서 사라질 때 영상을 멈춥니다.
+    // URL 변경 시 플레이어 교체
+    LaunchedEffect(player) {
+        playerViewController.player = player
+        player?.play()
+    }
+
+    UIKitView(
+        factory = {
+            playerViewController.view
+        },
+        modifier = modifier,
+        onRelease = {
+            player?.pause()
+            playerViewController.player = null
+        },
+        interactive = true
+    )
+
     DisposableEffect(Unit) {
         onDispose {
             player?.pause()
