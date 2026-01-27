@@ -1,11 +1,17 @@
 package org.nas.videoplayer
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -40,6 +46,7 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -64,7 +71,7 @@ data class Series(
     val thumbnailUrl: String? = null
 )
 
-enum class Screen { HOME, ANIMATIONS, FOREIGN_TV }
+enum class Screen { HOME, ANIMATIONS, FOREIGN_TV, SEARCH }
 
 val client = HttpClient {
     install(ContentNegotiation) {
@@ -87,42 +94,34 @@ fun String.toSafeUrl(): String {
 
 fun String.cleanTitle(): String {
     var cleaned = this
-    
-    // 1. 확장자 제거
     if (cleaned.contains(".")) {
         val ext = cleaned.substringAfterLast('.')
         if (ext.length in 2..4) cleaned = cleaned.substringBeforeLast('.')
     }
-
-    // 2. (태그) -> [태그] 변경
-    cleaned = cleaned.replace(Regex("^\\(([^)]+)\\)"), "[$1]")
-
-    // 3. 날짜 패턴(.YYMMDD.)에서 연도 추출 (예: .251124. -> 2025)
+    val techPattern = "(?i)\\.?(?:\\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|KL).*"
+    cleaned = cleaned.replace(Regex(techPattern), "")
     val dateMatch = Regex("\\.(\\d{2})\\d{4}(\\.|$)").find(cleaned)
     var extractedYear = ""
     if (dateMatch != null) {
         extractedYear = "20" + dateMatch.groupValues[1]
         cleaned = cleaned.replace(dateMatch.value, ".")
     }
-
-    // 4. 에피소드 정보 제거 (그룹화를 위해 E01 등 제거)
     cleaned = cleaned.replace(Regex("(?i)\\.?[Ee]\\d+"), "")
-
-    // 5. 불필요한 메타데이터 제거 (1080p, 720p, Bluray, KL 등)
-    cleaned = cleaned.replace(Regex("\\.?\\d{3,4}p.*", RegexOption.IGNORE_CASE), "")
-    cleaned = cleaned.replace(Regex("\\.Bluray.*", RegexOption.IGNORE_CASE), "")
-    cleaned = cleaned.replace(Regex("-KL$", RegexOption.IGNORE_CASE), "")
-
-    // 6. 점(.)을 공백으로 바꾸고 정리
-    cleaned = cleaned.replace(".", " ").trim()
-    
-    // 7. 연도 형식 표준화
-    cleaned = cleaned.replace(Regex("\\s*\\((\\d{4})\\)"), " - $1")
-    if (extractedYear.isNotEmpty() && !cleaned.contains(extractedYear)) {
+    cleaned = cleaned.replace(".", " ").replace("_", " ")
+    cleaned = cleaned.replace(Regex("\\(([^)]+)\\)"), "[$1]")
+    cleaned = cleaned.replace(Regex("\\[\\s+"), "[").replace(Regex("\\s+]"), "]")
+    val yearMatch = Regex("(19|20)\\d{2}").find(cleaned)
+    if (yearMatch != null) {
+        val year = yearMatch.value
+        val titleBeforeYear = cleaned.take(yearMatch.range.first).trim()
+        cleaned = if (titleBeforeYear.endsWith("-")) "$titleBeforeYear $year"
+        else if (titleBeforeYear.isNotEmpty()) "$titleBeforeYear - $year"
+        else year
+    } else if (extractedYear.isNotEmpty()) {
         cleaned = if (cleaned.contains(" - ")) cleaned else "$cleaned - $extractedYear"
     }
-
-    return cleaned.trim().replace(Regex("\\s+"), " ")
+    cleaned = cleaned.replace(Regex("\\s+"), " ").replace(Regex("\\s-\\s+"), " - ")
+    return cleaned.trim()
 }
 
 fun String.extractEpisode(): String? {
@@ -135,7 +134,6 @@ fun String.prettyTitle(): String {
     val ep = this.extractEpisode()
     val base = this.cleanTitle()
     if (ep == null) return base
-    
     return if (base.contains(" - ")) {
         val split = base.split(" - ", limit = 2)
         "${split[0]} $ep - ${split[1]}"
@@ -166,7 +164,6 @@ fun App() {
 
     var homeLatestCategories by remember { mutableStateOf<List<Category>>(emptyList()) }
     var homeAniCategories by remember { mutableStateOf<List<Category>>(emptyList()) }
-
     var foreignTvPathStack by remember { mutableStateOf<List<String>>(emptyList()) }
     var explorerItems by remember { mutableStateOf<List<Category>>(emptyList()) }
 
@@ -200,12 +197,12 @@ fun App() {
                     val pathQuery = if (foreignTvPathStack.isEmpty()) "" else "외국TV/${foreignTvPathStack.joinToString("/")}"
                     val url = if (pathQuery.isEmpty()) "http://192.168.0.2:5000/foreigntv"
                              else "http://192.168.0.2:5000/list?path=${pathQuery.encodeURLParameter()}"
-
                     val raw: List<Category> = client.get(url).body()
                     explorerItems = if (foreignTvPathStack.isEmpty()) {
                         raw.filter { it.name.contains("미국") || it.name.contains("중국") || it.name.contains("일본") }
                     } else raw
                 }
+                Screen.SEARCH -> {}
             }
         } catch (e: Exception) {
             errorMessage = "연결 실패: ${e.message}"
@@ -222,12 +219,13 @@ fun App() {
         )
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            if (selectedMovie != null) {
-                VideoPlayerScreen(movie = selectedMovie!!) { selectedMovie = null }
-            } else if (selectedSeries != null || isMovieFolder) {
-                val seriesData = if (selectedSeries != null) {
-                    selectedSeries!!
-                } else {
+            val movie = selectedMovie
+            val series = selectedSeries
+            if (movie != null) {
+                VideoPlayerScreen(movie = movie) { selectedMovie = null }
+            } else if (series != null || isMovieFolder) {
+                val seriesData = if (series != null) series
+                else {
                     val movies = explorerItems.flatMap { it.movies }
                     Series(
                         title = foreignTvPathStack.lastOrNull() ?: "외국 TV",
@@ -235,26 +233,33 @@ fun App() {
                         thumbnailUrl = movies.firstOrNull()?.thumbnailUrl
                     )
                 }
-
                 SeriesDetailScreen(
                     series = seriesData,
                     onBack = {
                         if (selectedSeries != null) selectedSeries = null
-                        else foreignTvPathStack = foreignTvPathStack.dropLast(1)
+                        else if (foreignTvPathStack.isNotEmpty()) foreignTvPathStack = foreignTvPathStack.dropLast(1)
                     },
                     onPlayFullScreen = { selectedMovie = it }
                 )
             } else {
                 Scaffold(
                     topBar = {
-                        if (errorMessage == null) {
+                        if (errorMessage == null && currentScreen != Screen.SEARCH) {
                             NetflixTopBar(currentScreen, onScreenSelected = {
                                 currentScreen = it
                                 if (it != Screen.FOREIGN_TV) foreignTvPathStack = emptyList()
                             })
                         }
                     },
-                    bottomBar = { NetflixBottomNavigation() },
+                    bottomBar = { 
+                        NetflixBottomNavigation(
+                            currentScreen = currentScreen,
+                            onScreenSelected = { 
+                                currentScreen = it
+                                if (it != Screen.FOREIGN_TV) foreignTvPathStack = emptyList()
+                            }
+                        ) 
+                    },
                     containerColor = Color.Black
                 ) { paddingValues ->
                     Box(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
@@ -263,6 +268,7 @@ fun App() {
                         } else if (errorMessage != null) {
                             ErrorView(errorMessage!!) {
                                 homeLatestCategories = emptyList()
+                                homeAniCategories = emptyList()
                                 currentScreen = Screen.HOME
                             }
                         } else {
@@ -275,6 +281,7 @@ fun App() {
                                     onFolderClick = { foreignTvPathStack = foreignTvPathStack + it },
                                     onBackClick = { if (foreignTvPathStack.isNotEmpty()) foreignTvPathStack = foreignTvPathStack.dropLast(1) }
                                 )
+                                Screen.SEARCH -> SearchScreen(onSeriesClick = { selectedSeries = it })
                             }
                         }
                     }
@@ -285,86 +292,186 @@ fun App() {
 }
 
 @Composable
-fun NasAppBar(title: String, onBack: (() -> Unit)? = null) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .height(64.dp)
-            .padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (onBack != null) {
-            IconButton(onClick = onBack) {
-                Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+fun SearchScreen(onSeriesClick: (Series) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var selectedCategory by remember { mutableStateOf("전체") }
+    val categories = listOf("전체", "최신영화", "애니메이션", "외국TV")
+    val suggestedKeywords = listOf("짱구", "나혼자만 레벨업", "미국 드라마", "최신 애니")
+    
+    var searchResults by remember { mutableStateOf<List<Series>>(emptyList()) }
+    var isSearching by remember { mutableStateOf(false) }
+    var isDropdownExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(query, selectedCategory) {
+        if (query.isBlank()) {
+            searchResults = emptyList()
+            isSearching = false
+            return@LaunchedEffect
+        }
+        
+        delay(300) // 0.3초로 단축하여 반응성 향상
+        isSearching = true
+        try {
+            val response: List<Category> = client.get("http://192.168.0.2:5000/search") {
+                parameter("q", query)
+                parameter("category", selectedCategory)
+            }.body()
+            searchResults = response.flatMap { it.movies }.groupBySeries()
+        } catch (e: Exception) {
+            println("검색 오류: ${e.message}")
+        } finally {
+            isSearching = false
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().background(Color.Black).statusBarsPadding()) {
+        TextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            placeholder = { Text("제목, 장르, 시리즈 검색", color = Color.Gray) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.Gray) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { query = "" }) {
+                        Icon(Icons.Default.Close, contentDescription = null, tint = Color.White)
+                    }
+                }
+            },
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color(0xFF333333),
+                unfocusedContainerColor = Color(0xFF333333),
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                cursorColor = Color.Red,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent
+            ),
+            shape = RoundedCornerShape(8.dp),
+            singleLine = true
+        )
+
+        Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).wrapContentSize(Alignment.TopStart)) {
+            Surface(
+                onClick = { isDropdownExpanded = true },
+                color = Color(0xFF2B2B2B),
+                shape = RoundedCornerShape(4.dp),
+                border = BorderStroke(1.dp, Color.DarkGray.copy(alpha = 0.5f))
+            ) {
+                Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = "카테고리: $selectedCategory", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(8.dp))
+                    Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                }
+            }
+
+            DropdownMenu(
+                expanded = isDropdownExpanded,
+                onDismissRequest = { isDropdownExpanded = false },
+                modifier = Modifier.background(Color(0xFF1F1F1F)).border(1.dp, Color.DarkGray, RoundedCornerShape(4.dp))
+            ) {
+                categories.forEach { category ->
+                    DropdownMenuItem(
+                        text = { Text(text = category, color = if (selectedCategory == category) Color.Red else Color.White, fontWeight = if (selectedCategory == category) FontWeight.Bold else FontWeight.Normal) },
+                        onClick = { selectedCategory = category; isDropdownExpanded = false }
+                    )
+                }
             }
         }
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleLarge.copy(
-                fontWeight = FontWeight.Black,
-                fontSize = 22.sp,
-                letterSpacing = (-0.5).sp
-            ),
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(start = if (onBack == null) 12.dp else 4.dp)
-        )
+
+        Box(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
+            if (isSearching) {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color.Red)
+            } else if (query.isEmpty()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("추천 검색어", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Spacer(Modifier.height(12.dp))
+                    FlowRow(mainAxisSpacing = 8.dp, crossAxisSpacing = 8.dp) {
+                        suggestedKeywords.forEach { keyword ->
+                            SuggestionChip(
+                                onClick = { query = keyword },
+                                label = { Text(keyword) },
+                                shape = CircleShape,
+                                colors = SuggestionChipDefaults.suggestionChipColors(containerColor = Color(0xFF1A1A1A), labelColor = Color.LightGray),
+                                border = BorderStroke(1.dp, Color.DarkGray)
+                            )
+                        }
+                    }
+                }
+            } else if (searchResults.isEmpty()) {
+                Text("검색 결과가 없습니다", color = Color.Gray, modifier = Modifier.align(Alignment.Center))
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(searchResults) { series ->
+                        SearchGridItem(series, onSeriesClick)
+                    }
+                }
+            }
+        }
     }
 }
 
 @Composable
-fun ForeignTvExplorer(
-    pathStack: List<String>,
-    items: List<Category>,
-    onFolderClick: (String) -> Unit,
-    onBackClick: () -> Unit
-) {
-    Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        NasAppBar(
-            title = if (pathStack.isEmpty()) "외국 TV" else pathStack.last(),
-            onBack = if (pathStack.isNotEmpty()) onBackClick else null
-        )
+fun FlowRow(mainAxisSpacing: androidx.compose.ui.unit.Dp, crossAxisSpacing: androidx.compose.ui.unit.Dp, content: @Composable () -> Unit) {
+    androidx.compose.ui.layout.Layout(content = content) { measurables, constraints ->
+        val placeholders = measurables.map { it.measure(constraints.copy(minWidth = 0)) }
+        val rows = mutableListOf<List<androidx.compose.ui.layout.Placeable>>()
+        var currentRow = mutableListOf<androidx.compose.ui.layout.Placeable>()
+        var currentRowWidth = 0
+        placeholders.forEach { placeable ->
+            if (currentRowWidth + placeable.width + mainAxisSpacing.roundToPx() > constraints.maxWidth && currentRow.isNotEmpty()) {
+                rows.add(currentRow); currentRow = mutableListOf(); currentRowWidth = 0
+            }
+            currentRow.add(placeable); currentRowWidth += placeable.width + mainAxisSpacing.roundToPx()
+        }
+        rows.add(currentRow)
+        val height = rows.sumOf { it.maxOf { p -> p.height } + crossAxisSpacing.roundToPx() }
+        layout(constraints.maxWidth, height) {
+            var y = 0
+            rows.forEach { row ->
+                var x = 0
+                row.forEach { placeable -> placeable.placeRelative(x, y); x += placeable.width + mainAxisSpacing.roundToPx() }
+                y += row.maxOf { it.height } + crossAxisSpacing.roundToPx()
+            }
+        }
+    }
+}
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = 8.dp)
-        ) {
+@Composable
+fun SearchGridItem(series: Series, onSeriesClick: (Series) -> Unit) {
+    Card(modifier = Modifier.aspectRatio(2f/3f).clickable { onSeriesClick(series) }, shape = RoundedCornerShape(4.dp)) {
+        Box(Modifier.fillMaxSize()) {
+            AsyncImage(model = ImageRequest.Builder(LocalPlatformContext.current).data(series.thumbnailUrl?.toSafeUrl()).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.6f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.8f))))
+            Text(text = series.title, color = Color.White, modifier = Modifier.align(Alignment.BottomStart).padding(6.dp), style = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Bold), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+fun NasAppBar(title: String, onBack: (() -> Unit)? = null) {
+    Row(modifier = Modifier.fillMaxWidth().statusBarsPadding().height(64.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (onBack != null) { IconButton(onClick = onBack) { Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White) } }
+        Text(text = title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black, fontSize = 22.sp), color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = if (onBack == null) 12.dp else 4.dp))
+    }
+}
+
+@Composable
+fun ForeignTvExplorer(pathStack: List<String>, items: List<Category>, onFolderClick: (String) -> Unit, onBackClick: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        NasAppBar(title = if (pathStack.isEmpty()) "외국 TV" else pathStack.last(), onBack = if (pathStack.isNotEmpty()) onBackClick else null)
+        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
             items(items) { item ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .clickable { onFolderClick(item.name) },
-                    shape = RoundedCornerShape(8.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1F1F1F))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.List,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.padding(8.dp)
-                            )
-                        }
-                        Spacer(Modifier.width(16.dp))
-                        Text(
-                            text = item.name,
-                            color = Color.White,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color.DarkGray)
+                Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).clickable { onFolderClick(item.name) }, shape = RoundedCornerShape(8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF1F1F1F))) {
+                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(shape = RoundedCornerShape(6.dp), color = Color.White.copy(alpha = 0.1f), modifier = Modifier.size(40.dp)) { Icon(imageVector = Icons.AutoMirrored.Filled.List, contentDescription = null, tint = Color.White, modifier = Modifier.padding(8.dp)) }
+                        Spacer(Modifier.width(16.dp)); Text(text = item.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium); Spacer(Modifier.weight(1f)); Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color.DarkGray)
                     }
                 }
             }
@@ -377,9 +484,7 @@ fun HomeScreen(latest: List<Category>, ani: List<Category>, onSeriesClick: (Seri
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item {
             val all = latest.flatMap { it.movies } + ani.flatMap { it.movies }
-            HeroSection(all.firstOrNull()) { movie ->
-                all.groupBySeries().find { it.episodes.any { ep -> ep.id == movie.id } }?.let { onSeriesClick(it) }
-            }
+            HeroSection(all.firstOrNull()) { movie -> all.groupBySeries().find { it.episodes.any { ep -> ep.id == movie.id } }?.let { onSeriesClick(it) } }
         }
         item { MovieRow("최신 영화", latest.flatMap { it.movies }.groupBySeries(), onSeriesClick) }
         item { MovieRow("애니메이션", ani.flatMap { it.movies }.groupBySeries(), onSeriesClick) }
@@ -391,9 +496,7 @@ fun HomeScreen(latest: List<Category>, ani: List<Category>, onSeriesClick: (Seri
 fun CategoryListScreen(title: String, categories: List<Category>, onSeriesClick: (Series) -> Unit) {
     Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         NasAppBar(title = title)
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            item { MovieRow(title, categories.flatMap { it.movies }.groupBySeries(), onSeriesClick) }
-        }
+        LazyColumn(modifier = Modifier.fillMaxSize()) { item { MovieRow(title, categories.flatMap { it.movies }.groupBySeries(), onSeriesClick) } }
     }
 }
 
@@ -401,62 +504,14 @@ fun CategoryListScreen(title: String, categories: List<Category>, onSeriesClick:
 fun MovieRow(title: String, seriesList: List<Series>, onSeriesClick: (Series) -> Unit) {
     if (seriesList.isEmpty()) return
     Column(modifier = Modifier.padding(vertical = 12.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium.copy(
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 20.sp,
-                letterSpacing = (-0.5).sp
-            ),
-            color = Color.White,
-            modifier = Modifier.padding(start = 16.dp, bottom = 12.dp)
-        )
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+        Text(text = title, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold, fontSize = 20.sp), color = Color.White, modifier = Modifier.padding(start = 16.dp, bottom = 12.dp))
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(seriesList) { series ->
-                Card(
-                    modifier = Modifier
-                        .width(120.dp)
-                        .height(180.dp)
-                        .clickable { onSeriesClick(series) },
-                    shape = RoundedCornerShape(4.dp)
-                ) {
+                Card(modifier = Modifier.width(120.dp).height(180.dp).clickable { onSeriesClick(series) }, shape = RoundedCornerShape(4.dp)) {
                     Box(Modifier.fillMaxSize()) {
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalPlatformContext.current)
-                                .data(series.thumbnailUrl?.toSafeUrl())
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.verticalGradient(
-                                        0.6f to Color.Transparent,
-                                        1f to Color.Black.copy(alpha = 0.8f)
-                                    )
-                                )
-                        )
-                        Text(
-                            text = series.title,
-                            color = Color.White,
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(8.dp),
-                            style = TextStyle(
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                shadow = Shadow(color = Color.Black, blurRadius = 4f)
-                            ),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        AsyncImage(model = ImageRequest.Builder(LocalPlatformContext.current).data(series.thumbnailUrl?.toSafeUrl()).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                        Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(0.6f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.8f))))
+                        Text(text = series.title, color = Color.White, modifier = Modifier.align(Alignment.BottomStart).padding(8.dp), style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Bold, shadow = Shadow(color = Color.Black, blurRadius = 4f)), maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -468,54 +523,19 @@ fun MovieRow(title: String, seriesList: List<Series>, onSeriesClick: (Series) ->
 fun SeriesDetailScreen(series: Series, onBack: () -> Unit, onPlayFullScreen: (Movie) -> Unit) {
     var playingMovie by remember(series) { mutableStateOf(series.episodes.firstOrNull()) }
     Column(modifier = Modifier.fillMaxSize().background(Color.Black).navigationBarsPadding()) {
-        NasAppBar(title = series.title, onBack = onBack)
-
+        NasAppBar(title = "", onBack = onBack)
         Box(modifier = Modifier.fillMaxWidth().height(210.dp).background(Color.DarkGray)) {
-            playingMovie?.let { movie ->
-                VideoPlayer(url = movie.videoUrl.toSafeUrl(), modifier = Modifier.fillMaxSize(), onFullscreenClick = { onPlayFullScreen(movie) })
-            }
+            playingMovie?.let { movie -> VideoPlayer(url = movie.videoUrl.toSafeUrl(), modifier = Modifier.fillMaxSize(), onFullscreenClick = { onPlayFullScreen(movie) }) }
         }
-
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 100.dp)
-        ) {
-            item {
-                Text(
-                    text = series.title,
-                    color = Color.White,
-                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
-                    modifier = Modifier.padding(16.dp)
-                )
-            }
+        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 100.dp)) {
+            item { Text(text = series.title, color = Color.White, style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold), modifier = Modifier.padding(16.dp)) }
             items(series.episodes) { ep ->
                 ListItem(
-                    headlineContent = { 
-                        Text(
-                            text = ep.title.extractEpisode() ?: ep.title.cleanTitle(),
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        ) 
-                    },
+                    headlineContent = { Text(text = ep.title.extractEpisode() ?: ep.title.cleanTitle(), color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     leadingContent = {
                         Box(modifier = Modifier.width(120.dp).height(68.dp).background(Color(0xFF1A1A1A))) {
-                            AsyncImage(
-                                model = ImageRequest.Builder(LocalPlatformContext.current)
-                                    .data(ep.thumbnailUrl?.toSafeUrl())
-                                    .crossfade(true)
-                                    .build(),
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                            Icon(
-                                imageVector = Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.8f),
-                                modifier = Modifier.align(Alignment.Center).size(28.dp)
-                            )
+                            AsyncImage(model = ImageRequest.Builder(LocalPlatformContext.current).data(ep.thumbnailUrl?.toSafeUrl()).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.align(Alignment.Center).size(28.dp))
                         }
                     },
                     modifier = Modifier.clickable { playingMovie = ep },
@@ -539,53 +559,13 @@ fun VideoPlayerScreen(movie: Movie, onBack: () -> Unit) {
 @Composable
 fun HeroSection(movie: Movie?, onPlayClick: (Movie) -> Unit) {
     Box(modifier = Modifier.fillMaxWidth().height(480.dp)) {
-        AsyncImage(
-            model = movie?.thumbnailUrl?.toSafeUrl(),
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Black.copy(alpha = 0.4f),
-                            Color.Transparent,
-                            Color.Black.copy(alpha = 0.9f)
-                        ),
-                        startY = 0f
-                    )
-                )
-        )
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(start = 24.dp, end = 24.dp, bottom = 48.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = movie?.title?.prettyTitle() ?: "",
-                color = Color.White,
-                textAlign = TextAlign.Center,
-                style = TextStyle(
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = (-1).sp,
-                    shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 12f)
-                )
-            )
+        AsyncImage(model = movie?.thumbnailUrl?.toSafeUrl(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(colors = listOf(Color.Black.copy(alpha = 0.4f), Color.Transparent, Color.Black.copy(alpha = 0.9f)), startY = 0f)))
+        Column(modifier = Modifier.align(Alignment.BottomCenter).padding(start = 24.dp, end = 24.dp, bottom = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text = movie?.title?.prettyTitle() ?: "", color = Color.White, textAlign = TextAlign.Center, style = TextStyle(fontSize = 32.sp, fontWeight = FontWeight.Black, letterSpacing = (-1).sp, shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 12f)))
             Spacer(modifier = Modifier.height(20.dp))
-            Button(
-                onClick = { movie?.let { onPlayClick(it) } },
-                colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                shape = RoundedCornerShape(4.dp),
-                modifier = Modifier.fillMaxWidth(0.5f).height(44.dp)
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.Black)
-                Spacer(Modifier.width(8.dp))
-                Text("재생", color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
+            Button(onClick = { movie?.let { onPlayClick(it) } }, colors = ButtonDefaults.buttonColors(containerColor = Color.White), shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth(0.5f).height(44.dp)) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.Black); Spacer(Modifier.width(8.dp)); Text("재생", color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
             }
         }
     }
@@ -593,60 +573,18 @@ fun HeroSection(movie: Movie?, onPlayClick: (Movie) -> Unit) {
 
 @Composable
 fun NetflixTopBar(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = "NAS",
-            color = Color.Red,
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Black,
-            modifier = Modifier.clickable { onScreenSelected(Screen.HOME) }
-        )
-        Spacer(modifier = Modifier.width(32.dp))
-        Text(
-            text = "애니메이션",
-            color = if (currentScreen == Screen.ANIMATIONS) Color.White else Color.LightGray.copy(alpha = 0.7f),
-            style = MaterialTheme.typography.titleMedium.copy(
-                fontWeight = if (currentScreen == Screen.ANIMATIONS) FontWeight.Bold else FontWeight.Medium,
-                fontSize = 16.sp
-            ),
-            modifier = Modifier.clickable { onScreenSelected(Screen.ANIMATIONS) }
-        )
-        Spacer(modifier = Modifier.width(24.dp))
-        Text(
-            text = "외국 TV",
-            color = if (currentScreen == Screen.FOREIGN_TV) Color.White else Color.LightGray.copy(alpha = 0.7f),
-            style = MaterialTheme.typography.titleMedium.copy(
-                fontWeight = if (currentScreen == Screen.FOREIGN_TV) FontWeight.Bold else FontWeight.Medium,
-                fontSize = 16.sp
-            ),
-            modifier = Modifier.clickable { onScreenSelected(Screen.FOREIGN_TV) }
-        )
+    Row(modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(text = "NAS", color = Color.Red, fontSize = 24.sp, fontWeight = FontWeight.Black, modifier = Modifier.clickable { onScreenSelected(Screen.HOME) }); Spacer(modifier = Modifier.width(32.dp))
+        Text(text = "애니메이션", color = if (currentScreen == Screen.ANIMATIONS) Color.White else Color.LightGray.copy(alpha = 0.7f), style = MaterialTheme.typography.titleMedium.copy(fontWeight = if (currentScreen == Screen.ANIMATIONS) FontWeight.Bold else FontWeight.Medium, fontSize = 16.sp), modifier = Modifier.clickable { onScreenSelected(Screen.ANIMATIONS) }); Spacer(modifier = Modifier.width(24.dp))
+        Text(text = "외국 TV", color = if (currentScreen == Screen.FOREIGN_TV) Color.White else Color.LightGray.copy(alpha = 0.7f), style = MaterialTheme.typography.titleMedium.copy(fontWeight = if (currentScreen == Screen.FOREIGN_TV) FontWeight.Bold else FontWeight.Medium, fontSize = 16.sp), modifier = Modifier.clickable { onScreenSelected(Screen.FOREIGN_TV) })
     }
 }
 
 @Composable
-fun NetflixBottomNavigation() {
+fun NetflixBottomNavigation(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
     NavigationBar(containerColor = Color.Black, contentColor = Color.White) {
-        NavigationBarItem(
-            selected = true, 
-            onClick = {}, 
-            icon = { Icon(imageVector = Icons.Default.Home, contentDescription = null) }, 
-            label = { Text("홈") }, 
-            colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent, selectedTextColor = Color.White, unselectedTextColor = Color.Gray)
-        )
-        NavigationBarItem(
-            selected = false, 
-            onClick = {}, 
-            icon = { Icon(imageVector = Icons.Default.Search, contentDescription = null) }, 
-            label = { Text("검색") }, 
-            colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent, selectedTextColor = Color.White, unselectedTextColor = Color.Gray)
-        )
+        NavigationBarItem(selected = currentScreen == Screen.HOME, onClick = { onScreenSelected(Screen.HOME) }, icon = { Icon(imageVector = Icons.Default.Home, contentDescription = null) }, label = { Text("홈") }, colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent, selectedIconColor = Color.White, unselectedIconColor = Color.Gray, selectedTextColor = Color.White, unselectedTextColor = Color.Gray))
+        NavigationBarItem(selected = currentScreen == Screen.SEARCH, onClick = { onScreenSelected(Screen.SEARCH) }, icon = { Icon(imageVector = Icons.Default.Search, contentDescription = null) }, label = { Text("검색") }, colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent, selectedIconColor = Color.White, unselectedIconColor = Color.Gray, selectedTextColor = Color.White, unselectedTextColor = Color.Gray))
     }
 }
 
@@ -654,9 +592,7 @@ fun NetflixBottomNavigation() {
 fun ErrorView(message: String, onRetry: () -> Unit) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(message, color = Color.White, textAlign = TextAlign.Center)
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = onRetry) { Text("재시도") }
+            Text(message, color = Color.White, textAlign = TextAlign.Center); Spacer(modifier = Modifier.height(16.dp)); Button(onClick = onRetry) { Text("재시도") }
         }
     }
 }
