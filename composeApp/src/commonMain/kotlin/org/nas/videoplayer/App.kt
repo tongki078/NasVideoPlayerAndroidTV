@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -81,21 +82,66 @@ val client = HttpClient {
 
 fun String.toSafeUrl(): String {
     if (this.isBlank()) return this
-    // 이미 인코딩된 URL이 올 수 있으므로 공백만 %20으로 안전하게 치환
     return this.replace(" ", "%20")
 }
 
 fun String.cleanTitle(): String {
-    var cleaned = if (this.contains(".")) this.substringBeforeLast('.') else this
-    cleaned = cleaned.trim()
+    var cleaned = this
+    
+    // 1. 확장자 제거
+    if (cleaned.contains(".")) {
+        val ext = cleaned.substringAfterLast('.')
+        if (ext.length in 2..4) cleaned = cleaned.substringBeforeLast('.')
+    }
+
+    // 2. (태그) -> [태그] 변경
+    cleaned = cleaned.replace(Regex("^\\(([^)]+)\\)"), "[$1]")
+
+    // 3. 날짜 패턴(.YYMMDD.)에서 연도 추출 (예: .251124. -> 2025)
+    val dateMatch = Regex("\\.(\\d{2})\\d{4}(\\.|$)").find(cleaned)
+    var extractedYear = ""
+    if (dateMatch != null) {
+        extractedYear = "20" + dateMatch.groupValues[1]
+        cleaned = cleaned.replace(dateMatch.value, ".")
+    }
+
+    // 4. 에피소드 정보 제거 (그룹화를 위해 E01 등 제거)
+    cleaned = cleaned.replace(Regex("(?i)\\.?[Ee]\\d+"), "")
+
+    // 5. 불필요한 메타데이터 제거 (1080p, 720p, Bluray, KL 등)
+    cleaned = cleaned.replace(Regex("\\.?\\d{3,4}p.*", RegexOption.IGNORE_CASE), "")
+    cleaned = cleaned.replace(Regex("\\.Bluray.*", RegexOption.IGNORE_CASE), "")
+    cleaned = cleaned.replace(Regex("-KL$", RegexOption.IGNORE_CASE), "")
+
+    // 6. 점(.)을 공백으로 바꾸고 정리
+    cleaned = cleaned.replace(".", " ").trim()
+    
+    // 7. 연도 형식 표준화
     cleaned = cleaned.replace(Regex("\\s*\\((\\d{4})\\)"), " - $1")
-    return cleaned.trim()
+    if (extractedYear.isNotEmpty() && !cleaned.contains(extractedYear)) {
+        cleaned = if (cleaned.contains(" - ")) cleaned else "$cleaned - $extractedYear"
+    }
+
+    return cleaned.trim().replace(Regex("\\s+"), " ")
 }
 
 fun String.extractEpisode(): String? {
     val eMatch = Regex("(?i)[Ee](\\d+)").find(this)
     if (eMatch != null) return "${eMatch.groupValues[1].toInt()}화"
     return null
+}
+
+fun String.prettyTitle(): String {
+    val ep = this.extractEpisode()
+    val base = this.cleanTitle()
+    if (ep == null) return base
+    
+    return if (base.contains(" - ")) {
+        val split = base.split(" - ", limit = 2)
+        "${split[0]} $ep - ${split[1]}"
+    } else {
+        "$base $ep"
+    }
 }
 
 fun List<Movie>.groupBySeries(): List<Series> {
@@ -130,7 +176,6 @@ fun App() {
     var selectedSeries by remember { mutableStateOf<Series?>(null) }
     var currentScreen by remember { mutableStateOf(Screen.HOME) }
 
-    // 영상 파일이 있는 최하위 폴더인지 판단
     val isMovieFolder = currentScreen == Screen.FOREIGN_TV && explorerItems.any { it.movies.isNotEmpty() }
 
     LaunchedEffect(currentScreen, foreignTvPathStack) {
@@ -180,7 +225,6 @@ fun App() {
             if (selectedMovie != null) {
                 VideoPlayerScreen(movie = selectedMovie!!) { selectedMovie = null }
             } else if (selectedSeries != null || isMovieFolder) {
-                // [상세 페이지] 애니메이션 시리즈 또는 외국 TV 영상 폴더
                 val seriesData = if (selectedSeries != null) {
                     selectedSeries!!
                 } else {
@@ -246,8 +290,8 @@ fun NasAppBar(title: String, onBack: (() -> Unit)? = null) {
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .height(56.dp)
-            .padding(horizontal = 4.dp),
+            .height(64.dp)
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (onBack != null) {
@@ -257,12 +301,15 @@ fun NasAppBar(title: String, onBack: (() -> Unit)? = null) {
         }
         Text(
             text = title,
+            style = MaterialTheme.typography.titleLarge.copy(
+                fontWeight = FontWeight.Black,
+                fontSize = 22.sp,
+                letterSpacing = (-0.5).sp
+            ),
             color = Color.White,
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(start = if (onBack == null) 16.dp else 8.dp)
+            modifier = Modifier.padding(start = if (onBack == null) 12.dp else 4.dp)
         )
     }
 }
@@ -280,16 +327,44 @@ fun ForeignTvExplorer(
             onBack = if (pathStack.isNotEmpty()) onBackClick else null
         )
 
-        LazyColumn(Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 8.dp)
+        ) {
             items(items) { item ->
                 Card(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clickable { onFolderClick(item.name) },
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .clickable { onFolderClick(item.name) },
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1F1F1F))
                 ) {
-                    Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.List, contentDescription = null, tint = Color.Gray)
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.List,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
                         Spacer(Modifier.width(16.dp))
-                        Text(item.name, color = Color.White, fontSize = 16.sp)
+                        Text(
+                            text = item.name,
+                            color = Color.White,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color.DarkGray)
                     }
                 }
             }
@@ -325,21 +400,63 @@ fun CategoryListScreen(title: String, categories: List<Category>, onSeriesClick:
 @Composable
 fun MovieRow(title: String, seriesList: List<Series>, onSeriesClick: (Series) -> Unit) {
     if (seriesList.isEmpty()) return
-    Column(modifier = Modifier.padding(vertical = 8.dp)) {
-        Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(modifier = Modifier.padding(vertical = 12.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 20.sp,
+                letterSpacing = (-0.5).sp
+            ),
+            color = Color.White,
+            modifier = Modifier.padding(start = 16.dp, bottom = 12.dp)
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             items(seriesList) { series ->
-                Card(modifier = Modifier.width(135.dp).height(200.dp).clickable { onSeriesClick(series) }) {
+                Card(
+                    modifier = Modifier
+                        .width(120.dp)
+                        .height(180.dp)
+                        .clickable { onSeriesClick(series) },
+                    shape = RoundedCornerShape(4.dp)
+                ) {
                     Box(Modifier.fillMaxSize()) {
                         AsyncImage(
                             model = ImageRequest.Builder(LocalPlatformContext.current)
                                 .data(series.thumbnailUrl?.toSafeUrl())
                                 .crossfade(true)
                                 .build(),
-                            contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
                         )
-                        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f)))))
-                        Text(series.title, color = Color.White, modifier = Modifier.align(Alignment.BottomStart).padding(8.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        0.6f to Color.Transparent,
+                                        1f to Color.Black.copy(alpha = 0.8f)
+                                    )
+                                )
+                        )
+                        Text(
+                            text = series.title,
+                            color = Color.White,
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(8.dp),
+                            style = TextStyle(
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                shadow = Shadow(color = Color.Black, blurRadius = 4f)
+                            ),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
@@ -351,29 +468,39 @@ fun MovieRow(title: String, seriesList: List<Series>, onSeriesClick: (Series) ->
 fun SeriesDetailScreen(series: Series, onBack: () -> Unit, onPlayFullScreen: (Movie) -> Unit) {
     var playingMovie by remember(series) { mutableStateOf(series.episodes.firstOrNull()) }
     Column(modifier = Modifier.fillMaxSize().background(Color.Black).navigationBarsPadding()) {
-        // 일관된 상단바
         NasAppBar(title = series.title, onBack = onBack)
 
-        // 상단 영상 플레이어
         Box(modifier = Modifier.fillMaxWidth().height(210.dp).background(Color.DarkGray)) {
             playingMovie?.let { movie ->
                 VideoPlayer(url = movie.videoUrl.toSafeUrl(), modifier = Modifier.fillMaxSize(), onFullscreenClick = { onPlayFullScreen(movie) })
             }
         }
 
-        // 하단 에피소드 리스트 (여백 강화)
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 100.dp)
         ) {
             item {
-                Text(series.title, color = Color.White, fontSize = 20.sp, modifier = Modifier.padding(16.dp), fontWeight = FontWeight.Bold)
+                Text(
+                    text = series.title,
+                    color = Color.White,
+                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
+                    modifier = Modifier.padding(16.dp)
+                )
             }
             items(series.episodes) { ep ->
                 ListItem(
-                    headlineContent = { Text(ep.title.extractEpisode() ?: ep.title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    headlineContent = { 
+                        Text(
+                            text = ep.title.extractEpisode() ?: ep.title.cleanTitle(),
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        ) 
+                    },
                     leadingContent = {
-                        Box(modifier = Modifier.width(110.dp).height(62.dp).background(Color(0xFF1A1A1A))) {
+                        Box(modifier = Modifier.width(120.dp).height(68.dp).background(Color(0xFF1A1A1A))) {
                             AsyncImage(
                                 model = ImageRequest.Builder(LocalPlatformContext.current)
                                     .data(ep.thumbnailUrl?.toSafeUrl())
@@ -383,7 +510,12 @@ fun SeriesDetailScreen(series: Series, onBack: () -> Unit, onPlayFullScreen: (Mo
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
                             )
-                            Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.align(Alignment.Center).size(24.dp))
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.8f),
+                                modifier = Modifier.align(Alignment.Center).size(28.dp)
+                            )
                         }
                     },
                     modifier = Modifier.clickable { playingMovie = ep },
@@ -406,18 +538,54 @@ fun VideoPlayerScreen(movie: Movie, onBack: () -> Unit) {
 
 @Composable
 fun HeroSection(movie: Movie?, onPlayClick: (Movie) -> Unit) {
-    Box(modifier = Modifier.fillMaxWidth().height(400.dp)) {
-        AsyncImage(model = movie?.thumbnailUrl?.toSafeUrl(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black))))
-        Column(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Box(modifier = Modifier.fillMaxWidth().height(480.dp)) {
+        AsyncImage(
+            model = movie?.thumbnailUrl?.toSafeUrl(),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Black.copy(alpha = 0.4f),
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.9f)
+                        ),
+                        startY = 0f
+                    )
+                )
+        )
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(start = 24.dp, end = 24.dp, bottom = 48.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Text(
-                text = movie?.title?.cleanTitle() ?: "",
-                color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
-                style = TextStyle(shadow = Shadow(color = Color.Black, blurRadius = 8f))
+                text = movie?.title?.prettyTitle() ?: "",
+                color = Color.White,
+                textAlign = TextAlign.Center,
+                style = TextStyle(
+                    fontSize = 32.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = (-1).sp,
+                    shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 12f)
+                )
             )
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = { movie?.let { onPlayClick(it) } }, colors = ButtonDefaults.buttonColors(containerColor = Color.White), shape = RoundedCornerShape(4.dp)) {
-                Text("▶ 재생", color = Color.Black, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(20.dp))
+            Button(
+                onClick = { movie?.let { onPlayClick(it) } },
+                colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                shape = RoundedCornerShape(4.dp),
+                modifier = Modifier.fillMaxWidth(0.5f).height(44.dp)
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.Black)
+                Spacer(Modifier.width(8.dp))
+                Text("재생", color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
             }
         }
     }
@@ -425,20 +593,60 @@ fun HeroSection(movie: Movie?, onPlayClick: (Movie) -> Unit) {
 
 @Composable
 fun NetflixTopBar(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = Color.Red, modifier = Modifier.size(32.dp).clickable { onScreenSelected(Screen.HOME) })
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "NAS",
+            color = Color.Red,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Black,
+            modifier = Modifier.clickable { onScreenSelected(Screen.HOME) }
+        )
+        Spacer(modifier = Modifier.width(32.dp))
+        Text(
+            text = "애니메이션",
+            color = if (currentScreen == Screen.ANIMATIONS) Color.White else Color.LightGray.copy(alpha = 0.7f),
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontWeight = if (currentScreen == Screen.ANIMATIONS) FontWeight.Bold else FontWeight.Medium,
+                fontSize = 16.sp
+            ),
+            modifier = Modifier.clickable { onScreenSelected(Screen.ANIMATIONS) }
+        )
         Spacer(modifier = Modifier.width(24.dp))
-        Text("애니메이션", color = if (currentScreen == Screen.ANIMATIONS) Color.White else Color.LightGray, fontSize = 16.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clickable { onScreenSelected(Screen.ANIMATIONS) })
-        Spacer(modifier = Modifier.width(20.dp))
-        Text("외국 TV", color = if (currentScreen == Screen.FOREIGN_TV) Color.White else Color.LightGray, fontSize = 16.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clickable { onScreenSelected(Screen.FOREIGN_TV) })
+        Text(
+            text = "외국 TV",
+            color = if (currentScreen == Screen.FOREIGN_TV) Color.White else Color.LightGray.copy(alpha = 0.7f),
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontWeight = if (currentScreen == Screen.FOREIGN_TV) FontWeight.Bold else FontWeight.Medium,
+                fontSize = 16.sp
+            ),
+            modifier = Modifier.clickable { onScreenSelected(Screen.FOREIGN_TV) }
+        )
     }
 }
 
 @Composable
 fun NetflixBottomNavigation() {
     NavigationBar(containerColor = Color.Black, contentColor = Color.White) {
-        NavigationBarItem(selected = true, onClick = {}, icon = { Icon(imageVector = Icons.Default.Home, contentDescription = null) }, label = { Text("홈") }, colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent, selectedTextColor = Color.White, unselectedTextColor = Color.Gray))
-        NavigationBarItem(selected = false, onClick = {}, icon = { Icon(imageVector = Icons.Default.Search, contentDescription = null) }, label = { Text("검색") }, colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent, selectedTextColor = Color.White, unselectedTextColor = Color.Gray))
+        NavigationBarItem(
+            selected = true, 
+            onClick = {}, 
+            icon = { Icon(imageVector = Icons.Default.Home, contentDescription = null) }, 
+            label = { Text("홈") }, 
+            colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent, selectedTextColor = Color.White, unselectedTextColor = Color.Gray)
+        )
+        NavigationBarItem(
+            selected = false, 
+            onClick = {}, 
+            icon = { Icon(imageVector = Icons.Default.Search, contentDescription = null) }, 
+            label = { Text("검색") }, 
+            colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent, selectedTextColor = Color.White, unselectedTextColor = Color.Gray)
+        )
     }
 }
 
@@ -453,7 +661,4 @@ fun ErrorView(message: String, onRetry: () -> Unit) {
     }
 }
 
-@Composable
-fun PlaceholderScreen(title: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(title, color = Color.White) }
-}
+fun PlaceholderScreen(title: String) {}
