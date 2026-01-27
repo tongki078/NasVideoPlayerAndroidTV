@@ -9,10 +9,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,10 +18,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -47,7 +45,7 @@ import kotlinx.serialization.json.Json
 @Serializable
 data class Category(
     val name: String,
-    val movies: List<Movie>
+    val movies: List<Movie> = emptyList()
 )
 
 @Serializable
@@ -65,7 +63,7 @@ data class Series(
     val thumbnailUrl: String? = null
 )
 
-enum class Screen { HOME, SERIES, MOVIES, ANIMATIONS }
+enum class Screen { HOME, ANIMATIONS, FOREIGN_TV }
 
 val client = HttpClient {
     install(ContentNegotiation) {
@@ -83,49 +81,20 @@ val client = HttpClient {
 
 fun String.toSafeUrl(): String {
     if (this.isBlank()) return this
-    try {
-        val parts = this.split("?", limit = 2)
-        val baseUrl = parts[0]
-        if (parts.size < 2) return baseUrl
-        val queryString = parts[1]
-        if (queryString.startsWith("path=")) {
-            val pathValue = queryString.substring(5)
-            val encodedPath = pathValue.encodeURLParameter()
-            return "$baseUrl?path=$encodedPath"
-        }
-        return "$baseUrl?${queryString.encodeURLParameter()}"
-    } catch (e: Exception) {
-        return this
-    }
+    // 이미 인코딩된 URL이 올 수 있으므로 공백만 %20으로 안전하게 치환
+    return this.replace(" ", "%20")
 }
 
 fun String.cleanTitle(): String {
     var cleaned = if (this.contains(".")) this.substringBeforeLast('.') else this
-    val parts = cleaned.split('.')
-    if (parts.size > 1) {
-        val filteredParts = mutableListOf<String>()
-        for (part in parts) {
-            val p = part.lowercase()
-            if (p.matches(Regex("^e\\d+.*")) || p.contains("1080p") || p.contains("720p") ||
-                p.contains("h264") || p.contains("h265") || p.contains("x264") || p.matches(Regex("\\d{6}"))) {
-                break
-            }
-            filteredParts.add(part)
-        }
-        if (filteredParts.isNotEmpty()) cleaned = filteredParts.joinToString(" ")
-    }
     cleaned = cleaned.trim()
     cleaned = cleaned.replace(Regex("\\s*\\((\\d{4})\\)"), " - $1")
-    cleaned = cleaned.replace(Regex("\\(([^)]+)\\)"), "[$1]")
-    cleaned = cleaned.replace("(더빙)", "[더빙]")
     return cleaned.trim()
 }
 
 fun String.extractEpisode(): String? {
     val eMatch = Regex("(?i)[Ee](\\d+)").find(this)
     if (eMatch != null) return "${eMatch.groupValues[1].toInt()}화"
-    val hwaMatch = Regex("(\\d+)[화회]").find(this)
-    if (hwaMatch != null) return "${hwaMatch.groupValues[1].toInt()}화"
     return null
 }
 
@@ -149,28 +118,52 @@ fun App() {
             .build()
     }
 
-    var myCategories by remember { mutableStateOf<List<Category>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
+    var homeLatestCategories by remember { mutableStateOf<List<Category>>(emptyList()) }
+    var homeAniCategories by remember { mutableStateOf<List<Category>>(emptyList()) }
+
+    var foreignTvPathStack by remember { mutableStateOf<List<String>>(emptyList()) }
+    var explorerItems by remember { mutableStateOf<List<Category>>(emptyList()) }
+
+    var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var selectedMovie by remember { mutableStateOf<Movie?>(null) }
     var selectedSeries by remember { mutableStateOf<Series?>(null) }
     var currentScreen by remember { mutableStateOf(Screen.HOME) }
 
-    LaunchedEffect(Unit) {
+    // 영상 파일이 있는 최하위 폴더인지 판단
+    val isMovieFolder = currentScreen == Screen.FOREIGN_TV && explorerItems.any { it.movies.isNotEmpty() }
+
+    LaunchedEffect(currentScreen, foreignTvPathStack) {
         try {
-            isLoading = true
-            val animations: List<Category> = try {
-                client.get("http://192.168.0.2:5000/animations").body()
-            } catch (e: Exception) { emptyList() }
-            
-            val latest: List<Category> = try {
-                client.get("http://192.168.0.2:5000/latestmovies").body()
-            } catch (e: Exception) { emptyList() }
-            
-            myCategories = animations + latest
             errorMessage = null
+            when (currentScreen) {
+                Screen.HOME -> {
+                    if (homeLatestCategories.isEmpty()) {
+                        isLoading = true
+                        homeLatestCategories = client.get("http://192.168.0.2:5000/latestmovies").body()
+                        homeAniCategories = client.get("http://192.168.0.2:5000/animations").body()
+                    }
+                }
+                Screen.ANIMATIONS -> {
+                    if (homeAniCategories.isEmpty()) {
+                        isLoading = true
+                        homeAniCategories = client.get("http://192.168.0.2:5000/animations").body()
+                    }
+                }
+                Screen.FOREIGN_TV -> {
+                    isLoading = true
+                    val pathQuery = if (foreignTvPathStack.isEmpty()) "" else "외국TV/${foreignTvPathStack.joinToString("/")}"
+                    val url = if (pathQuery.isEmpty()) "http://192.168.0.2:5000/foreigntv"
+                             else "http://192.168.0.2:5000/list?path=${pathQuery.encodeURLParameter()}"
+
+                    val raw: List<Category> = client.get(url).body()
+                    explorerItems = if (foreignTvPathStack.isEmpty()) {
+                        raw.filter { it.name.contains("미국") || it.name.contains("중국") || it.name.contains("일본") }
+                    } else raw
+                }
+            }
         } catch (e: Exception) {
-            errorMessage = "NAS 연결 실패: ${e.message}"
+            errorMessage = "연결 실패: ${e.message}"
         } finally {
             isLoading = false
         }
@@ -180,144 +173,173 @@ fun App() {
         colorScheme = darkColorScheme(
             primary = Color(0xFFE50914),
             background = Color.Black,
-            surface = Color(0xFF121212),
-            onBackground = Color.White,
-            onSurface = Color.White
+            surface = Color(0xFF121212)
         )
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             if (selectedMovie != null) {
                 VideoPlayerScreen(movie = selectedMovie!!) { selectedMovie = null }
-            } else if (selectedSeries != null) {
-                SeriesDetailScreen(
-                    series = selectedSeries!!,
-                    onBack = { selectedSeries = null },
-                    onPlayFullScreen = { selectedMovie = it }
-                )
-            } else {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    Scaffold(
-                        bottomBar = { NetflixBottomNavigation() },
-                        containerColor = Color.Black
-                    ) { paddingValues ->
-                        if (isLoading) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(color = Color(0xFFE50914))
-                            }
-                        } else if (errorMessage != null) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(errorMessage!!, color = Color.White, modifier = Modifier.padding(16.dp))
-                                    Button(onClick = { 
-                                        isLoading = true
-                                        errorMessage = null
-                                    }) { Text("다시 시도") }
-                                }
-                            }
-                        } else {
-                            when (currentScreen) {
-                                Screen.HOME -> HomeScreen(paddingValues, myCategories) { selectedSeries = it }
-                                Screen.SERIES -> PlaceholderScreen(paddingValues, "시리즈")
-                                Screen.MOVIES -> PlaceholderScreen(paddingValues, "영화")
-                                Screen.ANIMATIONS -> AnimationDetailScreen(paddingValues, myCategories) { selectedSeries = it }
-                            }
-                        }
-                    }
-
-                    if (!isLoading && errorMessage == null) {
-                        NetflixTopBar(
-                            currentScreen = currentScreen,
-                            onScreenSelected = { currentScreen = it }
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun HomeScreen(paddingValues: PaddingValues, categories: List<Category>, onSeriesClick: (Series) -> Unit) {
-    val animationSeries = categories.filter { it.name != "최신 영화" }.flatMap { it.movies }.groupBySeries()
-    val latestSeries = categories.filter { it.name == "최신 영화" }.flatMap { it.movies }.groupBySeries()
-    val allSeries = categories.flatMap { it.movies }.groupBySeries()
-
-    LazyColumn(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
-        item { 
-            val firstMovie = categories.firstOrNull()?.movies?.firstOrNull()
-            HeroSection(firstMovie) { movie ->
-                val series = allSeries.find { it.episodes.contains(movie) }
-                series?.let { onSeriesClick(it) }
-            }
-        }
-        
-        if (animationSeries.isNotEmpty()) {
-            item {
-                MovieRow("지금 뜨는 애니메이션", animationSeries) { series ->
-                    onSeriesClick(series)
-                }
-            }
-        }
-
-        if (latestSeries.isNotEmpty()) {
-            item {
-                MovieRow("최신 영화", latestSeries) { series ->
-                    onSeriesClick(series)
-                }
-            }
-        }
-        
-        item { Spacer(modifier = Modifier.height(32.dp)) }
-    }
-}
-
-@Composable
-fun AnimationDetailScreen(paddingValues: PaddingValues, categories: List<Category>, onSeriesClick: (Series) -> Unit) {
-    val animationSeries = categories.filter { it.name != "최신 영화" }.flatMap { it.movies }.groupBySeries()
-    
-    Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        Spacer(modifier = Modifier.statusBarsPadding().height(60.dp))
-        
-        if (animationSeries.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("애니메이션 컨텐츠가 없습니다.", color = Color.Gray)
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding() + 20.dp)
-            ) {
-                item {
-                    val featured = animationSeries.first()
-                    HeroSection(featured.episodes.firstOrNull(), isCompact = true) { onSeriesClick(featured) }
-                }
-
-                item {
-                    Text(
-                        text = "애니메이션 전체 목록",
-                        color = Color.White,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 12.dp)
+            } else if (selectedSeries != null || isMovieFolder) {
+                // [상세 페이지] 애니메이션 시리즈 또는 외국 TV 영상 폴더
+                val seriesData = if (selectedSeries != null) {
+                    selectedSeries!!
+                } else {
+                    val movies = explorerItems.flatMap { it.movies }
+                    Series(
+                        title = foreignTvPathStack.lastOrNull() ?: "외국 TV",
+                        episodes = movies,
+                        thumbnailUrl = movies.firstOrNull()?.thumbnailUrl
                     )
                 }
 
-                val chunks = animationSeries.chunked(3)
-                items(chunks) { rowItems ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        rowItems.forEach { series ->
-                            SeriesPosterCard(
-                                series = series,
-                                onSeriesClick = onSeriesClick,
-                                modifier = Modifier.weight(1f).aspectRatio(0.7f)
-                            )
+                SeriesDetailScreen(
+                    series = seriesData,
+                    onBack = {
+                        if (selectedSeries != null) selectedSeries = null
+                        else foreignTvPathStack = foreignTvPathStack.dropLast(1)
+                    },
+                    onPlayFullScreen = { selectedMovie = it }
+                )
+            } else {
+                Scaffold(
+                    topBar = {
+                        if (errorMessage == null) {
+                            NetflixTopBar(currentScreen, onScreenSelected = {
+                                currentScreen = it
+                                if (it != Screen.FOREIGN_TV) foreignTvPathStack = emptyList()
+                            })
                         }
-                        if (rowItems.size < 3) {
-                            repeat(3 - rowItems.size) { Spacer(modifier = Modifier.weight(1f)) }
+                    },
+                    bottomBar = { NetflixBottomNavigation() },
+                    containerColor = Color.Black
+                ) { paddingValues ->
+                    Box(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
+                        if (isLoading && (currentScreen != Screen.FOREIGN_TV || explorerItems.isEmpty())) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color.Red) }
+                        } else if (errorMessage != null) {
+                            ErrorView(errorMessage!!) {
+                                homeLatestCategories = emptyList()
+                                currentScreen = Screen.HOME
+                            }
+                        } else {
+                            when (currentScreen) {
+                                Screen.HOME -> HomeScreen(homeLatestCategories, homeAniCategories) { selectedSeries = it }
+                                Screen.ANIMATIONS -> CategoryListScreen("애니메이션", homeAniCategories) { selectedSeries = it }
+                                Screen.FOREIGN_TV -> ForeignTvExplorer(
+                                    pathStack = foreignTvPathStack,
+                                    items = explorerItems,
+                                    onFolderClick = { foreignTvPathStack = foreignTvPathStack + it },
+                                    onBackClick = { if (foreignTvPathStack.isNotEmpty()) foreignTvPathStack = foreignTvPathStack.dropLast(1) }
+                                )
+                            }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun NasAppBar(title: String, onBack: (() -> Unit)? = null) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .height(56.dp)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (onBack != null) {
+            IconButton(onClick = onBack) {
+                Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+            }
+        }
+        Text(
+            text = title,
+            color = Color.White,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = if (onBack == null) 16.dp else 8.dp)
+        )
+    }
+}
+
+@Composable
+fun ForeignTvExplorer(
+    pathStack: List<String>,
+    items: List<Category>,
+    onFolderClick: (String) -> Unit,
+    onBackClick: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        NasAppBar(
+            title = if (pathStack.isEmpty()) "외국 TV" else pathStack.last(),
+            onBack = if (pathStack.isNotEmpty()) onBackClick else null
+        )
+
+        LazyColumn(Modifier.fillMaxSize()) {
+            items(items) { item ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clickable { onFolderClick(item.name) },
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+                ) {
+                    Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(imageVector = Icons.AutoMirrored.Filled.List, contentDescription = null, tint = Color.Gray)
+                        Spacer(Modifier.width(16.dp))
+                        Text(item.name, color = Color.White, fontSize = 16.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HomeScreen(latest: List<Category>, ani: List<Category>, onSeriesClick: (Series) -> Unit) {
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        item {
+            val all = latest.flatMap { it.movies } + ani.flatMap { it.movies }
+            HeroSection(all.firstOrNull()) { movie ->
+                all.groupBySeries().find { it.episodes.any { ep -> ep.id == movie.id } }?.let { onSeriesClick(it) }
+            }
+        }
+        item { MovieRow("최신 영화", latest.flatMap { it.movies }.groupBySeries(), onSeriesClick) }
+        item { MovieRow("애니메이션", ani.flatMap { it.movies }.groupBySeries(), onSeriesClick) }
+        item { Spacer(Modifier.height(100.dp)) }
+    }
+}
+
+@Composable
+fun CategoryListScreen(title: String, categories: List<Category>, onSeriesClick: (Series) -> Unit) {
+    Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        NasAppBar(title = title)
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            item { MovieRow(title, categories.flatMap { it.movies }.groupBySeries(), onSeriesClick) }
+        }
+    }
+}
+
+@Composable
+fun MovieRow(title: String, seriesList: List<Series>, onSeriesClick: (Series) -> Unit) {
+    if (seriesList.isEmpty()) return
+    Column(modifier = Modifier.padding(vertical = 8.dp)) {
+        Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(seriesList) { series ->
+                Card(modifier = Modifier.width(135.dp).height(200.dp).clickable { onSeriesClick(series) }) {
+                    Box(Modifier.fillMaxSize()) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(LocalPlatformContext.current)
+                                .data(series.thumbnailUrl?.toSafeUrl())
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop
+                        )
+                        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f)))))
+                        Text(series.title, color = Color.White, modifier = Modifier.align(Alignment.BottomStart).padding(8.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 2)
                     }
                 }
             }
@@ -327,165 +349,45 @@ fun AnimationDetailScreen(paddingValues: PaddingValues, categories: List<Categor
 
 @Composable
 fun SeriesDetailScreen(series: Series, onBack: () -> Unit, onPlayFullScreen: (Movie) -> Unit) {
-    var playingMovie by remember { mutableStateOf<Movie?>(series.episodes.firstOrNull()) }
+    var playingMovie by remember(series) { mutableStateOf(series.episodes.firstOrNull()) }
+    Column(modifier = Modifier.fillMaxSize().background(Color.Black).navigationBarsPadding()) {
+        // 일관된 상단바
+        NasAppBar(title = series.title, onBack = onBack)
 
-    Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // 상단 바 (고정)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
-            }
-        }
-
-        // 영상 영역 (고정)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(210.dp)
-                .background(Color(0xFF1A1A1A))
-        ) {
+        // 상단 영상 플레이어
+        Box(modifier = Modifier.fillMaxWidth().height(210.dp).background(Color.DarkGray)) {
             playingMovie?.let { movie ->
-                VideoPlayer(
-                    url = movie.videoUrl.toSafeUrl(), 
-                    modifier = Modifier.fillMaxSize(),
-                    onFullscreenClick = { onPlayFullScreen(movie) }
-                )
+                VideoPlayer(url = movie.videoUrl.toSafeUrl(), modifier = Modifier.fillMaxSize(), onFullscreenClick = { onPlayFullScreen(movie) })
             }
         }
 
-        // 제목, 정보, 버튼, 리스트를 포함한 스크롤 영역
+        // 하단 에피소드 리스트 (여백 강화)
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 20.dp)
+            contentPadding = PaddingValues(bottom = 100.dp)
         ) {
-            // 제목 및 기본 정보
             item {
-                Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp)) {
-                    Text(
-                        text = series.title,
-                        color = Color.White,
-                        fontSize = 18.sp, // 20.sp에서 10% 추가 축소
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "총 ${series.episodes.size}개의 에피소드",
-                        fontSize = 12.sp, // 소폭 축소
-                        color = Color.Gray
-                    )
-                }
+                Text(series.title, color = Color.White, fontSize = 20.sp, modifier = Modifier.padding(16.dp), fontWeight = FontWeight.Bold)
             }
-
-            // 재생/저장 버튼 영역
-            item {
-                Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                    // 재생 버튼 (높이 약 30% 추가 축소: 30dp -> 24dp)
-                    Button(
-                        onClick = { playingMovie?.let { onPlayFullScreen(it) } },
-                        modifier = Modifier.fillMaxWidth().height(24.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                        shape = RoundedCornerShape(4.dp),
-                        contentPadding = PaddingValues(0.dp)
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.Black, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("재생", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    }
-                    
-                    Spacer(modifier = Modifier.height(6.dp))
-                    
-                    // 저장 버튼 (높이 약 30% 추가 축소: 30dp -> 24dp)
-                    Button(
-                        onClick = { /* TODO: 저장 기능 구현 */ },
-                        modifier = Modifier.fillMaxWidth().height(24.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2B2B2B)),
-                        shape = RoundedCornerShape(4.dp),
-                        contentPadding = PaddingValues(0.dp)
-                    ) {
-                        Text("↓", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("저장", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    }
-                }
-            }
-
-            item { Spacer(modifier = Modifier.height(16.dp)) }
-
-            // 에피소드 헤더 및 구분선
-            item {
-                Column {
-                    HorizontalDivider(color = Color.DarkGray, thickness = 1.dp)
-                    Text(
-                        text = "에피소드",
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp)
-                    )
-                }
-            }
-
-            // 에피소드 리스트
-            items(series.episodes) { episode ->
-                EpisodeItem(episode) { playingMovie = episode }
-            }
-        }
-    }
-}
-
-@Composable
-fun EpisodeItem(episode: Movie, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(modifier = Modifier.width(110.dp).height(64.dp)) {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalPlatformContext.current)
-                    .data(episode.thumbnailUrl?.toSafeUrl()).crossfade(true).build(),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-                placeholder = ColorPainter(Color(0xFF222222))
-            )
-            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White.copy(alpha = 0.8f),
-                modifier = Modifier.align(Alignment.Center).size(22.dp))
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = episode.title.extractEpisode() ?: episode.title.cleanTitle(),
-                color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                maxLines = 1, overflow = TextOverflow.Ellipsis
-            )
-            // 시간 정보 대신 HD 태그와 시청하기 문구 표시
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(top = 4.dp)
-            ) {
-                Surface(
-                    color = Color(0xFF2B2B2B),
-                    shape = RoundedCornerShape(2.dp)
-                ) {
-                    Text(
-                        text = "HD",
-                        color = Color.LightGray,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "시청하기",
-                    color = Color.Gray,
-                    fontSize = 11.sp
+            items(series.episodes) { ep ->
+                ListItem(
+                    headlineContent = { Text(ep.title.extractEpisode() ?: ep.title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingContent = {
+                        Box(modifier = Modifier.width(110.dp).height(62.dp).background(Color(0xFF1A1A1A))) {
+                            AsyncImage(
+                                model = ImageRequest.Builder(LocalPlatformContext.current)
+                                    .data(ep.thumbnailUrl?.toSafeUrl())
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                            Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.align(Alignment.Center).size(24.dp))
+                        }
+                    },
+                    modifier = Modifier.clickable { playingMovie = ep },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
                 )
             }
         }
@@ -495,79 +397,27 @@ fun EpisodeItem(episode: Movie, onClick: () -> Unit) {
 @Composable
 fun VideoPlayerScreen(movie: Movie, onBack: () -> Unit) {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        VideoPlayer(url = movie.videoUrl.toSafeUrl(), modifier = Modifier.fillMaxSize())
-        
-        IconButton(
-            onClick = onBack,
-            modifier = Modifier
-                .statusBarsPadding()
-                .padding(16.dp)
-                .align(Alignment.TopEnd)
-                .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
-        ) {
-            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+        VideoPlayer(movie.videoUrl.toSafeUrl(), Modifier.fillMaxSize())
+        IconButton(onClick = onBack, modifier = Modifier.statusBarsPadding().align(Alignment.TopEnd).padding(16.dp)) {
+            Icon(imageVector = Icons.Default.Close, contentDescription = null, tint = Color.White)
         }
     }
 }
 
 @Composable
-fun HeroSection(featuredMovie: Movie?, isCompact: Boolean = false, onPlayClick: (Movie) -> Unit) {
-    val height = if (isCompact) 320.dp else 450.dp
-    Box(modifier = Modifier.fillMaxWidth().height(height)) {
-        featuredMovie?.thumbnailUrl?.toSafeUrl()?.let { thumbUrl ->
-            AsyncImage(
-                model = ImageRequest.Builder(LocalPlatformContext.current).data(thumbUrl).crossfade(true).build(),
-                contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
-                placeholder = ColorPainter(Color(0xFF222222)), error = ColorPainter(Color(0xFF442222))
+fun HeroSection(movie: Movie?, onPlayClick: (Movie) -> Unit) {
+    Box(modifier = Modifier.fillMaxWidth().height(400.dp)) {
+        AsyncImage(model = movie?.thumbnailUrl?.toSafeUrl(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black))))
+        Column(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = movie?.title?.cleanTitle() ?: "",
+                color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
+                style = TextStyle(shadow = Shadow(color = Color.Black, blurRadius = 8f))
             )
-        }
-        Box(modifier = Modifier.fillMaxSize().background(
-            brush = Brush.verticalGradient(
-                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f), Color.Black),
-                startY = if (isCompact) 100f else 300f
-            )
-        ))
-        Column(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = featuredMovie?.title?.cleanTitle() ?: "", style = TextStyle(fontSize = 26.sp, fontWeight = FontWeight.Medium,
-                shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 8f)), color = Color.White,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 24.dp))
             Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = { featuredMovie?.let { onPlayClick(it) } }, colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                shape = RoundedCornerShape(4.dp), contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp)) {
-                Text("▶ 재생", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            }
-        }
-    }
-}
-
-@Composable
-fun MovieRow(title: String, seriesList: List<Series>, onSeriesClick: (Series) -> Unit) {
-    Column(modifier = Modifier.padding(vertical = 4.dp)) {
-        Text(text = title, fontSize = 18.sp, fontWeight = FontWeight.Medium, color = Color.White,
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp))
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(seriesList) { series ->
-                SeriesPosterCard(series = series, onSeriesClick = onSeriesClick, modifier = Modifier.width(135.dp).height(200.dp))
-            }
-        }
-    }
-}
-
-@Composable
-fun SeriesPosterCard(series: Series, onSeriesClick: (Series) -> Unit, modifier: Modifier = Modifier) {
-    Card(modifier = modifier.clickable { onSeriesClick(series) }, shape = RoundedCornerShape(4.dp)) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            series.thumbnailUrl?.toSafeUrl()?.let { thumbUrl ->
-                AsyncImage(model = ImageRequest.Builder(LocalPlatformContext.current).data(thumbUrl).crossfade(true).build(),
-                    contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            }
-            Box(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter)
-                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f))))
-                .padding(8.dp)) {
-                Column {
-                    Text(text = series.title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(text = "총 ${series.episodes.size}화", color = Color.LightGray, fontSize = 10.sp)
-                }
+            Button(onClick = { movie?.let { onPlayClick(it) } }, colors = ButtonDefaults.buttonColors(containerColor = Color.White), shape = RoundedCornerShape(4.dp)) {
+                Text("▶ 재생", color = Color.Black, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -575,42 +425,35 @@ fun SeriesPosterCard(series: Series, onSeriesClick: (Series) -> Unit, modifier: 
 
 @Composable
 fun NetflixTopBar(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Box(modifier = Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.9f), Color.Transparent)))
-        .statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.Red, modifier = Modifier.size(32.dp).clickable { onScreenSelected(Screen.HOME) })
-            Spacer(modifier = Modifier.width(24.dp))
-            Text("시리즈", color = if (currentScreen == Screen.SERIES) Color.White else Color.LightGray, fontSize = 15.sp, modifier = Modifier.clickable { onScreenSelected(Screen.SERIES) })
-            Spacer(modifier = Modifier.width(20.dp))
-            Text("영화", color = if (currentScreen == Screen.MOVIES) Color.White else Color.LightGray, fontSize = 15.sp, modifier = Modifier.clickable { onScreenSelected(Screen.MOVIES) })
-            Spacer(modifier = Modifier.width(20.dp))
-            Box {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { expanded = true }) {
-                    Text(if (currentScreen == Screen.ANIMATIONS) "애니메이션" else "카테고리", color = Color.White, fontSize = 15.sp)
-                    Text(" ▼", color = Color.White, fontSize = 10.sp)
-                }
-                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(Color(0xFF2B2B2B))) {
-                    DropdownMenuItem(text = { Text("애니메이션", color = Color.White) }, onClick = { onScreenSelected(Screen.ANIMATIONS); expanded = false })
-                }
-            }
-        }
+    Row(modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = Color.Red, modifier = Modifier.size(32.dp).clickable { onScreenSelected(Screen.HOME) })
+        Spacer(modifier = Modifier.width(24.dp))
+        Text("애니메이션", color = if (currentScreen == Screen.ANIMATIONS) Color.White else Color.LightGray, fontSize = 16.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clickable { onScreenSelected(Screen.ANIMATIONS) })
+        Spacer(modifier = Modifier.width(20.dp))
+        Text("외국 TV", color = if (currentScreen == Screen.FOREIGN_TV) Color.White else Color.LightGray, fontSize = 16.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clickable { onScreenSelected(Screen.FOREIGN_TV) })
     }
 }
 
 @Composable
 fun NetflixBottomNavigation() {
-    NavigationBar(containerColor = Color.Black, contentColor = Color.White, tonalElevation = 0.dp) {
-        NavigationBarItem(selected = true, onClick = {}, icon = { Icon(Icons.Default.Home, contentDescription = null) }, label = { Text("홈") },
-            colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.White, selectedTextColor = Color.White, unselectedIconColor = Color.Gray, unselectedTextColor = Color.Gray, indicatorColor = Color.Transparent))
-        NavigationBarItem(selected = false, onClick = {}, icon = { Icon(Icons.Default.Search, contentDescription = null) }, label = { Text("검색") },
-            colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.White, selectedTextColor = Color.White, unselectedIconColor = Color.Gray, unselectedTextColor = Color.Gray, indicatorColor = Color.Transparent))
+    NavigationBar(containerColor = Color.Black, contentColor = Color.White) {
+        NavigationBarItem(selected = true, onClick = {}, icon = { Icon(imageVector = Icons.Default.Home, contentDescription = null) }, label = { Text("홈") }, colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent, selectedTextColor = Color.White, unselectedTextColor = Color.Gray))
+        NavigationBarItem(selected = false, onClick = {}, icon = { Icon(imageVector = Icons.Default.Search, contentDescription = null) }, label = { Text("검색") }, colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent, selectedTextColor = Color.White, unselectedTextColor = Color.Gray))
     }
 }
 
 @Composable
-fun PlaceholderScreen(paddingValues: PaddingValues, title: String) {
-    Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
-        Text("$title 페이지 준비 중", color = Color.LightGray, fontSize = 18.sp)
+fun ErrorView(message: String, onRetry: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(message, color = Color.White, textAlign = TextAlign.Center)
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(onClick = onRetry) { Text("재시도") }
+        }
     }
+}
+
+@Composable
+fun PlaceholderScreen(title: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(title, color = Color.White) }
 }
