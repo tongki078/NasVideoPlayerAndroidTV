@@ -71,7 +71,7 @@ data class Series(
     val thumbnailUrl: String? = null
 )
 
-enum class Screen { HOME, ANIMATIONS, FOREIGN_TV, SEARCH }
+enum class Screen { HOME, ANIMATIONS, MOVIES, FOREIGN_TV, SEARCH }
 
 val client = HttpClient {
     install(ContentNegotiation) {
@@ -164,8 +164,12 @@ fun App() {
 
     var homeLatestCategories by remember { mutableStateOf<List<Category>>(emptyList()) }
     var homeAniCategories by remember { mutableStateOf<List<Category>>(emptyList()) }
+    
     var foreignTvPathStack by remember { mutableStateOf<List<String>>(emptyList()) }
     var explorerItems by remember { mutableStateOf<List<Category>>(emptyList()) }
+
+    var moviePathStack by remember { mutableStateOf<List<String>>(emptyList()) }
+    var movieExplorerItems by remember { mutableStateOf<List<Category>>(emptyList()) }
 
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -173,9 +177,10 @@ fun App() {
     var selectedSeries by remember { mutableStateOf<Series?>(null) }
     var currentScreen by remember { mutableStateOf(Screen.HOME) }
 
-    val isMovieFolder = currentScreen == Screen.FOREIGN_TV && explorerItems.any { it.movies.isNotEmpty() }
+    val isExplorerSeriesMode = (currentScreen == Screen.FOREIGN_TV && explorerItems.any { it.movies.isNotEmpty() }) ||
+                               (currentScreen == Screen.MOVIES && movieExplorerItems.any { it.movies.isNotEmpty() })
 
-    LaunchedEffect(currentScreen, foreignTvPathStack) {
+    LaunchedEffect(currentScreen, foreignTvPathStack, moviePathStack) {
         try {
             errorMessage = null
             when (currentScreen) {
@@ -191,6 +196,13 @@ fun App() {
                         isLoading = true
                         homeAniCategories = client.get("http://192.168.0.2:5000/animations").body()
                     }
+                }
+                Screen.MOVIES -> {
+                    isLoading = true
+                    val pathQuery = if (moviePathStack.isEmpty()) "" else "영화/${moviePathStack.joinToString("/")}"
+                    val url = if (pathQuery.isEmpty()) "http://192.168.0.2:5000/movies"
+                             else "http://192.168.0.2:5000/list?path=${pathQuery.encodeURLParameter()}"
+                    movieExplorerItems = client.get(url).body()
                 }
                 Screen.FOREIGN_TV -> {
                     isLoading = true
@@ -221,14 +233,17 @@ fun App() {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             val movie = selectedMovie
             val series = selectedSeries
+            
             if (movie != null) {
                 VideoPlayerScreen(movie = movie) { selectedMovie = null }
-            } else if (series != null || isMovieFolder) {
+            } else if (series != null || isExplorerSeriesMode) {
                 val seriesData = if (series != null) series
                 else {
-                    val movies = explorerItems.flatMap { it.movies }
+                    val items = if (currentScreen == Screen.MOVIES) movieExplorerItems else explorerItems
+                    val stack = if (currentScreen == Screen.MOVIES) moviePathStack else foreignTvPathStack
+                    val movies = items.flatMap { it.movies }
                     Series(
-                        title = foreignTvPathStack.lastOrNull() ?: "외국 TV",
+                        title = stack.lastOrNull() ?: "상세보기",
                         episodes = movies,
                         thumbnailUrl = movies.firstOrNull()?.thumbnailUrl
                     )
@@ -237,7 +252,8 @@ fun App() {
                     series = seriesData,
                     onBack = {
                         if (selectedSeries != null) selectedSeries = null
-                        else if (foreignTvPathStack.isNotEmpty()) foreignTvPathStack = foreignTvPathStack.dropLast(1)
+                        else if (currentScreen == Screen.MOVIES) moviePathStack = moviePathStack.dropLast(1)
+                        else foreignTvPathStack = foreignTvPathStack.dropLast(1)
                     },
                     onPlayFullScreen = { selectedMovie = it }
                 )
@@ -248,6 +264,7 @@ fun App() {
                             NetflixTopBar(currentScreen, onScreenSelected = {
                                 currentScreen = it
                                 if (it != Screen.FOREIGN_TV) foreignTvPathStack = emptyList()
+                                if (it != Screen.MOVIES) moviePathStack = emptyList()
                             })
                         }
                     },
@@ -257,25 +274,32 @@ fun App() {
                             onScreenSelected = { 
                                 currentScreen = it
                                 if (it != Screen.FOREIGN_TV) foreignTvPathStack = emptyList()
+                                if (it != Screen.MOVIES) moviePathStack = emptyList()
                             }
                         ) 
                     },
                     containerColor = Color.Black
                 ) { paddingValues ->
                     Box(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
-                        if (isLoading && (currentScreen != Screen.FOREIGN_TV || explorerItems.isEmpty())) {
+                        if (isLoading && (currentScreen == Screen.FOREIGN_TV && explorerItems.isEmpty() || currentScreen == Screen.MOVIES && movieExplorerItems.isEmpty())) {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color.Red) }
                         } else if (errorMessage != null) {
                             ErrorView(errorMessage!!) {
-                                homeLatestCategories = emptyList()
-                                homeAniCategories = emptyList()
                                 currentScreen = Screen.HOME
                             }
                         } else {
                             when (currentScreen) {
                                 Screen.HOME -> HomeScreen(homeLatestCategories, homeAniCategories) { selectedSeries = it }
                                 Screen.ANIMATIONS -> CategoryListScreen("애니메이션", homeAniCategories) { selectedSeries = it }
-                                Screen.FOREIGN_TV -> ForeignTvExplorer(
+                                Screen.MOVIES -> MovieExplorer(
+                                    title = "영화",
+                                    pathStack = moviePathStack,
+                                    items = movieExplorerItems,
+                                    onFolderClick = { moviePathStack = moviePathStack + it },
+                                    onBackClick = { if (moviePathStack.isNotEmpty()) moviePathStack = moviePathStack.dropLast(1) }
+                                )
+                                Screen.FOREIGN_TV -> MovieExplorer(
+                                    title = "외국 TV",
                                     pathStack = foreignTvPathStack,
                                     items = explorerItems,
                                     onFolderClick = { foreignTvPathStack = foreignTvPathStack + it },
@@ -295,8 +319,8 @@ fun App() {
 fun SearchScreen(onSeriesClick: (Series) -> Unit) {
     var query by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("전체") }
-    val categories = listOf("전체", "최신영화", "애니메이션", "외국TV")
-    val suggestedKeywords = listOf("짱구", "나혼자만 레벨업", "미국 드라마", "최신 애니")
+    val categories = listOf("전체", "최신영화", "영화", "애니메이션", "외국TV")
+    val suggestedKeywords = listOf("짱구", "나혼자만 레벨업", "가족 모집", "최신 영화")
     
     var searchResults by remember { mutableStateOf<List<Series>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
@@ -309,7 +333,7 @@ fun SearchScreen(onSeriesClick: (Series) -> Unit) {
             return@LaunchedEffect
         }
         
-        delay(300) // 0.3초로 단축하여 반응성 향상
+        delay(300)
         isSearching = true
         try {
             val response: List<Category> = client.get("http://192.168.0.2:5000/search") {
@@ -418,6 +442,41 @@ fun SearchScreen(onSeriesClick: (Series) -> Unit) {
 }
 
 @Composable
+fun MovieExplorer(
+    title: String,
+    pathStack: List<String>,
+    items: List<Category>,
+    onFolderClick: (String) -> Unit,
+    onBackClick: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        NasAppBar(
+            title = if (pathStack.isEmpty()) title else pathStack.last(),
+            onBack = if (pathStack.isNotEmpty()) onBackClick else null
+        )
+        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
+            items(items) { item ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).clickable { onFolderClick(item.name) },
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1F1F1F))
+                ) {
+                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(shape = RoundedCornerShape(6.dp), color = Color.White.copy(alpha = 0.1f), modifier = Modifier.size(40.dp)) {
+                            Icon(imageVector = Icons.AutoMirrored.Filled.List, contentDescription = null, tint = Color.White, modifier = Modifier.padding(8.dp))
+                        }
+                        Spacer(Modifier.width(16.dp))
+                        Text(text = item.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.weight(1f))
+                        Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color.DarkGray)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun FlowRow(mainAxisSpacing: androidx.compose.ui.unit.Dp, crossAxisSpacing: androidx.compose.ui.unit.Dp, content: @Composable () -> Unit) {
     androidx.compose.ui.layout.Layout(content = content) { measurables, constraints ->
         val placeholders = measurables.map { it.measure(constraints.copy(minWidth = 0)) }
@@ -459,23 +518,6 @@ fun NasAppBar(title: String, onBack: (() -> Unit)? = null) {
     Row(modifier = Modifier.fillMaxWidth().statusBarsPadding().height(64.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         if (onBack != null) { IconButton(onClick = onBack) { Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White) } }
         Text(text = title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black, fontSize = 22.sp), color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = if (onBack == null) 12.dp else 4.dp))
-    }
-}
-
-@Composable
-fun ForeignTvExplorer(pathStack: List<String>, items: List<Category>, onFolderClick: (String) -> Unit, onBackClick: () -> Unit) {
-    Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        NasAppBar(title = if (pathStack.isEmpty()) "외국 TV" else pathStack.last(), onBack = if (pathStack.isNotEmpty()) onBackClick else null)
-        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
-            items(items) { item ->
-                Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).clickable { onFolderClick(item.name) }, shape = RoundedCornerShape(8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF1F1F1F))) {
-                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Surface(shape = RoundedCornerShape(6.dp), color = Color.White.copy(alpha = 0.1f), modifier = Modifier.size(40.dp)) { Icon(imageVector = Icons.AutoMirrored.Filled.List, contentDescription = null, tint = Color.White, modifier = Modifier.padding(8.dp)) }
-                        Spacer(Modifier.width(16.dp)); Text(text = item.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium); Spacer(Modifier.weight(1f)); Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color.DarkGray)
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -576,6 +618,7 @@ fun NetflixTopBar(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
     Row(modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(text = "NAS", color = Color.Red, fontSize = 24.sp, fontWeight = FontWeight.Black, modifier = Modifier.clickable { onScreenSelected(Screen.HOME) }); Spacer(modifier = Modifier.width(32.dp))
         Text(text = "애니메이션", color = if (currentScreen == Screen.ANIMATIONS) Color.White else Color.LightGray.copy(alpha = 0.7f), style = MaterialTheme.typography.titleMedium.copy(fontWeight = if (currentScreen == Screen.ANIMATIONS) FontWeight.Bold else FontWeight.Medium, fontSize = 16.sp), modifier = Modifier.clickable { onScreenSelected(Screen.ANIMATIONS) }); Spacer(modifier = Modifier.width(24.dp))
+        Text(text = "영화", color = if (currentScreen == Screen.MOVIES) Color.White else Color.LightGray.copy(alpha = 0.7f), style = MaterialTheme.typography.titleMedium.copy(fontWeight = if (currentScreen == Screen.MOVIES) FontWeight.Bold else FontWeight.Medium, fontSize = 16.sp), modifier = Modifier.clickable { onScreenSelected(Screen.MOVIES) }); Spacer(modifier = Modifier.width(24.dp))
         Text(text = "외국 TV", color = if (currentScreen == Screen.FOREIGN_TV) Color.White else Color.LightGray.copy(alpha = 0.7f), style = MaterialTheme.typography.titleMedium.copy(fontWeight = if (currentScreen == Screen.FOREIGN_TV) FontWeight.Bold else FontWeight.Medium, fontSize = 16.sp), modifier = Modifier.clickable { onScreenSelected(Screen.FOREIGN_TV) })
     }
 }
