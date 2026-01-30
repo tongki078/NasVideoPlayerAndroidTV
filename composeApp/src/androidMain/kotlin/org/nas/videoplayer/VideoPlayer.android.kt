@@ -10,6 +10,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -39,6 +40,14 @@ actual fun VideoPlayer(
             .setMediaSourceFactory(mediaSourceFactory)
             .build().apply {
                 playWhenReady = true
+                
+                // 한국어 자막 및 오디오 우선 선택 설정
+                trackSelectionParameters = trackSelectionParameters
+                    .buildUpon()
+                    .setPreferredAudioLanguage("ko")
+                    .setPreferredTextLanguage("ko")
+                    .build()
+
                 addListener(object : Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
                         Log.e("VideoPlayer", "재생 에러 발생: ${error.errorCodeName} - ${error.message}")
@@ -74,6 +83,14 @@ actual fun VideoPlayer(
                 PlayerView(ctx).apply {
                     player = exoPlayer
                     useController = true
+                    setFullscreenButtonClickListener {
+                        onFullscreenClick?.invoke()
+                    }
+                }
+            },
+            update = { playerView ->
+                playerView.setFullscreenButtonClickListener {
+                    onFullscreenClick?.invoke()
                 }
             },
             modifier = Modifier.matchParentSize()
