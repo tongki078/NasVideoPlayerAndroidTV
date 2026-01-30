@@ -2,6 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>
@@ -46,19 +51,8 @@
 	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
-
-	<!-- HTTP 통신 허용 (ATS 설정) -->
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
-
-	<!-- 로컬 네트워크 접속 권한 -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>NAS 서버에 접속하여 영상을 불러오기 위해 로컬 네트워크 권한이 필요합니다.</string>
-
-	<!-- 로컬 네트워크 서비스 검색용 (필요 시) -->
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_http._tcp</string>
