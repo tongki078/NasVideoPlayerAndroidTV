@@ -90,11 +90,26 @@ data class TmdbSearchResponse(
 
 @Serializable
 data class TmdbResult(
+    val id: Int,
     @SerialName("poster_path") val posterPath: String? = null,
     @SerialName("backdrop_path") val backdropPath: String? = null,
     @SerialName("name") val name: String? = null,
     @SerialName("title") val title: String? = null,
-    @SerialName("media_type") val mediaType: String? = null
+    @SerialName("media_type") val mediaType: String? = null,
+    @SerialName("overview") val overview: String? = null
+)
+
+data class TmdbMetadata(
+    val tmdbId: Int? = null,
+    val mediaType: String? = null,
+    val posterUrl: String? = null,
+    val overview: String? = null
+)
+
+@Serializable
+data class TmdbEpisodeResponse(
+    val overview: String? = null,
+    @SerialName("still_path") val stillPath: String? = null
 )
 
 enum class Screen { HOME, ON_AIR, ANIMATIONS, MOVIES, FOREIGN_TV, SEARCH, LATEST }
@@ -116,61 +131,78 @@ val client = HttpClient {
     }
 }
 
-// TMDB에서 포스터 URL을 찾아오는 함수 (검색 최적화 최종 강화판)
-suspend fun fetchTmdbPoster(title: String): String? {
-    if (TMDB_API_KEY.isBlank() || TMDB_API_KEY == "YOUR_TMDB_API_KEY") return null
+// TMDB에서 메타데이터(포스터 + 줄거리)를 찾아오는 함수
+suspend fun fetchTmdbMetadata(title: String): TmdbMetadata {
+    if (TMDB_API_KEY.isBlank() || TMDB_API_KEY == "YOUR_TMDB_API_KEY") return TmdbMetadata()
     
-    // 0. 가장 먼저 원본에 가까운 이름으로 시도 (확장자 및 대괄호만 제거)
+    // 0. 원본 근접 이름
     val rawClean = title.substringBeforeLast('.')
         .replace(Regex("\\[.*?\\]"), "")
         .replace(Regex("\\(.*?\\)"), "")
         .trim()
     if (rawClean.length >= 2) {
-        val p = searchTmdb(rawClean, "ko-KR") ?: searchTmdb(rawClean, null)
-        if (p != null) return p
+        val res = searchTmdb(rawClean, "ko-KR") ?: searchTmdb(rawClean, null)
+        if (res != null) return res
     }
 
-    // 1. 순수 제목(연도 제외) 추출
+    // 1. 순수 제목(연도 제외)
     val baseTitle = title.cleanTitle(keepAfterHyphen = false, includeYear = false)
-    if (baseTitle.isEmpty()) return null
+    if (baseTitle.isEmpty()) return TmdbMetadata()
     
     // 2. 연도 추출
     val yearRegex = Regex("(?<!\\d)(19|20)\\d{2}(?!\\d)")
     val year = yearRegex.find(title)?.value
 
-    // 전략 1: 제목 + 연도 (정확도 우선)
+    // 전략 1: 제목 + 연도
     val queryWithYear = if (year != null) "$baseTitle $year" else baseTitle
-    var poster = searchTmdb(queryWithYear, "ko-KR") ?: searchTmdb(queryWithYear, null)
-    if (poster != null) return poster
+    var res = searchTmdb(queryWithYear, "ko-KR") ?: searchTmdb(queryWithYear, null)
+    if (res != null) return res
 
-    // 전략 2: 순수 제목만 (연도가 파일명 정보와 다를 수 있으므로)
-    if (year != null) {
-        poster = searchTmdb(baseTitle, "ko-KR") ?: searchTmdb(baseTitle, null)
-        if (poster != null) return poster
-    }
+    // 전략 2: 순수 제목만
+    res = searchTmdb(baseTitle, "ko-KR") ?: searchTmdb(baseTitle, null)
+    if (res != null) return res
 
-    // 전략 3: 하이픈 포함 전체 제목
-    val fullClean = title.cleanTitle(keepAfterHyphen = true, includeYear = false)
-    if (fullClean != baseTitle) {
-        poster = searchTmdb(fullClean, "ko-KR") ?: searchTmdb(fullClean, null)
-        if (poster != null) return poster
-    }
-
-    // 전략 4: 단어 조합 줄여가며 검색 (히나Doll 같은 복합어 대응)
+    // 전략 3: 키워드 축소
     val words = baseTitle.split(" ").filter { it.isNotBlank() }
     if (words.size >= 2) {
         for (i in (words.size - 1) downTo 1) {
             val shortQuery = words.take(i).joinToString(" ")
             if (shortQuery.length < 2) continue
-            poster = searchTmdb(shortQuery, "ko-KR") ?: searchTmdb(shortQuery, null)
-            if (poster != null) return poster
+            res = searchTmdb(shortQuery, "ko-KR") ?: searchTmdb(shortQuery, null)
+            if (res != null) return res
         }
     }
     
-    return poster
+    return TmdbMetadata()
 }
 
-private suspend fun searchTmdb(query: String, language: String?): String? {
+// 특정 에피소드의 상세 정보를 가져오는 함수
+suspend fun fetchTmdbEpisodeOverview(tmdbId: Int, season: Int, episode: Int): String? {
+    return try {
+        val response: TmdbEpisodeResponse = client.get("$TMDB_BASE_URL/tv/$tmdbId/season/$season/episode/$episode") {
+            if (TMDB_API_KEY.startsWith("eyJ")) header("Authorization", "Bearer $TMDB_API_KEY")
+            else parameter("api_key", TMDB_API_KEY)
+            parameter("language", "ko-KR")
+        }.body()
+        if (!response.overview.isNullOrBlank()) response.overview else fetchTmdbEpisodeOverviewEn(tmdbId, season, episode)
+    } catch (e: Exception) {
+        null
+    }
+}
+
+private suspend fun fetchTmdbEpisodeOverviewEn(tmdbId: Int, season: Int, episode: Int): String? {
+    return try {
+        val response: TmdbEpisodeResponse = client.get("$TMDB_BASE_URL/tv/$tmdbId/season/$season/episode/$episode") {
+            if (TMDB_API_KEY.startsWith("eyJ")) header("Authorization", "Bearer $TMDB_API_KEY")
+            else parameter("api_key", TMDB_API_KEY)
+        }.body()
+        response.overview
+    } catch (e: Exception) {
+        null
+    }
+}
+
+private suspend fun searchTmdb(query: String, language: String?): TmdbMetadata? {
     if (query.isBlank()) return null
     return try {
         val response: TmdbSearchResponse = client.get("$TMDB_BASE_URL/search/multi") {
@@ -190,7 +222,14 @@ private suspend fun searchTmdb(query: String, language: String?): String? {
             ?: response.results.firstOrNull { it.backdropPath != null }
             
         val path = result?.posterPath ?: result?.backdropPath
-        if (path != null) "$TMDB_IMAGE_BASE$path" else null
+        if (path != null) {
+            TmdbMetadata(
+                tmdbId = result?.id,
+                mediaType = result?.mediaType,
+                posterUrl = "$TMDB_IMAGE_BASE$path",
+                overview = result?.overview
+            )
+        } else null
     } catch (e: Exception) {
         null
     }
@@ -202,19 +241,20 @@ fun TmdbAsyncImage(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop
 ) {
-    var imageUrl by remember(title) { mutableStateOf<String?>(null) }
+    var posterUrl by remember(title) { mutableStateOf<String?>(null) }
     var isError by remember(title) { mutableStateOf(false) }
     
     LaunchedEffect(title) {
-        imageUrl = fetchTmdbPoster(title)
-        if (imageUrl == null) isError = true
+        val meta = fetchTmdbMetadata(title)
+        posterUrl = meta.posterUrl
+        if (posterUrl == null) isError = true
     }
 
     Box(modifier = modifier.background(Color(0xFF1A1A1A))) {
-        if (imageUrl != null) {
+        if (posterUrl != null) {
             AsyncImage(
                 model = ImageRequest.Builder(LocalPlatformContext.current)
-                    .data(imageUrl)
+                    .data(posterUrl)
                     .crossfade(true)
                     .build(),
                 contentDescription = null,
@@ -224,7 +264,7 @@ fun TmdbAsyncImage(
             )
         }
         
-        if (isError || (imageUrl == null)) {
+        if (isError || (posterUrl == null)) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(8.dp),
                 verticalArrangement = Arrangement.Center,
@@ -283,17 +323,14 @@ fun createVideoServeUrl(currentScreen: Screen, pathStack: List<String>, movie: M
 fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = true): String {
     var cleaned = this
 
-    // 1. 확장자 제거
     if (cleaned.contains(".")) {
         val ext = cleaned.substringAfterLast('.')
         if (ext.length in 2..4) cleaned = cleaned.substringBeforeLast('.')
     }
     
-    // 2. 검색 최적화: 한글과 영문/숫자 사이 공백 삽입 (히나Doll -> 히나 Doll)
     cleaned = cleaned.replace(Regex("([가-힣])([a-zA-Z0-9])"), "$1 $2")
     cleaned = cleaned.replace(Regex("([a-zA-Z0-9])([가-힣])"), "$1 $2")
 
-    // 3. 연도 추출 및 본문에서 제거 (중복 방지)
     val yearRegex = Regex("\\((19|20)\\d{2}\\)|(?<!\\d)(19|20)\\d{2}(?!\\d)")
     val yearMatch = yearRegex.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
@@ -302,26 +339,20 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
         cleaned = cleaned.replace(yearMatch.value, " ")
     }
 
-    // 4. (더빙), [자막] 등 모든 괄호 태그 제거
     cleaned = cleaned.replace(Regex("\\[.*?\\]"), " ").replace(Regex("\\(.*?\\)"), " ")
 
-    // 5. 하이픈 이후 제거 (옵션)
     if (!keepAfterHyphen && cleaned.contains(" - ")) {
         cleaned = cleaned.substringBefore(" - ")
     }
 
-    // 6. 날짜 제거 (릴리즈 날짜: .251124. 등 6자리 또는 8자리 숫자)
     cleaned = cleaned.replace(Regex("[.\\s_](?:\\d{6}|\\d{8})(?=[.\\s_]|$)"), " ")
 
-    // 7. 에피소드 및 시즌 정보 제거
-    cleaned = cleaned.replace(Regex("(?i)\\.?[Ee]\\d+"), " ") 
+    cleaned = cleaned.replace(Regex("(?i)\\.?[Ee]\\d+"), " ")
     cleaned = cleaned.replace(Regex("\\d+화|\\d+기|\\d+회|\\d+파트|Season\\s*\\d+|Part\\s*\\d+"), " ")
     
-    // 8. 기술적 정보 및 기타 노이즈 제거
     val noisePattern = "(?i)\\.?(?:더빙|자막|무삭제|\\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|KL|x86|x64|10bit|Multi|REMUX|OVA|OAD|ONA|TV판|극장판|Digital).*"
     cleaned = cleaned.replace(Regex(noisePattern), "")
 
-    // 9. 제목 끝에 붙은 에피소드 숫자 처리
     val trailingNumRegex = Regex("\\s(\\d+)(?!\\d)")
     val match = trailingNumRegex.find(cleaned)
     if (match != null) {
@@ -331,11 +362,9 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
         }
     }
 
-    // 10. 마무리 정리
     cleaned = cleaned.replace(Regex("[._\\-::!?]"), " ")
     cleaned = cleaned.replace(Regex("\\s+"), " ").trim()
     
-    // 11. 보존했던 연도 다시 붙이기 (요청 시에만)
     if (includeYear && yearStr != null) {
         cleaned = "$cleaned ($yearStr)"
     }
@@ -360,6 +389,23 @@ fun String.extractEpisode(): String? {
     }
     
     return null
+}
+
+fun String.extractSeason(): Int {
+    val upper = this.uppercase()
+    val sMatch = Regex("(?i)[Ss](\\d+)").find(this)
+    if (sMatch != null) return sMatch.groupValues[1].toInt()
+
+    val gMatch = Regex("(\\d+)기").find(this)
+    if (gMatch != null) return gMatch.groupValues[1].toInt()
+
+    if (upper.contains("세일러 문") || upper.contains("SAILOR MOON")) {
+        if (Regex("[\\s._]R[\\s._]").containsMatchIn(upper) || upper.endsWith(" R")) return 2
+        if (Regex("[\\s._]S[\\s._]").containsMatchIn(upper) || upper.endsWith(" S")) return 3
+        if (upper.contains("SUPERS")) return 4
+        if (upper.contains("STARS")) return 5
+    }
+    return 1
 }
 
 fun String.prettyTitle(): String {
@@ -483,8 +529,9 @@ fun App() {
                 VideoPlayerScreen(
                     movie = selectedMovie!!,
                     currentScreen = selectedItemScreen,
-                    pathStack = currentPathStack
-                ) { selectedMovie = null }
+                    pathStack = currentPathStack,
+                    onBack = { selectedMovie = null }
+                )
             } else if (selectedSeries != null) {
                 val categoryTitle = when (selectedItemScreen) {
                     Screen.ON_AIR -> "라프텔 애니메이션"
@@ -536,7 +583,7 @@ fun App() {
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             items(allSeries) { series ->
-                                SearchGridItem(series, isTablet) { 
+                                SearchGridItem(series) {
                                     selectedSeries = it
                                     selectedItemScreen = currentScreen
                                 }
@@ -698,7 +745,7 @@ fun SearchScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         items(searchResults) { series ->
-                            SearchGridItem(series, isTablet) { onSeriesClick(it, screen) }
+                            SearchGridItem(series) { onSeriesClick(series, screen) }
                         }
                     }
                 }
@@ -708,24 +755,12 @@ fun SearchScreen(
 }
 
 @Composable
-fun SearchGridItem(series: Series, isTablet: Boolean, onSeriesClick: (Series) -> Unit) {
+fun SearchGridItem(series: Series, onSeriesClick: (Series) -> Unit) {
     Card(modifier = Modifier.aspectRatio(0.67f).clickable { onSeriesClick(series) }, shape = RoundedCornerShape(4.dp)) {
         Box(Modifier.fillMaxSize()) {
             TmdbAsyncImage(
                 title = series.title,
                 modifier = Modifier.fillMaxSize()
-            )
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f)))))
-            Text(
-                text = series.title, 
-                color = Color.White, 
-                modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 12.dp, end = 8.dp), 
-                style = TextStyle(
-                    fontSize = if (isTablet) 24.sp else 14.sp, 
-                    fontWeight = FontWeight.Bold
-                ), 
-                maxLines = 2, 
-                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -808,7 +843,7 @@ fun CategoryListScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(allSeries) { series ->
-                    SearchGridItem(series, isTablet) { onSeriesClick(it, Screen.ON_AIR) }
+                    SearchGridItem(series) { onSeriesClick(series, Screen.ON_AIR) }
                 }
             }
         }
@@ -828,18 +863,6 @@ fun MovieRow(title: String, screen: Screen, seriesList: List<Series>, onSeriesCl
                             title = series.title,
                             modifier = Modifier.fillMaxSize()
                         )
-                        Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)))))
-                        Text(
-                            text = series.title, 
-                            color = Color.White, 
-                            modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 12.dp, end = 8.dp), 
-                            style = TextStyle(
-                                fontSize = 12.sp, 
-                                fontWeight = FontWeight.Bold
-                            ), 
-                            maxLines = 2, 
-                            overflow = TextOverflow.Ellipsis
-                        )
                     }
                 }
             }
@@ -858,6 +881,34 @@ fun SeriesDetailScreen(
 ) {
     val scope = rememberCoroutineScope()
     var playingMovie by remember(series) { mutableStateOf(series.episodes.firstOrNull()) }
+    var metadata by remember(series) { mutableStateOf<TmdbMetadata?>(null) }
+    var currentEpisodeOverview by remember { mutableStateOf<String?>(null) }
+
+    // 시리즈 전체 메타데이터 로드
+    LaunchedEffect(series) {
+        metadata = fetchTmdbMetadata(series.title)
+    }
+
+    // 에피소드 선택 시 해당 에피소드 줄거리 가져오기 시도
+    LaunchedEffect(playingMovie, metadata) {
+        val tmdbId = metadata?.tmdbId
+        val mediaType = metadata?.mediaType
+        if (tmdbId != null && mediaType == "tv" && playingMovie != null) {
+            val fileName = playingMovie!!.title
+            val epNumMatch = Regex("\\d+").find(fileName.extractEpisode() ?: "")
+            val epNum = epNumMatch?.value?.toIntOrNull()
+            val seasonNum = fileName.extractSeason()
+
+            if (epNum != null) {
+                currentEpisodeOverview = fetchTmdbEpisodeOverview(tmdbId, seasonNum, epNum)
+            } else {
+                currentEpisodeOverview = null
+            }
+        } else {
+            currentEpisodeOverview = null
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             scope.launch { try { client.get("$BASE_URL/stop_all") } catch (e: Exception) {} }
@@ -865,17 +916,48 @@ fun SeriesDetailScreen(
     }
     Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         NasAppBar(title = categoryTitle, onBack = onBack)
+
+        // 1. 영상 플레이어 영역
         Box(modifier = Modifier.fillMaxWidth().height(210.dp).background(Color.DarkGray)) {
             playingMovie?.let { movie -> 
                 val finalUrl = createVideoServeUrl(currentScreen, pathStack, movie)
                 VideoPlayer(url = finalUrl, modifier = Modifier.fillMaxSize(), onFullscreenClick = { onPlayFullScreen(movie) }) 
             }
         }
+
+        // 2. 영상 하단 고정 정보 영역 (제목 및 줄거리)
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Text(
+                text = series.title,
+                color = Color.White,
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold, fontSize = 24.sp)
+            )
+
+            // 줄거리 표시 (에피소드 줄거리 -> 시리즈 줄거리 순서)
+            val displayOverview = currentEpisodeOverview ?: metadata?.overview
+            if (!displayOverview.isNullOrBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = displayOverview,
+                    color = Color.LightGray,
+                    style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis
+                )
+            } else if (metadata == null) {
+                // 로딩 중 플레이스홀더
+                Spacer(Modifier.height(8.dp))
+                Box(Modifier.fillMaxWidth().height(60.dp).background(Color.DarkGray.copy(alpha = 0.3f), RoundedCornerShape(4.dp)))
+            }
+        }
+
+        Divider(color = Color.DarkGray, thickness = 1.dp)
+
+        // 3. 에피소드 리스트
         LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 100.dp)) {
-            item { Text(text = series.title, color = Color.White, style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold, fontSize = 26.sp), modifier = Modifier.padding(16.dp)) }
             items(series.episodes) { ep ->
                 ListItem(
-                    headlineContent = { Text(text = ep.title.extractEpisode() ?: ep.title.cleanTitle(), color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    headlineContent = { Text(text = ep.title.extractEpisode() ?: ep.title.prettyTitle(), color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     leadingContent = {
                         Box(modifier = Modifier.width(120.dp).height(68.dp).background(Color(0xFF1A1A1A))) {
                             TmdbAsyncImage(
@@ -913,28 +995,69 @@ fun VideoPlayerScreen(movie: Movie, currentScreen: Screen, pathStack: List<Strin
 @Composable
 fun HeroSection(movie: Movie?, onPlayClick: (Movie) -> Unit) {
     if (movie == null) return
-    Box(modifier = Modifier.fillMaxWidth().height(400.dp).clickable { onPlayClick(movie) }) {
-        TmdbAsyncImage(
-            title = movie.title,
-            modifier = Modifier.fillMaxSize()
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(550.dp)
+            .clickable { onPlayClick(movie) }
+            .background(Color.Black)
+    ) {
+        Card(
+            modifier = Modifier
+                .width(300.dp)
+                .height(450.dp)
+                .align(Alignment.TopCenter)
+                .padding(top = 20.dp),
+            shape = RoundedCornerShape(8.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+        ) {
+            TmdbAsyncImage(
+                title = movie.title,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.3f),
+                            Color.Black
+                        ),
+                        startY = 300f
+                    )
+                )
         )
-        Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black))))
+
         Column(
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
                 text = movie.title.cleanTitle(),
                 color = Color.White,
-                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    shadow = Shadow(color = Color.Black, blurRadius = 8f)
+                ),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 24.dp)
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(20.dp))
             Button(
                 onClick = { onPlayClick(movie) },
-                colors = ButtonDefaults.buttonColors(containerColor = Color.White)
+                colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                shape = RoundedCornerShape(4.dp),
+                modifier = Modifier.width(120.dp).height(45.dp)
             ) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.Black)
-                Text("재생", color = Color.Black)
+                Spacer(Modifier.width(8.dp))
+                Text("재생", color = Color.Black, fontWeight = FontWeight.Bold)
             }
         }
     }
