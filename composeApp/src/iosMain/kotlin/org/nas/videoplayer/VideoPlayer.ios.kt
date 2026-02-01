@@ -17,10 +17,14 @@ import kotlinx.coroutines.isActive
 actual fun VideoPlayer(
     url: String,
     modifier: Modifier,
+    initialPosition: Long,
+    onPositionUpdate: ((Long) -> Unit)?,
+    onControllerVisibilityChanged: ((Boolean) -> Unit)?,
     onFullscreenClick: (() -> Unit)?,
     onVideoEnded: (() -> Unit)?
 ) {
     val currentOnVideoEnded by rememberUpdatedState(onVideoEnded)
+    val currentOnPositionUpdate by rememberUpdatedState(onPositionUpdate)
     
     val player = remember { 
         AVPlayer().apply {
@@ -33,6 +37,17 @@ actual fun VideoPlayer(
             this.player = player
             this.showsPlaybackControls = true
             this.videoGravity = AVLayerVideoGravityResizeAspect
+        }
+    }
+
+    // 재생 위치 업데이트 감지
+    LaunchedEffect(player) {
+        while (isActive) {
+            val currentTime = CMTimeGetSeconds(player.currentTime())
+            if (!currentTime.isNaN()) {
+                currentOnPositionUpdate?.invoke((currentTime * 1000).toLong())
+            }
+            delay(1000)
         }
     }
 
@@ -72,7 +87,7 @@ actual fun VideoPlayer(
         player.pause()
         
         val headers = mapOf(
-            "User-Agent" to "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+            "User-Agent" to "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, lifestyle Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         )
         
         val assetOptions = mapOf<Any?, Any?>(
@@ -93,6 +108,12 @@ actual fun VideoPlayer(
         
         player.replaceCurrentItemWithPlayerItem(item)
 
+        // 초기 위치 설정
+        if (initialPosition > 0) {
+            val cmTime = CMTimeMake((initialPosition / 1000).toLong(), 1)
+            player.seekToTime(cmTime)
+        }
+
         var checkCount = 0
         while (isActive && checkCount < 100) {
             if (item.status == AVPlayerItemStatusReadyToPlay) {
@@ -101,13 +122,14 @@ actual fun VideoPlayer(
                     @Suppress("UNCHECKED_CAST")
                     val options = group.options as List<AVMediaSelectionOption>
                     if (options.isNotEmpty()) {
-                        val target = options.find { 
-                            it.extendedLanguageTag?.contains("ko") == true || 
-                            it.displayName.contains("Korean", ignoreCase = true) ||
-                            it.displayName.contains("한국어", ignoreCase = true)
+                        val target = options.find { opt ->
+                            val selectionOption = opt as AVMediaSelectionOption
+                            selectionOption.extendedLanguageTag?.contains("ko") == true || 
+                            selectionOption.displayName.contains("Korean", ignoreCase = true) ||
+                            selectionOption.displayName.contains("한국어", ignoreCase = true)
                         } ?: options.first()
                         
-                        item.selectMediaOption(target, inMediaSelectionGroup = group)
+                        item.selectMediaOption(target as AVMediaSelectionOption, inMediaSelectionGroup = group)
                     }
                 }
 

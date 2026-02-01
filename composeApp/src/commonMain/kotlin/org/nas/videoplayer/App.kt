@@ -103,7 +103,17 @@ data class Series(val title: String, val episodes: List<Movie>, val thumbnailUrl
 @Serializable
 data class TmdbSearchResponse(val results: List<TmdbResult>)
 @Serializable
-data class TmdbResult(val id: Int, @SerialName("poster_path") val posterPath: String? = null, @SerialName("backdrop_path") val backdropPath: String? = null, val name: String? = null, val title: String? = null, @SerialName("media_type") val mediaType: String? = null, val overview: String? = null)
+data class TmdbResult(
+    val id: Int, 
+    @SerialName("poster_path") val posterPath: String? = null, 
+    @SerialName("backdrop_path") val backdropPath: String? = null, 
+    val name: String? = null, 
+    val title: String? = null, 
+    @SerialName("media_type") val mediaType: String? = null, 
+    val overview: String? = null,
+    @SerialName("original_language") val originalLanguage: String? = null,
+    @SerialName("origin_country") val originCountry: List<String>? = null
+)
 data class TmdbMetadata(val tmdbId: Int? = null, val mediaType: String? = null, val posterUrl: String? = null, val overview: String? = null)
 
 @Serializable
@@ -156,7 +166,7 @@ suspend fun translateToKorean(text: String): String {
     }
 }
 
-suspend fun fetchTmdbMetadata(title: String): TmdbMetadata {
+suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null): TmdbMetadata {
     if (TMDB_API_KEY.isBlank() || TMDB_API_KEY == "YOUR_TMDB_API_KEY") return TmdbMetadata()
     tmdbCache[title]?.let { return it }
 
@@ -193,7 +203,7 @@ suspend fun fetchTmdbMetadata(title: String): TmdbMetadata {
     
     for (query in queryList) {
         for (lang in listOf("ko-KR", null)) {
-            val (res, error) = searchTmdb(query, lang)
+            val (res, error) = searchTmdb(query, lang, typeHint)
             if (error != null) { hasNetworkError = true; break }
             if (res != null) { finalMetadata = res; break }
         }
@@ -253,31 +263,54 @@ suspend fun fetchTmdbCredits(tmdbId: Int, mediaType: String?): List<TmdbCast> {
     } catch (e: Exception) { emptyList() }
 }
 
-private suspend fun searchTmdb(query: String, language: String?): Pair<TmdbMetadata?, Exception?> {
+private suspend fun searchTmdb(query: String, language: String?, typeHint: String? = null): Pair<TmdbMetadata?, Exception?> {
     if (query.isBlank()) return null to null
     return try {
-        val response: TmdbSearchResponse = client.get("$TMDB_BASE_URL/search/multi") {
+        // typeHint가 있으면 해당 타입 전용 엔드포인트 사용, 없으면 multi 사용
+        val endpoint = when(typeHint) {
+            "movie" -> "movie"
+            "tv" -> "tv"
+            else -> "multi"
+        }
+        
+        val response: TmdbSearchResponse = client.get("$TMDB_BASE_URL/search/$endpoint") {
             if (TMDB_API_KEY.startsWith("eyJ")) header("Authorization", "Bearer $TMDB_API_KEY")
             else parameter("api_key", TMDB_API_KEY)
-            parameter("query", query); if (language != null) parameter("language", language); parameter("include_adult", "false")
+            parameter("query", query)
+            if (language != null) parameter("language", language)
+            parameter("include_adult", "false")
         }.body()
+        
         val results = response.results.filter { it.mediaType != "person" }
-        val result = results.firstOrNull { it.posterPath != null } ?: results.firstOrNull { it.backdropPath != null }
+        if (results.isEmpty()) return null to null
+        
+        // 결과 선택 전략:
+        // 1. 한국어 검색 중이라면 제작 국가가 KR인 것을 우선
+        // 2. 그 외에는 포스터가 있는 첫 번째 결과 선택
+        val result = if (language == "ko-KR") {
+            results.find { it.originCountry?.contains("KR") == true } ?: results.firstOrNull { it.posterPath != null } ?: results.firstOrNull()
+        } else {
+            results.firstOrNull { it.posterPath != null } ?: results.firstOrNull()
+        }
+        
         val path = result?.posterPath ?: result?.backdropPath
-        if (path != null) Pair(TmdbMetadata(tmdbId = result?.id, mediaType = result?.mediaType, posterUrl = "$TMDB_IMAGE_BASE$path", overview = result?.overview), null)
+        if (path != null) {
+            val mediaType = result?.mediaType ?: typeHint ?: "movie" // 엔드포인트에 따라 mediaType 보정
+            Pair(TmdbMetadata(tmdbId = result?.id, mediaType = mediaType, posterUrl = "$TMDB_IMAGE_BASE$path", overview = result?.overview), null)
+        }
         else Pair(null, null)
     } catch (e: Exception) { Pair(null, e) }
 }
 
 @Composable
-fun TmdbAsyncImage(title: String, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop) {
+fun TmdbAsyncImage(title: String, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop, typeHint: String? = null) {
     var metadata by remember(title) { mutableStateOf(tmdbCache[title]) }
     var isError by remember(title) { mutableStateOf(false) }
     var isLoading by remember(title) { mutableStateOf(metadata == null) }
     LaunchedEffect(title) {
         if (metadata == null) {
             isLoading = true
-            metadata = fetchTmdbMetadata(title)
+            metadata = fetchTmdbMetadata(title, typeHint)
             isError = metadata?.posterUrl == null
             isLoading = false
         } else { isError = metadata?.posterUrl == null; isLoading = false }
@@ -663,7 +696,7 @@ fun App(driver: SqlDriver) {
                     BoxWithConstraints {
                         val columns = if (maxWidth > 600.dp) GridCells.Fixed(4) else GridCells.Fixed(3)
                         LazyVerticalGrid(columns = columns, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 100.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            items(explorerSeries) { series -> SearchGridItem(series) { selectedSeries = it; selectedItemScreen = currentScreen } }
+                            items(explorerSeries) { series -> SearchGridItem(series, currentScreen) { selectedSeries = it; selectedItemScreen = currentScreen } }
                         }
                     }
                 }
@@ -721,10 +754,10 @@ fun App(driver: SqlDriver) {
                                     } catch (e: Exception) { println("PathStack Decode Error: ${e.message}") }
                                 }, onSeriesClick = { s, sc -> selectedSeries = s; selectedItemScreen = sc })
                                 Screen.ON_AIR -> CategoryListScreen(selectedFilter = selectedOnAirTab, onFilterSelected = { selectedOnAirTab = it }, seriesList = if (selectedOnAirTab == "라프텔 애니메이션") onAirSeries else onAirDramaSeries, scrollState = onAirScrollState) { s, sc -> selectedSeries = s; selectedItemScreen = sc }
-                                Screen.ANIMATIONS -> MovieExplorer(title = "애니메이션", pathStack = aniPathStack, items = aniItems, scrollState = animationsScrollState, onFolderClick = { aniPathStack = aniPathStack + it }, onBackClick = { if (aniPathStack.isNotEmpty()) aniPathStack = aniPathStack.dropLast(1) })
-                                Screen.MOVIES -> MovieExplorer(title = "영화", pathStack = moviePathStack, items = movieItems, scrollState = moviesScrollState, onFolderClick = { moviePathStack = moviePathStack + it }, onBackClick = { if (moviePathStack.isNotEmpty()) moviePathStack = moviePathStack.dropLast(1) })
-                                Screen.FOREIGN_TV -> MovieExplorer(title = "외국 TV", pathStack = foreignTvPathStack, items = foreignTvItems, scrollState = foreignTvScrollState, onFolderClick = { foreignTvPathStack = foreignTvPathStack + it }, onBackClick = { if (foreignTvPathStack.isNotEmpty()) foreignTvPathStack = foreignTvPathStack.dropLast(1) })
-                                Screen.KOREAN_TV -> MovieExplorer(title = "국내 TV", pathStack = koreanTvPathStack, items = koreanTvItems, scrollState = koreanTvScrollState, onFolderClick = { koreanTvPathStack = koreanTvPathStack + it }, onBackClick = { if (koreanTvPathStack.isNotEmpty()) koreanTvPathStack = koreanTvPathStack.dropLast(1) })
+                                Screen.ANIMATIONS -> MovieExplorer(title = "애니메이션", screen = Screen.ANIMATIONS, pathStack = aniPathStack, items = aniItems, scrollState = animationsScrollState, onFolderClick = { aniPathStack = aniPathStack + it }, onBackClick = { if (aniPathStack.isNotEmpty()) aniPathStack = aniPathStack.dropLast(1) })
+                                Screen.MOVIES -> MovieExplorer(title = "영화", screen = Screen.MOVIES, pathStack = moviePathStack, items = movieItems, scrollState = moviesScrollState, onFolderClick = { moviePathStack = moviePathStack + it }, onBackClick = { if (moviePathStack.isNotEmpty()) moviePathStack = moviePathStack.dropLast(1) })
+                                Screen.FOREIGN_TV -> MovieExplorer(title = "외국 TV", screen = Screen.FOREIGN_TV, pathStack = foreignTvPathStack, items = foreignTvItems, scrollState = foreignTvScrollState, onFolderClick = { foreignTvPathStack = foreignTvPathStack + it }, onBackClick = { if (foreignTvPathStack.isNotEmpty()) foreignTvPathStack = foreignTvPathStack.dropLast(1) })
+                                Screen.KOREAN_TV -> MovieExplorer(title = "국내 TV", screen = Screen.KOREAN_TV, pathStack = koreanTvPathStack, items = koreanTvItems, scrollState = koreanTvScrollState, onFolderClick = { koreanTvPathStack = koreanTvPathStack + it }, onBackClick = { if (koreanTvPathStack.isNotEmpty()) koreanTvPathStack = koreanTvPathStack.dropLast(1) })
                                 Screen.SEARCH -> SearchScreen(query = searchQuery, onQueryChange = { searchQuery = it }, selectedCategory = searchCategory, onCategoryChange = { searchCategory = it }, recentQueries = recentQueries, onSaveQuery = { q -> scope.launch { searchHistoryDataSource.insertQuery(q, currentTimeMillis()) } }, onDeleteQuery = { q -> scope.launch { searchHistoryDataSource.deleteQuery(q) } }, onClearAll = { scope.launch { searchHistoryDataSource.clearAll() } }, onSeriesClick = { s, sc -> selectedSeries = s; selectedItemScreen = sc })
                                 else -> {}
                             }
@@ -786,7 +819,7 @@ fun CategoryListScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(seriesList) { series ->
-                    SearchGridItem(series) { onSeriesClick(series, Screen.ON_AIR) }
+                    SearchGridItem(series, Screen.ON_AIR) { onSeriesClick(series, Screen.ON_AIR) }
                 }
             }
         }
@@ -891,9 +924,10 @@ fun WatchHistoryRow(watchHistory: List<WatchHistory>, onWatchItemClick: (WatchHi
         Text(text = "시청 중인 콘텐츠", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold, fontSize = 22.sp), color = Color.White, modifier = Modifier.padding(start = 16.dp, bottom = 12.dp))
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(watchHistory, key = { it.id }) { history ->
+                val typeHint = if (history.screenType == Screen.MOVIES.name || history.screenType == Screen.LATEST.name) "movie" else "tv"
                 Card(modifier = Modifier.width(160.dp).height(100.dp).clickable { onWatchItemClick(history) }, shape = RoundedCornerShape(4.dp)) {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        TmdbAsyncImage(title = history.title, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                        TmdbAsyncImage(title = history.title, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, typeHint = typeHint)
                         Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f)))))
                         Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.align(Alignment.Center).size(32.dp))
                         Text(text = history.title.cleanTitle(), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.BottomStart).padding(8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -941,24 +975,27 @@ fun HomeScreen(
 @Composable
 fun MovieRow(title: String, screen: Screen, seriesList: List<Series>, onSeriesClick: (Series, Screen) -> Unit) {
     if (seriesList.isEmpty()) return
+    val typeHint = if (screen == Screen.MOVIES || screen == Screen.LATEST) "movie" else "tv"
     Column(modifier = Modifier.padding(vertical = 12.dp)) {
         Text(text = title, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold, fontSize = 22.sp), color = Color.White, modifier = Modifier.padding(start = 16.dp, bottom = 12.dp))
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(seriesList) { series -> Card(modifier = Modifier.width(120.dp).height(180.dp).clickable { onSeriesClick(series, screen) }, shape = RoundedCornerShape(4.dp)) { TmdbAsyncImage(title = series.title, modifier = Modifier.fillMaxSize()) } }
+            items(seriesList) { series -> Card(modifier = Modifier.width(120.dp).height(180.dp).clickable { onSeriesClick(series, screen) }, shape = RoundedCornerShape(4.dp)) { TmdbAsyncImage(title = series.title, modifier = Modifier.fillMaxSize(), typeHint = typeHint) } }
         }
     }
 }
 
 @Composable
-fun SearchGridItem(series: Series, onSeriesClick: (Series) -> Unit) {
+fun SearchGridItem(series: Series, screen: Screen, onSeriesClick: (Series) -> Unit) {
+    val typeHint = if (screen == Screen.MOVIES) "movie" else "tv"
     Card(modifier = Modifier.aspectRatio(0.67f).clickable { onSeriesClick(series) }, shape = RoundedCornerShape(4.dp)) {
-        TmdbAsyncImage(title = series.title, modifier = Modifier.fillMaxSize())
+        TmdbAsyncImage(title = series.title, modifier = Modifier.fillMaxSize(), typeHint = typeHint)
     }
 }
 
 @Composable
 fun MovieExplorer(
     title: String, 
+    screen: Screen,
     pathStack: List<String>, 
     items: List<Category>, 
     scrollState: LazyListState = rememberLazyListState(),
@@ -1004,6 +1041,8 @@ fun SeriesDetailScreen(
     var seasonEpisodes by remember(series) { mutableStateOf<List<TmdbEpisode>>(emptyList()) }
     var currentPosition by remember { mutableStateOf(0L) }
     
+    val typeHint = if (currentScreen == Screen.MOVIES || currentScreen == Screen.LATEST) "movie" else "tv"
+
     LaunchedEffect(playingMovie) {
         playingMovie?.let { movie ->
             onSaveWatchHistory(movie, currentScreen, pathStack)
@@ -1011,7 +1050,7 @@ fun SeriesDetailScreen(
     }
 
     LaunchedEffect(series) { 
-        val meta = fetchTmdbMetadata(series.title)
+        val meta = fetchTmdbMetadata(series.title, typeHint)
         metadata = meta
         if (meta.tmdbId != null) {
             credits = fetchTmdbCredits(meta.tmdbId, meta.mediaType)
@@ -1146,7 +1185,7 @@ fun SeriesDetailScreen(
                                         contentScale = ContentScale.Crop
                                     )
                                 } else {
-                                    TmdbAsyncImage(title = ep.title, modifier = Modifier.fillMaxSize())
+                                    TmdbAsyncImage(title = ep.title, modifier = Modifier.fillMaxSize(), typeHint = "tv")
                                 }
                                 Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)))
                                 Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.align(Alignment.Center).size(32.dp)) 
@@ -1265,9 +1304,9 @@ fun VideoPlayerScreen(
 fun HeroSection(movie: Movie?, onPlayClick: (Movie) -> Unit) {
     if (movie == null) return
     Box(modifier = Modifier.fillMaxWidth().height(550.dp).clickable { onPlayClick(movie) }.background(Color.Black)) {
-        TmdbAsyncImage(title = movie.title, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        TmdbAsyncImage(title = movie.title, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, typeHint = "movie")
         Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(colors = listOf(Color.Black.copy(alpha = 0.4f), Color.Transparent, Color.Black.copy(alpha = 0.6f), Color.Black))))
-        Card(modifier = Modifier.width(280.dp).height(400.dp).align(Alignment.TopCenter).padding(top = 40.dp), shape = RoundedCornerShape(8.dp), elevation = CardDefaults.cardElevation(defaultElevation = 16.dp), border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.2f))) { TmdbAsyncImage(title = movie.title, modifier = Modifier.fillMaxSize()) }
+        Card(modifier = Modifier.width(280.dp).height(400.dp).align(Alignment.TopCenter).padding(top = 40.dp), shape = RoundedCornerShape(8.dp), elevation = CardDefaults.cardElevation(defaultElevation = 16.dp), border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.2f))) { TmdbAsyncImage(title = movie.title, modifier = Modifier.fillMaxSize(), typeHint = "movie") }
         Column(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(text = movie.title.cleanTitle(), color = Color.White, style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold, shadow = Shadow(color = Color.Black, blurRadius = 8f)), textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 24.dp))
             Spacer(Modifier.height(20.dp))
