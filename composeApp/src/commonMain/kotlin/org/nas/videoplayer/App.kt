@@ -87,7 +87,7 @@ private val REGEX_SEASON_S = Regex("(?i)[Ss](\\d+)")
 private val REGEX_SEASON_G = Regex("(\\d+)\\s*기")
 private val REGEX_SERIES_CUTOFF = Regex("(?i)[.\\s_](?:S\\d+E\\d+|S\\d+|E\\d+|\\d+\\s*(?:화|회|기)|Season\\s*\\d+|Part\\s*\\d+).*")
 private val REGEX_NOISE = Regex("(?i)[.\\s_](?:더빙|자막|무삭제|\\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|OVA|OAD|ONA|TV판|극장판|FLAC|xvid|DivX|MKV|MP4|AVI|속편|무리무리|1부|2부|파트|완결).*")
-private val REGEX_DATE_NOISE = Regex("[.\\s_](?:\\d{6}|\\d{8})(?=[.\\s_]|$)")
+private val REGEX_DATE_NOISE = Regex("[.\\s_](\\d{6}|\\d{8})(?=[.\\s_]|$)")
 private val REGEX_CLEAN_EXTRA = Regex("(?i)\\.?[Ee]\\d+|\\d+\\s*(?:화|기|회|파트)|Season\\s*\\d+|Part\\s*\\d+")
 private val REGEX_TRAILING_NUM = Regex("[.\\s_](\\d+)$")
 private val REGEX_SYMBOLS = Regex("[._\\-::!?【】『』「」\"'#@*※]")
@@ -157,13 +157,54 @@ val client = HttpClient {
 private val tmdbCache = mutableMapOf<String, TmdbMetadata>()
 
 // --- 테마 이름 생성기 ---
-fun getRandomThemeName(originalName: String, index: Int, isMovie: Boolean = false): String = when {
-    index == 0 -> if (isMovie) "지금 가장 인기 있는 영화" else "지금 가장 핫한 화제작"
-    index == 1 -> if (isMovie) "최근 추가된 흥미로운 영화" else "새로운 정주행의 시작"
-    originalName.contains("ㄱ") || originalName.contains("가") -> if (isMovie) "블록버스터 액션 & 어드벤처" else "심장이 뛰는 모험과 액션"
-    originalName.contains("ㄴ") || originalName.contains("나") -> if (isMovie) "가슴 따뜻해지는 힐링 무비" else "포근하고 몽글몽글한 일상"
-    originalName.contains("A") || originalName.contains("B") -> if (isMovie) "비평가들의 찬사를 받은 화제작" else "압도적 몰입감, 해외 화제작"
-    else -> if (isMovie) "놓치면 아쉬운 추천 영화" else "눈을 뗄 수 없는 흥미진진한 작품"
+fun getRandomThemeName(originalName: String, index: Int, isMovie: Boolean = false, category: String? = null): String {
+    if (category != null) {
+        when {
+            category.contains("중국") -> {
+                val cnThemes = listOf("대륙의 스케일, 압도적 대서사시", "화려한 무협과 신비로운 판타지", "가슴 절절한 애절한 로맨스", "궁중 암투와 치밀한 전략", "매혹적인 영상미의 시대극")
+                return cnThemes[index % cnThemes.size]
+            }
+            category.contains("일본") -> {
+                val jpThemes = listOf("특유의 감성, 몽글몽글한 로맨스", "소소하지만 확실한 행복, 일상물", "독특한 소재와 기발한 상상력", "청춘의 열정과 풋풋한 성장기", "깊은 여운을 남기는 미스터리 수사물")
+                return jpThemes[index % jpThemes.size]
+            }
+            category.contains("미국") || category.contains("영국") -> {
+                val enThemes = listOf("압도적 스케일, 헐리우드 화제작", "치밀한 구성의 고퀄리티 범죄 스릴러", "전 세계를 사로잡은 마성의 시리즈", "상상 그 이상! SF와 판타지의 정점", "강렬한 몰입감의 전문직 드라마")
+                return enThemes[index % enThemes.size]
+            }
+            category.contains("다큐") -> {
+                val docThemes = listOf("세상을 보는 새로운 시선", "경이로운 자연과 우주의 신비", "지적 호기심을 깨우는 기록들", "우리가 몰랐던 역사의 이면", "사실이 주는 묵직한 감동")
+                return docThemes[index % docThemes.size]
+            }
+            category == "라프텔" -> {
+                val laThemes = listOf("라프텔이 추천하는 명작 애니", "지금 이 순간, 가장 핫한 애니", "놓치면 후회할 인생 애니메이션", "숨겨진 띵작, 라프텔 셀렉션", "당신의 덕심을 깨울 고퀄리티 애니")
+                return laThemes[index % laThemes.size]
+            }
+        }
+    }
+    
+    return when {
+        index == 0 -> if (isMovie) "지금 가장 인기 있는 영화" else "지금 가장 핫한 화제작"
+        index == 1 -> if (isMovie) "최근 추가된 흥미로운 영화" else "새로운 정주행의 시작"
+        originalName.contains("ㄱ") || originalName.contains("가") -> if (isMovie) "박진감 넘치는 액션 블록버스터" else "심장이 뛰는 모험과 액션"
+        originalName.contains("ㄴ") || originalName.contains("나") -> if (isMovie) "가슴 따뜻해지는 힐링 시네마" else "포근하고 몽글몽글한 일상"
+        originalName.contains("ㄷ") || originalName.contains("다") -> if (isMovie) "손에 땀을 쥐는 서스펜스" else "치밀한 전개, 미스터리 스릴러"
+        originalName.contains("ㄹ") || originalName.contains("라") -> if (isMovie) "기분 좋아지는 유쾌한 코미디" else "지친 하루를 달래줄 웃음 코드"
+        originalName.contains("ㅁ") || originalName.contains("마") -> if (isMovie) "상상력을 자극하는 판타지 세계" else "압도적 스케일의 대서사시"
+        originalName.contains("ㅂ") || originalName.contains("바") -> if (isMovie) "강렬한 카리스마, 범죄 액션" else "숨 막히는 범죄 심리전"
+        originalName.contains("ㅅ") || originalName.contains("사") -> if (isMovie) "감성을 자극하는 휴먼 드라마" else "깊은 울림을 주는 인생 드라마"
+        originalName.contains("ㅇ") || originalName.contains("아") -> if (isMovie) "설렘 가득한 로맨틱 무비" else "심쿵 주의! 로맨스 정주행"
+        originalName.contains("ㅈ") || originalName.contains("자") -> if (isMovie) "리얼리티가 살아있는 명작" else "현실보다 더 리얼한 이야기"
+        originalName.contains("A") || originalName.contains("B") -> if (isMovie) "전 세계가 주목한 글로벌 화제작" else "언어의 장벽을 넘는 감동의 대작"
+        else -> {
+            val alternates = if (isMovie) {
+                listOf("시선을 사로잡는 영상미", "주말 밤을 책임질 영화", "시간 순삭! 몰입도 최강", "당신의 취향을 저격할 추천작", "숨겨진 보석 같은 명작")
+            } else {
+                listOf("한 번 시작하면 멈출 수 없는", "웰메이드 명품 시리즈", "주말 순삭! 정주행 가이드", "놓치면 후회할 인생 드라마", "탄탄한 스토리의 화제작")
+            }
+            alternates[index % alternates.size]
+        }
+    }
 }
 
 // --- 번역 관련 유틸리티 ---
@@ -416,6 +457,16 @@ fun rememberAppDatabase(driver: SqlDriver): AppDatabase {
     }
 }
 
+// 명시적인 suspend 함수로 분리하여 컴파일러 오류 방지
+suspend fun fetchCategoryList(path: String): List<Category> {
+    return try {
+        val url = "$BASE_URL/list?path=${path.encodeURLParameter()}"
+        client.get(url).body<List<Category>>()
+    } catch (e: Exception) {
+        emptyList()
+    }
+}
+
 @Composable
 fun App(driver: SqlDriver) {
     setSingletonImageLoaderFactory { platformContext ->
@@ -459,6 +510,9 @@ fun App(driver: SqlDriver) {
     var selectedMovieTab by rememberSaveable { mutableStateOf("최신") }
     
     var foreignTvItems by remember { mutableStateOf<List<Category>>(emptyList()) }
+    var foreignCategories by remember { mutableStateOf<List<Pair<String, List<Series>>>>(emptyList()) }
+    var selectedForeignTab by rememberSaveable { mutableStateOf("다큐") }
+    
     var koreanTvItems by remember { mutableStateOf<List<Category>>(emptyList()) }
     var explorerSeries by remember { mutableStateOf<List<Series>>(emptyList()) }
 
@@ -508,14 +562,14 @@ fun App(driver: SqlDriver) {
 
     val isExplorerSeriesMode by remember {
         derivedStateOf {
-            (currentScreen == Screen.FOREIGN_TV && foreignTvItems.any { it.movies.isNotEmpty() }) || 
+            (currentScreen == Screen.FOREIGN_TV && foreignTvItems.any { it.movies.isNotEmpty() && foreignTvPathStack.isNotEmpty() }) || 
             (currentScreen == Screen.KOREAN_TV && koreanTvItems.any { it.movies.isNotEmpty() }) || 
             (currentScreen == Screen.MOVIES && movieItems.any { it.movies.isNotEmpty() && moviePathStack.isNotEmpty() }) || 
             (currentScreen == Screen.ANIMATIONS && aniItems.any { it.movies.isNotEmpty() && aniPathStack.isNotEmpty() })
         }
     }
 
-    LaunchedEffect(currentScreen, foreignTvPathStack, koreanTvPathStack, moviePathStack, aniPathStack, selectedOnAirTab, selectedAniTab, selectedMovieTab, refreshTrigger) {
+    LaunchedEffect(currentScreen, foreignTvPathStack, koreanTvPathStack, moviePathStack, aniPathStack, selectedOnAirTab, selectedAniTab, selectedMovieTab, selectedForeignTab, refreshTrigger) {
         supervisorScope {
             try {
                 errorMessage = null
@@ -542,32 +596,38 @@ fun App(driver: SqlDriver) {
                         if (aniPathStack.isEmpty()) {
                             val targetPath = "애니메이션/$selectedAniTab"
                             if (lastAniPath != targetPath || refreshTrigger > 0) {
-                                isLoading = true
-                                val foldersRaw: List<Category> = try { client.get("$BASE_URL/list?path=${targetPath.encodeURLParameter()}").body() } catch(e: Exception) { emptyList() }
-                                val rootRaw: List<Category> = try { client.get("$BASE_URL/list?path=${"애니메이션".encodeURLParameter()}").body() } catch(e: Exception) { emptyList() }
-                                if (foldersRaw.isNotEmpty()) {
-                                    val rawList = coroutineScope {
-                                        foldersRaw.mapIndexed { index, catFolder ->
-                                            async {
-                                                val folders: List<Category> = try { client.get("$BASE_URL/list?path=${"$targetPath/${catFolder.name}".encodeURLParameter()}").body() } catch(e: Exception) { emptyList() }
-                                                val seriesList = folders.map { Series(title = it.name, episodes = emptyList(), fullPath = "$targetPath/${catFolder.name}/${it.name}") }
-                                                getRandomThemeName(catFolder.name, index, isMovie = false) to seriesList
-                                            }
-                                        }.awaitAll().filter { it.second.isNotEmpty() }
-                                    }
-                                    aniCategories = rawList.groupBy { it.first }.map { (name, groups) -> name to groups.flatMap { it.second }.distinctBy { it.title } }
-                                    aniItems = rootRaw
-                                } else { aniCategories = emptyList(); aniItems = rootRaw }
-                                lastAniPath = targetPath
+                                scope.launch {
+                                    isLoading = true
+                                    val foldersRaw = fetchCategoryList(targetPath)
+                                    val rootRaw = fetchCategoryList("애니메이션")
+                                    if (foldersRaw.isNotEmpty()) {
+                                        val rawList = coroutineScope {
+                                            foldersRaw.mapIndexed { index, catFolder ->
+                                                async {
+                                                    val folders = fetchCategoryList("$targetPath/${catFolder.name}")
+                                                    val seriesList = folders.map { Series(title = it.name, episodes = emptyList(), fullPath = "$targetPath/${catFolder.name}/${it.name}") }
+                                                    getRandomThemeName(catFolder.name, index, isMovie = false, category = selectedAniTab) to seriesList
+                                                }
+                                            }.awaitAll().filter { it.second.isNotEmpty() }
+                                        }
+                                        aniCategories = rawList.groupBy { it.first }.map { (name, groups) -> name to groups.flatMap { it.second }.distinctBy { it.title } }
+                                        aniItems = rootRaw
+                                    } else { aniCategories = emptyList(); aniItems = rootRaw }
+                                    lastAniPath = targetPath
+                                    isLoading = false
+                                }
                             }
                         } else {
                             val path = "애니메이션/${aniPathStack.joinToString("/")}"
                             if (lastAniPath != path || refreshTrigger > 0) {
-                                isLoading = true
-                                val raw: List<Category> = try { client.get("$BASE_URL/list?path=${path.encodeURLParameter()}").body() } catch(e: Exception) { emptyList() }
-                                aniItems = raw
-                                if (raw.any { it.movies.isNotEmpty() }) { explorerSeries = raw.flatMap { it.movies }.groupBySeries() }
-                                lastAniPath = path
+                                scope.launch {
+                                    isLoading = true
+                                    val raw = fetchCategoryList(path)
+                                    aniItems = raw
+                                    if (raw.any { it.movies.isNotEmpty() }) { explorerSeries = raw.flatMap { it.movies }.groupBySeries() }
+                                    lastAniPath = path
+                                    isLoading = false
+                                }
                             }
                         }
                     }
@@ -575,53 +635,96 @@ fun App(driver: SqlDriver) {
                         if (moviePathStack.isEmpty()) {
                             val targetPath = "영화/$selectedMovieTab"
                             if (lastMoviePath != targetPath || refreshTrigger > 0) {
-                                isLoading = true
-                                val foldersRaw: List<Category> = try { client.get("$BASE_URL/list?path=${targetPath.encodeURLParameter()}").body() } catch(e: Exception) { emptyList() }
-                                val rootRaw: List<Category> = try { client.get("$BASE_URL/list?path=${"영화".encodeURLParameter()}").body() } catch(e: Exception) { emptyList() }
-                                if (foldersRaw.isNotEmpty()) {
-                                    val rawList = coroutineScope {
-                                        foldersRaw.mapIndexed { index, catFolder ->
-                                            async {
-                                                val folders: List<Category> = try { client.get("$BASE_URL/list?path=${"$targetPath/${catFolder.name}".encodeURLParameter()}").body() } catch(e: Exception) { emptyList() }
-                                                val seriesList = folders.map { Series(title = it.name, episodes = emptyList(), fullPath = "$targetPath/${catFolder.name}/${it.name}") }
-                                                getRandomThemeName(catFolder.name, index, isMovie = true) to seriesList
-                                            }
-                                        }.awaitAll().filter { it.second.isNotEmpty() }
-                                    }
-                                    movieCategories = rawList.groupBy { it.first }.map { (name, groups) -> name to groups.flatMap { it.second }.distinctBy { it.title } }
-                                    movieItems = rootRaw.filter { it.name in listOf("제목", "최신", "UHD") }
-                                } else { movieCategories = emptyList(); movieItems = rootRaw.filter { it.name in listOf("제목", "최신", "UHD") } }
-                                lastMoviePath = targetPath
+                                scope.launch {
+                                    isLoading = true
+                                    val foldersRaw = fetchCategoryList(targetPath)
+                                    val rootRaw = fetchCategoryList("영화")
+                                    if (foldersRaw.isNotEmpty()) {
+                                        val rawList = coroutineScope {
+                                            foldersRaw.mapIndexed { index, catFolder ->
+                                                async {
+                                                    val folders = fetchCategoryList("$targetPath/${catFolder.name}")
+                                                    val seriesList = folders.map { Series(title = it.name, episodes = emptyList(), fullPath = "$targetPath/${catFolder.name}/${it.name}") }
+                                                    getRandomThemeName(catFolder.name, index, isMovie = true, category = selectedMovieTab) to seriesList
+                                                }
+                                            }.awaitAll().filter { it.second.isNotEmpty() }
+                                        }
+                                        movieCategories = rawList.groupBy { it.first }.map { (name, groups) -> name to groups.flatMap { it.second }.distinctBy { it.title } }
+                                        movieItems = rootRaw.filter { it.name in listOf("제목", "최신", "UHD") }
+                                    } else { movieCategories = emptyList(); movieItems = rootRaw.filter { it.name in listOf("제목", "최신", "UHD") } }
+                                    lastMoviePath = targetPath
+                                    isLoading = false
+                                }
                             }
                         } else {
                             val path = "영화/${moviePathStack.joinToString("/")}"
                             if (lastMoviePath != path || refreshTrigger > 0) {
-                                isLoading = true
-                                val raw: List<Category> = try { client.get("$BASE_URL/list?path=${path.encodeURLParameter()}").body() } catch(e: Exception) { emptyList() }
-                                movieItems = raw
-                                if (raw.any { it.movies.isNotEmpty() }) { explorerSeries = raw.flatMap { it.movies }.groupBySeries() }
-                                lastMoviePath = path
+                                scope.launch {
+                                    isLoading = true
+                                    val raw = fetchCategoryList(path)
+                                    movieItems = raw
+                                    if (raw.any { it.movies.isNotEmpty() }) { explorerSeries = raw.flatMap { it.movies }.groupBySeries() }
+                                    lastMoviePath = path
+                                    isLoading = false
+                                }
                             }
                         }
                     }
                     Screen.FOREIGN_TV -> {
-                        val path = if (foreignTvPathStack.isEmpty()) "외국TV" else "외국TV/${foreignTvPathStack.joinToString("/")}"
-                        if (lastForeignPath != path || refreshTrigger > 0) {
-                            isLoading = true
-                            val raw: List<Category> = try { client.get("$BASE_URL/list?path=${path.encodeURLParameter()}").body() } catch(e: Exception) { emptyList() }
-                            foreignTvItems = raw
-                            if (raw.any { it.movies.isNotEmpty() }) { explorerSeries = raw.flatMap { it.movies }.groupBySeries() }
-                            lastForeignPath = path
+                        if (foreignTvPathStack.isEmpty()) {
+                            val rootFolders = fetchCategoryList("외국TV")
+                            val targetPath = "외국TV/$selectedForeignTab"
+                            
+                            if (lastForeignPath != targetPath || refreshTrigger > 0) {
+                                scope.launch {
+                                    isLoading = true
+                                    val foldersRaw = fetchCategoryList(targetPath)
+                                    if (foldersRaw.isNotEmpty()) {
+                                        val rawList = coroutineScope {
+                                            foldersRaw.mapIndexed { index, catFolder ->
+                                                async {
+                                                    val folders = fetchCategoryList("$targetPath/${catFolder.name}")
+                                                    val seriesList = folders.map { Series(title = it.name, episodes = emptyList(), fullPath = "$targetPath/${catFolder.name}/${it.name}") }
+                                                    getRandomThemeName(catFolder.name, index, isMovie = false, category = selectedForeignTab) to seriesList
+                                                }
+                                            }.awaitAll().filter { it.second.isNotEmpty() }
+                                        }
+                                        foreignCategories = rawList.groupBy { it.first }.map { (name, groups) -> name to groups.flatMap { it.second }.distinctBy { it.title } }
+                                    } else { foreignCategories = emptyList() }
+                                    foreignTvItems = rootFolders.filter { it.name in listOf("중국 드라마", "일본 드라마", "미국 드라마", "다큐", "기타 국가 드라마") }
+                                    lastForeignPath = targetPath
+                                    isLoading = false
+                                }
+                            }
+                        } else {
+                            val path = "외국TV/${foreignTvPathStack.joinToString("/")}"
+                            if (lastForeignPath != path || refreshTrigger > 0) {
+                                scope.launch {
+                                    isLoading = true
+                                    val raw = fetchCategoryList(path)
+                                    foreignTvItems = raw
+                                    if (raw.any { it.movies.isNotEmpty() }) { explorerSeries = raw.flatMap { it.movies }.groupBySeries() }
+                                    lastForeignPath = path
+                                    isLoading = false
+                                }
+                            }
                         }
                     }
                     Screen.KOREAN_TV -> {
                         val path = if (koreanTvPathStack.isEmpty()) "국내TV" else "국내TV/${koreanTvPathStack.joinToString("/")}"
                         if (lastKoreanPath != path || refreshTrigger > 0) {
-                            isLoading = true
-                            val raw: List<Category> = try { client.get("$BASE_URL/list?path=${path.encodeURLParameter()}").body() } catch(e: Exception) { emptyList() }
-                            koreanTvItems = raw
-                            if (raw.any { it.movies.isNotEmpty() }) { explorerSeries = raw.flatMap { it.movies }.groupBySeries() }
-                            lastKoreanPath = path
+                            scope.launch {
+                                isLoading = true
+                                val raw = fetchCategoryList(path)
+                                koreanTvItems = if (koreanTvPathStack.isEmpty()) {
+                                    raw.filter { it.name != "[업로드]" }
+                                } else {
+                                    raw
+                                }
+                                if (koreanTvItems.any { it.movies.isNotEmpty() }) { explorerSeries = koreanTvItems.flatMap { it.movies }.groupBySeries() }
+                                lastKoreanPath = path
+                                isLoading = false
+                            }
                         }
                     }
                     else -> {}
@@ -632,7 +735,7 @@ fun App(driver: SqlDriver) {
         }
     }
 
-    MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFFE50914), background = Color.Black, surface = Color(0xFF121212))) {
+    MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFFE50914), background = Color.Black, surface = Color.Black)) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             if (errorMessage != null) {
                 ErrorScreen(message = errorMessage!!, onRetry = { refreshTrigger++ })
@@ -658,6 +761,7 @@ fun App(driver: SqlDriver) {
                         selectedSeries = null
                         if (selectedItemScreen == Screen.ANIMATIONS && aniPathStack.size >= 1 && (aniPathStack.firstOrNull() == "라프텔" || aniPathStack.firstOrNull() == "시리즈")) { aniPathStack = emptyList() }
                         if (selectedItemScreen == Screen.MOVIES && moviePathStack.size >= 1 && (moviePathStack.firstOrNull() == "최신" || moviePathStack.firstOrNull() == "제목" || moviePathStack.firstOrNull() == "UHD")) { moviePathStack = emptyList() }
+                        if (selectedItemScreen == Screen.FOREIGN_TV && foreignTvPathStack.size >= 1 && listOf("중국 드라마", "일본 드라마", "미국 드라마", "다큐", "기타 국가 드라마").any { it == (foreignTvPathStack.firstOrNull() ?: "") }) { foreignTvPathStack = emptyList() }
                     }, 
                     onSaveWatchHistory = saveWatchHistory,
                     onPlayFullScreen = { movie, position -> saveWatchHistory(movie, selectedItemScreen, currentPathStrings); initialPlaybackPosition = position; selectedMovie = movie; moviePlaylist = selectedSeries!!.episodes }
@@ -703,7 +807,7 @@ fun App(driver: SqlDriver) {
                                 when(currentScreen) {
                                     Screen.HOME -> homeLatestSeries.isEmpty() && onAirSeries.isEmpty()
                                     Screen.ON_AIR -> (if(selectedOnAirTab == "라프텔 애니메이션") onAirSeries else onAirDramaSeries).isEmpty()
-                                    Screen.FOREIGN_TV -> foreignTvItems.isEmpty()
+                                    Screen.FOREIGN_TV -> foreignCategories.isEmpty() && foreignTvItems.isEmpty()
                                     Screen.KOREAN_TV -> koreanTvItems.isEmpty()
                                     Screen.MOVIES -> movieCategories.isEmpty() && movieItems.isEmpty()
                                     Screen.ANIMATIONS -> aniCategories.isEmpty() && aniItems.isEmpty()
@@ -748,7 +852,7 @@ fun App(driver: SqlDriver) {
                                                     Spacer(Modifier.width(8.dp))
                                                     Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                                                 }
-                                                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(Color(0xFF2B2B2B))) {
+                                                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(Color.Black)) {
                                                     listOf("라프텔", "시리즈").forEach { tab ->
                                                         DropdownMenuItem(text = { Text(tab, color = Color.White) }, onClick = { selectedAniTab = tab; expanded = false })
                                                     }
@@ -803,7 +907,7 @@ fun App(driver: SqlDriver) {
                                                     Spacer(Modifier.width(8.dp))
                                                     Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                                                 }
-                                                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(Color(0xFF2B2B2B))) {
+                                                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(Color.Black)) {
                                                     listOf("최신", "제목", "UHD").forEach { tab ->
                                                         DropdownMenuItem(text = { Text(tab, color = Color.White) }, onClick = { selectedMovieTab = tab; expanded = false })
                                                     }
@@ -835,8 +939,65 @@ fun App(driver: SqlDriver) {
                                         MovieExplorer(title = "영화", screen = Screen.MOVIES, pathStack = moviePathStack, items = movieItems, scrollState = moviesScrollState, onFolderClick = { moviePathStack = moviePathStack + it }, onBackClick = { if (moviePathStack.isNotEmpty()) moviePathStack = moviePathStack.dropLast(1) })
                                     }
                                 }
-                                Screen.FOREIGN_TV -> MovieExplorer(title = "외국 TV", screen = Screen.FOREIGN_TV, pathStack = foreignTvPathStack, items = foreignTvItems, scrollState = foreignTvScrollState, onFolderClick = { foreignTvPathStack = foreignTvPathStack + it }, onBackClick = { if (foreignTvPathStack.isNotEmpty()) foreignTvPathStack = foreignTvPathStack.dropLast(1) })
-                                Screen.KOREAN_TV -> MovieExplorer(title = "국내 TV", screen = Screen.KOREAN_TV, pathStack = koreanTvPathStack, items = koreanTvItems, scrollState = koreanTvScrollState, onFolderClick = { koreanTvPathStack = koreanTvPathStack + it }, onBackClick = { if (koreanTvPathStack.isNotEmpty()) koreanTvPathStack = koreanTvPathStack.dropLast(1) })
+                                Screen.FOREIGN_TV -> {
+                                    if (foreignTvPathStack.isEmpty()) {
+                                        Column(modifier = Modifier.fillMaxSize()) {
+                                            var expanded by remember { mutableStateOf(false) }
+                                            Box(modifier = Modifier.padding(16.dp)) {
+                                                OutlinedButton(onClick = { expanded = true }, colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White), border = BorderStroke(1.dp, Color.Gray)) {
+                                                    Text(text = selectedForeignTab, fontWeight = FontWeight.Bold)
+                                                    Spacer(Modifier.width(8.dp))
+                                                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                                                }
+                                                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(Color.Black)) {
+                                                    listOf("다큐", "중국 드라마", "일본 드라마", "미국 드라마", "기타 국가 드라마").forEach { tab ->
+                                                        DropdownMenuItem(text = { Text(tab, color = Color.White) }, onClick = { selectedForeignTab = tab; expanded = false })
+                                                    }
+                                                }
+                                            }
+                                            LazyColumn(state = foreignTvScrollState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 100.dp)) {
+                                                items(foreignCategories) { (themeName, seriesList) ->
+                                                    MovieRow(
+                                                        title = themeName, screen = Screen.FOREIGN_TV, seriesList = seriesList,
+                                                        onSeriesClick = { series, sc -> 
+                                                            scope.launch {
+                                                                isLoading = true
+                                                                try {
+                                                                    if (series.fullPath != null) {
+                                                                        val raw: List<Category> = client.get("$BASE_URL/list?path=${series.fullPath.encodeURLParameter()}").body()
+                                                                        foreignTvPathStack = series.fullPath.removePrefix("외국TV/").split("/")
+                                                                        selectedSeries = series.copy(episodes = raw.flatMap { it.movies })
+                                                                        selectedItemScreen = sc
+                                                                    }
+                                                                } catch (e: Exception) { }
+                                                                finally { isLoading = false }
+                                                            }
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        MovieExplorer(title = "외국 TV", screen = Screen.FOREIGN_TV, pathStack = foreignTvPathStack, items = foreignTvItems, scrollState = foreignTvScrollState, onFolderClick = { foreignTvPathStack = foreignTvPathStack + it }, onBackClick = { if (foreignTvPathStack.isNotEmpty()) foreignTvPathStack = foreignTvPathStack.dropLast(1) })
+                                    }
+                                }
+                                Screen.KOREAN_TV -> {
+                        val path = if (koreanTvPathStack.isEmpty()) "국내TV" else "국내TV/${koreanTvPathStack.joinToString("/")}"
+                        if (lastKoreanPath != path || refreshTrigger > 0) {
+                            scope.launch {
+                                isLoading = true
+                                val raw = fetchCategoryList(path)
+                                koreanTvItems = if (koreanTvPathStack.isEmpty()) {
+                                    raw.filter { it.name != "[업로드]" }
+                                } else {
+                                    raw
+                                }
+                                if (koreanTvItems.any { it.movies.isNotEmpty() }) { explorerSeries = koreanTvItems.flatMap { it.movies }.groupBySeries() }
+                                lastKoreanPath = path
+                                isLoading = false
+                            }
+                        }
+                    }
                                 Screen.SEARCH -> SearchScreen(query = searchQuery, onQueryChange = { searchQuery = it }, selectedCategory = searchCategory, onCategoryChange = { searchCategory = it }, recentQueries = recentQueries, onSaveQuery = { q -> scope.launch { searchHistoryDataSource.insertQuery(q, currentTimeMillis()) } }, onDeleteQuery = { q -> scope.launch { searchHistoryDataSource.deleteQuery(q) } }, onClearAll = { scope.launch { searchHistoryDataSource.clearAll() } }, onSeriesClick = { s, sc -> selectedSeries = s; selectedItemScreen = sc })
                                 else -> {}
                             }
@@ -858,7 +1019,7 @@ fun CategoryListScreen(selectedFilter: String, onFilterSelected: (String) -> Uni
                 Spacer(Modifier.width(8.dp))
                 Icon(Icons.Default.ArrowDropDown, contentDescription = null)
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(Color(0xFF2B2B2B))) {
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(Color.Black)) {
                 listOf("라프텔 애니메이션", "드라마").forEach { filter ->
                     DropdownMenuItem(text = { Text(filter, color = Color.White) }, onClick = { onFilterSelected(filter); expanded = false })
                 }
