@@ -19,6 +19,7 @@ coil = "3.0.4"
 androidx-room = "2.7.0-alpha11"
 sqlite = "2.5.0-alpha11"
 ksp = "2.0.21-1.0.25"
+okio = "3.9.1"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -65,6 +66,9 @@ sqldelight-runtime = { module = "com.squareup.sqldelight:runtime", version = "1.
 sqldelight-coroutines = { module = "com.squareup.sqldelight:coroutines-extensions", version = "1.5.5" }
 sqldelight-android = { module = "com.squareup.sqldelight:android-driver", version = "1.5.5" }
 sqldelight-native = { module = "com.squareup.sqldelight:native-driver", version = "1.5.5" }
+
+# Okio
+okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }

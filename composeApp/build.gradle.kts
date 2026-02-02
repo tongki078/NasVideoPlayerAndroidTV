@@ -64,6 +64,7 @@ kotlin {
 
             implementation(libs.coil.compose)
             implementation(libs.coil.network.ktor)
+            implementation(libs.okio)
 
             implementation(libs.sqldelight.runtime)
             implementation(libs.sqldelight.coroutines)

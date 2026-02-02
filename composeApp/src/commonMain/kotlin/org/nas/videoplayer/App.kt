@@ -50,6 +50,9 @@ import coil3.ImageLoader
 import coil3.network.ktor3.KtorNetworkFetcherFactory
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+// Coil & Okio 디스크 캐시 관련 import 추가
+import coil3.disk.DiskCache
+import okio.Path.Companion.toPath
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.*
@@ -75,7 +78,12 @@ const val IPHONE_USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac 
 
 const val TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk"
 const val TMDB_BASE_URL = "https://api.themoviedb.org/3"
-const val TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w342" 
+const val TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/" // W342 대신 가변 크기를 위해 경로를 분리
+
+// TMDB 포스터 크기 정의
+const val TMDB_POSTER_SIZE_SMALL = "w185" // 목록용
+const val TMDB_POSTER_SIZE_MEDIUM = "w342" // 상세뷰, 기존 사용 크기
+const val TMDB_POSTER_SIZE_LARGE = "w500" // 고화질 히어로 영역용
 
 // --- Regex Pre-compilation ---
 private val REGEX_YEAR = Regex("\\((19|20)\\d{2}\\)|(?<!\\d)(19|20)\\d{2}(?!\\d)")
@@ -156,7 +164,7 @@ val client = HttpClient {
 
 private val tmdbCache = mutableMapOf<String, TmdbMetadata>()
 
-// --- 테마 이름 생성기 (기존 로직 복구) ---
+// --- 테마 이름 생성기 (연관성 강화) ---
 fun getRandomThemeName(originalName: String, index: Int, isMovie: Boolean = false, category: String? = null): String {
     val fixedThemes = listOf(
         if (isMovie) "지금 가장 인기 있는 영화" else "지금 가장 핫한 화제작", 
@@ -166,6 +174,16 @@ fun getRandomThemeName(originalName: String, index: Int, isMovie: Boolean = fals
 
     if (category != null) {
         when {
+            // --- 애니메이션 카테고리 연관성 강화 ---
+            category == "라프텔" -> {
+                val laThemes = listOf("라프텔 추천 명작 애니", "지금 이 순간, 가장 핫한 애니", "놓치면 후회할 인생 애니메이션", "숨겨진 띵작, 라프텔 셀렉션", "당신의 덕심을 깨울 고퀄리티 애니", "취향 저격! 라프텔 인기작")
+                return laThemes[(index - 2) % laThemes.size]
+            }
+            category == "시리즈" -> {
+                val seriesThemes = listOf("화제의 완결작, 정주행 필수", "시즌제로 즐기는 장기 연재", "탄탄한 스토리, 마니아 추천", "흥행 보장, 믿고 보는 시리즈", "역대급 몰입감, 놓칠 수 없는 이야기")
+                return seriesThemes[(index - 2) % seriesThemes.size]
+            }
+            // --- 기존 TV/영화 카테고리 ---
             category.contains("중국") -> {
                 val cnThemes = listOf("대륙의 스케일, 압도적 대서사시", "화려한 무협과 신비로운 판타지", "가슴 절절한 애절한 로맨스", "궁중 암투와 치밀한 전략", "매혹적인 영상미의 시대극")
                 return cnThemes[(index - 2) % cnThemes.size]
@@ -182,35 +200,26 @@ fun getRandomThemeName(originalName: String, index: Int, isMovie: Boolean = fals
                 val docThemes = listOf("세상을 보는 새로운 시선", "경이로운 자연과 우주의 신비", "지적 호기심을 깨우는 기록들", "우리가 몰랐던 역사의 이면", "사실이 주는 묵직한 감동")
                 return docThemes[(index - 2) % docThemes.size]
             }
-            category == "라프텔" -> {
-                val laThemes = listOf("라프텔이 추천하는 명작 애니", "지금 이 순간, 가장 핫한 애니", "놓치면 후회할 인생 애니메이션", "숨겨진 띵작, 라프텔 셀렉션", "당신의 덕심을 깨울 고퀄리티 애니")
-                return laThemes[(index - 2) % laThemes.size]
+            // --- 국내 TV 카테고리 ---
+            category.contains("예능") -> {
+                val varietyThemes = listOf("배꼽 잡는 예능 모음", "가족과 함께 웃는 주말 예능", "스타들의 리얼한 일상", "새로운 도전을 담은 힐링 예능")
+                return varietyThemes[(index - 2) % varietyThemes.size]
+            }
+            category.contains("드라마") -> {
+                val korDramaThemes = listOf("인생 역전, 막장 드라마의 정점", "가슴 설레는 로맨스 드라마", "복수와 배신, 치밀한 미스터리", "역사와 시대상을 담은 대하극")
+                return korDramaThemes[(index - 2) % korDramaThemes.size]
             }
         }
     }
     
+    // 기본 대체 테마 (파일 첫 글자 기반 할당 로직은 제거)
     val alternates = if (isMovie) {
         listOf("시선을 사로잡는 영상미", "주말 밤을 책임질 영화", "시간 순삭! 몰입도 최강", "당신의 취향을 저격할 추천작", "숨겨진 보석 같은 명작")
     } else {
         listOf("한 번 시작하면 멈출 수 없는", "웰메이드 명품 시리즈", "주말 순삭! 정주행 가이드", "놓치면 후회할 인생 드라마", "탄탄한 스토리의 화제작")
     }
     
-    val firstChar = originalName.firstOrNull { it.isLetter() }
-    val themeIndex = when (firstChar) {
-        in '가'..'나' -> 0
-        in '다'..'라' -> 1
-        in '마'..'바' -> 2
-        in '사'..'아' -> 3
-        in '자'..'하' -> 4
-        else -> 5
-    }
-    
-    return if (category != null) {
-        alternates[(index - 2) % alternates.size]
-    } else {
-        val defaultThemes = listOf("ㄱ/A 시작의 테마", "나/B 새로운 시작", "다/C 강력 추천", "라/D 놓치지 마세요", "마/E 화제의 중심", "기타 테마")
-        defaultThemes[themeIndex % defaultThemes.size]
-    }
+    return alternates[(index - 2) % alternates.size]
 }
 
 // --- 번역 관련 유틸리티 ---
@@ -227,59 +236,72 @@ suspend fun translateToKorean(text: String): String {
     } catch (e: Exception) { text }
 }
 
+/**
+ * TMDB 메타데이터를 가져오고, 포스터가 없는 경우 첫 번째 캐스트의 프로필 사진을 대체로 사용합니다.
+ */
 suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null): TmdbMetadata {
     if (TMDB_API_KEY.isBlank() || TMDB_API_KEY == "YOUR_TMDB_API_KEY") return TmdbMetadata()
     tmdbCache[title]?.let { return it }
 
+    val originalTitle = title.cleanTitle(includeYear = false)
     val year = REGEX_YEAR.find(title)?.value?.replace("(", "")?.replace(")", "")
-    val cleanTitle = title.cleanTitle(includeYear = false)
     
-    val strategies = mutableListOf<String>()
+    // 1. Level 1: 가장 정확한 쿼리 (노이즈 제거 + 연도)
+    val cleanTitle = originalTitle.cleanTitle(includeYear = false)
     
-    // 1. 한국어 제목 (한글, 공백, 숫자만 포함)
-    val korTitle = cleanTitle.filter { it.isWhitespace() || it.isHangul() || it.isDigit() }.trim().replace(Regex("\\s+"), " ")
-    if (korTitle.length >= 2) {
-        if (year != null) strategies.add("$korTitle $year")
-        strategies.add(korTitle)
-        
-        // 키워드 축소 (긴 제목 대응)
-        val words = korTitle.split(" ").filter { it.isNotBlank() }
-        if (words.size > 2) {
-            for (i in words.size - 1 downTo 2) {
-                strategies.add(words.take(i).joinToString(" "))
-            }
-        }
-    }
+    // 2. Level 2: 제목 축소 쿼리 (긴 제목에 대한 대응)
+    val words = cleanTitle.split(" ").filter { it.isNotBlank() }
+    val truncatedTitle = if (words.size > 3) words.take(2).joinToString(" ") else null
     
-    // 2. 영어/로마자 제목 (한글 외 문자만 포함)
-    val engTitle = cleanTitle.filter { !it.isHangul() }.trim().replace(Regex("\\s+"), " ")
-    if (engTitle.length >= 3 && engTitle != korTitle) {
-        if (year != null) strategies.add("$engTitle $year")
-        strategies.add(engTitle)
+    // 3. Level 3: 파일 이름 원본 쿼리 (노이즈가 오히려 키워드인 경우)
+    val rawTitle = title.replace(Regex("[.\\s_]"), " ").cleanTitle(includeYear = false)
+    
+    // 검색할 쿼리와 언어 쌍 리스트 (우선 순위 순)
+    val searchStrategies = mutableListOf<Pair<String, String?>>()
 
-        // 영어 제목에 대한 키워드 축소
-        val words = engTitle.split(" ").filter { it.isNotBlank() }
-        if (words.size > 2) {
-            for (i in words.size - 1 downTo 2) {
-                strategies.add(words.take(i).joinToString(" "))
-            }
-        }
+    // Strategy A: 클린 제목 + 한국어/영어
+    if (cleanTitle.length >= 2) {
+        if (year != null) searchStrategies.add("$cleanTitle $year" to "ko-KR")
+        searchStrategies.add(cleanTitle to "ko-KR")
+        if (year != null) searchStrategies.add("$cleanTitle $year" to null) // null = 영어
+        searchStrategies.add(cleanTitle to null)
     }
 
-    val queryList = strategies.filter { it.isNotBlank() }.distinct()
+    // Strategy B: 제목 축소 + 한국어/영어 (긴 제목, 부제 제거 목적)
+    if (truncatedTitle != null) {
+        searchStrategies.add(truncatedTitle to "ko-KR")
+        searchStrategies.add(truncatedTitle to null)
+    }
+
+    // Strategy C: 원본 제목 (노이즈가 포함된 상태) + 영어 (해외 제목 검색 정확도 향상)
+    if (rawTitle.length >= 3 && rawTitle != cleanTitle) {
+        searchStrategies.add(rawTitle to null)
+    }
+
+    // Level 4: 반복 검색 실행
     var finalMetadata: TmdbMetadata? = null
     var hasNetworkError = false
     
-    for (query in queryList) {
-        for (lang in listOf("ko-KR", null)) {
-            val (res, error) = searchTmdb(query, lang, typeHint)
-            if (error != null) { hasNetworkError = true; break }
-            if (res != null) { finalMetadata = res; break }
-        }
-        if (finalMetadata != null || hasNetworkError) break
+    for ((query, lang) in searchStrategies.distinct()) {
+        val (res, error) = searchTmdb(query, lang, typeHint)
+        if (error != null) { hasNetworkError = true; break }
+        if (res != null) { finalMetadata = res; break }
     }
 
     var result = finalMetadata ?: TmdbMetadata()
+    
+    // Level 5: 포스터 대체 이미지 사용 (이전 단계에서 개선한 부분)
+    if (result.posterUrl == null && result.tmdbId != null && result.mediaType != null) {
+        val credits = fetchTmdbCredits(result.tmdbId, result.mediaType)
+        val firstCastProfilePath = credits.firstOrNull { !it.profilePath.isNullOrBlank() }?.profilePath
+        
+        if (firstCastProfilePath != null) {
+            result = result.copy(
+                posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM$firstCastProfilePath"
+            )
+        }
+    }
+
     if (!result.overview.isNullOrBlank() && !result.overview!!.containsKorean()) {
         result = result.copy(overview = translateToKorean(result.overview!!))
     }
@@ -356,17 +378,25 @@ private suspend fun searchTmdb(query: String, language: String?, typeHint: Strin
         val path = result?.posterPath ?: result?.backdropPath
         if (path != null) {
             val mediaType = result?.mediaType ?: typeHint ?: "movie"
-            Pair(TmdbMetadata(tmdbId = result?.id, mediaType = mediaType, posterUrl = "$TMDB_IMAGE_BASE$path", overview = result?.overview, genreIds = result?.genreIds ?: emptyList()), null)
+            Pair(TmdbMetadata(tmdbId = result?.id, mediaType = mediaType, posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM$path", overview = result?.overview, genreIds = result?.genreIds ?: emptyList()), null)
         }
         else Pair(null, null)
     } catch (e: Exception) { Pair(null, e) }
 }
 
 @Composable
-fun TmdbAsyncImage(title: String, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop, typeHint: String? = null) {
+fun TmdbAsyncImage(title: String, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop, typeHint: String? = null, isLarge: Boolean = false) {
     var metadata by remember(title) { mutableStateOf(tmdbCache[title]) }
     var isError by remember(title) { mutableStateOf(false) }
     var isLoading by remember(title) { mutableStateOf(metadata == null) }
+    
+    // 이미지 경로를 동적으로 결정
+    val imageUrl = metadata?.posterUrl?.let { url ->
+        // posterUrl에 프로필 이미지가 들어간 경우, 크기를 w185로 고정하여 깨지는 것을 방지합니다.
+        val size = if (isLarge) TMDB_POSTER_SIZE_LARGE else TMDB_POSTER_SIZE_SMALL
+        url.replace(TMDB_POSTER_SIZE_MEDIUM, size)
+    }
+
     LaunchedEffect(title) {
         if (metadata == null) {
             isLoading = true
@@ -375,10 +405,11 @@ fun TmdbAsyncImage(title: String, modifier: Modifier = Modifier, contentScale: C
             isLoading = false
         } else { isError = metadata?.posterUrl == null; isLoading = false }
     }
+    
     Box(modifier = modifier.background(Color(0xFF1A1A1A))) {
-        if (metadata?.posterUrl != null) {
+        if (imageUrl != null) {
             AsyncImage(
-                model = ImageRequest.Builder(LocalPlatformContext.current).data(metadata!!.posterUrl).crossfade(200).build(),
+                model = ImageRequest.Builder(LocalPlatformContext.current).data(imageUrl).crossfade(200).build(),
                 contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = contentScale, onError = { isError = true }
             )
         }
@@ -501,7 +532,16 @@ suspend fun fetchCategoryList(path: String): List<Category> {
 @Composable
 fun App(driver: SqlDriver) {
     setSingletonImageLoaderFactory { platformContext ->
-        ImageLoader.Builder(platformContext).components { add(KtorNetworkFetcherFactory(client)) }.crossfade(true).build()
+        ImageLoader.Builder(platformContext)
+            .components { add(KtorNetworkFetcherFactory(client)) }
+            .diskCache { 
+                DiskCache.Builder()
+                    .directory(getImageCacheDirectory(platformContext).toPath().resolve("coil_cache"))
+                    .maxSizeBytes(1024L * 1024 * 100) // 100MB
+                    .build()
+            }
+            .crossfade(true)
+            .build()
     }
     
     val db = rememberAppDatabase(driver)
@@ -1240,7 +1280,7 @@ fun MovieRow(title: String, screen: Screen, seriesList: List<Series>, onSeriesCl
     Column(modifier = Modifier.padding(vertical = 12.dp)) {
         Text(text = title, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold, fontSize = 22.sp), color = Color.White, modifier = Modifier.padding(start = 16.dp, bottom = 12.dp))
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(seriesList) { series -> Card(modifier = Modifier.width(120.dp).height(180.dp).clickable { onSeriesClick(series, screen) }, shape = RoundedCornerShape(4.dp)) { TmdbAsyncImage(title = series.title, modifier = Modifier.fillMaxSize(), typeHint = typeHint) } }
+            items(seriesList) { series -> Card(modifier = Modifier.width(120.dp).height(180.dp).clickable { onSeriesClick(series, screen) }, shape = RoundedCornerShape(4.dp)) { TmdbAsyncImage(title = series.title, modifier = Modifier.fillMaxSize(), typeHint = typeHint, isLarge = false) } }
         }
     }
 }
@@ -1248,7 +1288,7 @@ fun MovieRow(title: String, screen: Screen, seriesList: List<Series>, onSeriesCl
 @Composable
 fun SearchGridItem(series: Series, screen: Screen, onSeriesClick: (Series) -> Unit) {
     val typeHint = if (screen == Screen.MOVIES) "movie" else "tv"
-    Card(modifier = Modifier.aspectRatio(0.67f).clickable { onSeriesClick(series) }, shape = RoundedCornerShape(4.dp)) { TmdbAsyncImage(title = series.title, modifier = Modifier.fillMaxSize(), typeHint = typeHint) }
+    Card(modifier = Modifier.aspectRatio(0.67f).clickable { onSeriesClick(series) }, shape = RoundedCornerShape(4.dp)) { TmdbAsyncImage(title = series.title, modifier = Modifier.fillMaxSize(), typeHint = typeHint, isLarge = false) }
 }
 
 @Composable
@@ -1325,7 +1365,7 @@ fun SeriesDetailScreen(series: Series, categoryTitle: String = "", currentScreen
                         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(credits) { cast ->
                                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(85.dp)) {
-                                    AsyncImage(model = ImageRequest.Builder(LocalPlatformContext.current).data("$TMDB_IMAGE_BASE${cast.profilePath}").crossfade(true).build(), contentDescription = null, modifier = Modifier.size(75.dp).clip(CircleShape).background(Color.DarkGray), contentScale = ContentScale.Crop)
+                                    AsyncImage(model = ImageRequest.Builder(LocalPlatformContext.current).data("$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_SMALL${cast.profilePath}").crossfade(true).build(), contentDescription = null, modifier = Modifier.size(75.dp).clip(CircleShape).background(Color.DarkGray), contentScale = ContentScale.Crop)
                                     Spacer(Modifier.height(6.dp))
                                     Text(text = cast.name, color = Color.White, fontSize = 11.sp, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
                                     val charName = cast.roles?.firstOrNull()?.character ?: cast.character ?: ""
@@ -1347,9 +1387,9 @@ fun SeriesDetailScreen(series: Series, categoryTitle: String = "", currentScreen
                         supportingContent = { if (!epMetadata?.name.isNullOrBlank()) { Text(text = epMetadata!!.name!!, color = Color.LightGray, fontSize = 13.sp) } },
                         leadingContent = { 
                             Box(modifier = Modifier.width(130.dp).height(74.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFF1A1A1A))) { 
-                                val stillUrl = epMetadata?.stillPath?.let { "$TMDB_IMAGE_BASE$it" }
+                                val stillUrl = epMetadata?.stillPath?.let { "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM$it" }
                                 if (stillUrl != null) { AsyncImage(model = ImageRequest.Builder(LocalPlatformContext.current).data(stillUrl).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) } 
-                                else { TmdbAsyncImage(title = ep.title, modifier = Modifier.fillMaxSize(), typeHint = "tv") }
+                                else { TmdbAsyncImage(title = ep.title, modifier = Modifier.fillMaxSize(), typeHint = "tv", isLarge = false) }
                                 Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)))
                                 Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.align(Alignment.Center).size(32.dp)) 
                             } 
@@ -1396,9 +1436,9 @@ fun VideoPlayerScreen(movie: Movie, playlist: List<Movie>, initialPosition: Long
 fun HeroSection(movie: Movie?, onPlayClick: (Movie) -> Unit) {
     if (movie == null) return
     Box(modifier = Modifier.fillMaxWidth().height(550.dp).clickable { onPlayClick(movie) }.background(Color.Black)) {
-        TmdbAsyncImage(title = movie.title, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, typeHint = "movie")
+        TmdbAsyncImage(title = movie.title, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, typeHint = "movie", isLarge = true)
         Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(colors = listOf(Color.Black.copy(alpha = 0.4f), Color.Transparent, Color.Black.copy(alpha = 0.6f), Color.Black))))
-        Card(modifier = Modifier.width(280.dp).height(400.dp).align(Alignment.TopCenter).padding(top = 40.dp), shape = RoundedCornerShape(8.dp), elevation = CardDefaults.cardElevation(defaultElevation = 16.dp), border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.2f))) { TmdbAsyncImage(title = movie.title, modifier = Modifier.fillMaxSize(), typeHint = "movie") }
+        Card(modifier = Modifier.width(280.dp).height(400.dp).align(Alignment.TopCenter).padding(top = 40.dp), shape = RoundedCornerShape(8.dp), elevation = CardDefaults.cardElevation(defaultElevation = 16.dp), border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.2f))) { TmdbAsyncImage(title = movie.title, modifier = Modifier.fillMaxSize(), typeHint = "movie", isLarge = true) }
         Column(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(text = movie.title.cleanTitle(), color = Color.White, style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold, shadow = Shadow(color = Color.Black, blurRadius = 8f)), textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 24.dp))
             Spacer(Modifier.height(20.dp)); Button(onClick = { onPlayClick(movie) }, colors = ButtonDefaults.buttonColors(containerColor = Color.White), shape = RoundedCornerShape(4.dp), modifier = Modifier.width(120.dp).height(45.dp)) { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.Black); Spacer(Modifier.width(8.dp)); Text("재생", color = Color.Black, fontWeight = FontWeight.Bold) }
