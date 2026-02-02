@@ -156,12 +156,61 @@ val client = HttpClient {
 
 private val tmdbCache = mutableMapOf<String, TmdbMetadata>()
 
-// --- 테마 이름 생성기 (개선된 로직: 실제 폴더명 기반) ---
-fun getThemeTitle(originalName: String, category: String? = null): String {
-    if (originalName == "__STANDALONE__") {
-        return if (category != null) "$category 추천 작품" else "추천 콘텐츠"
+// --- 테마 이름 생성기 (기존 로직 복구) ---
+fun getRandomThemeName(originalName: String, index: Int, isMovie: Boolean = false, category: String? = null): String {
+    val fixedThemes = listOf(
+        if (isMovie) "지금 가장 인기 있는 영화" else "지금 가장 핫한 화제작", 
+        if (isMovie) "최근 추가된 흥미로운 영화" else "새로운 정주행의 시작"
+    )
+    if (index < 2) return fixedThemes[index]
+
+    if (category != null) {
+        when {
+            category.contains("중국") -> {
+                val cnThemes = listOf("대륙의 스케일, 압도적 대서사시", "화려한 무협과 신비로운 판타지", "가슴 절절한 애절한 로맨스", "궁중 암투와 치밀한 전략", "매혹적인 영상미의 시대극")
+                return cnThemes[(index - 2) % cnThemes.size]
+            }
+            category.contains("일본") -> {
+                val jpThemes = listOf("특유의 감성, 몽글몽글한 로맨스", "소소하지만 확실한 행복, 일상물", "독특한 소재와 기발한 상상력", "청춘의 열정과 풋풋한 성장기", "깊은 여운을 남기는 미스터리 수사물")
+                return jpThemes[(index - 2) % jpThemes.size]
+            }
+            category.contains("미국") || category.contains("영국") -> {
+                val enThemes = listOf("압도적 스케일, 헐리우드 화제작", "치밀한 구성의 고퀄리티 범죄 스릴러", "전 세계를 사로잡은 마성의 시리즈", "상상 그 이상! SF와 판타지의 정점", "강렬한 몰입감의 전문직 드라마")
+                return enThemes[(index - 2) % enThemes.size]
+            }
+            category.contains("다큐") -> {
+                val docThemes = listOf("세상을 보는 새로운 시선", "경이로운 자연과 우주의 신비", "지적 호기심을 깨우는 기록들", "우리가 몰랐던 역사의 이면", "사실이 주는 묵직한 감동")
+                return docThemes[(index - 2) % docThemes.size]
+            }
+            category == "라프텔" -> {
+                val laThemes = listOf("라프텔이 추천하는 명작 애니", "지금 이 순간, 가장 핫한 애니", "놓치면 후회할 인생 애니메이션", "숨겨진 띵작, 라프텔 셀렉션", "당신의 덕심을 깨울 고퀄리티 애니")
+                return laThemes[(index - 2) % laThemes.size]
+            }
+        }
     }
-    return originalName
+    
+    val alternates = if (isMovie) {
+        listOf("시선을 사로잡는 영상미", "주말 밤을 책임질 영화", "시간 순삭! 몰입도 최강", "당신의 취향을 저격할 추천작", "숨겨진 보석 같은 명작")
+    } else {
+        listOf("한 번 시작하면 멈출 수 없는", "웰메이드 명품 시리즈", "주말 순삭! 정주행 가이드", "놓치면 후회할 인생 드라마", "탄탄한 스토리의 화제작")
+    }
+    
+    val firstChar = originalName.firstOrNull { it.isLetter() }
+    val themeIndex = when (firstChar) {
+        in '가'..'나' -> 0
+        in '다'..'라' -> 1
+        in '마'..'바' -> 2
+        in '사'..'아' -> 3
+        in '자'..'하' -> 4
+        else -> 5
+    }
+    
+    return if (category != null) {
+        alternates[(index - 2) % alternates.size]
+    } else {
+        val defaultThemes = listOf("ㄱ/A 시작의 테마", "나/B 새로운 시작", "다/C 강력 추천", "라/D 놓치지 마세요", "마/E 화제의 중심", "기타 테마")
+        defaultThemes[themeIndex % defaultThemes.size]
+    }
 }
 
 // --- 번역 관련 유틸리티 ---
@@ -523,7 +572,7 @@ fun App(driver: SqlDriver) {
     var searchCategory by rememberSaveable { mutableStateOf("전체") }
     var refreshTrigger by remember { mutableStateOf(0) }
     
-    var selectedKoreanTab by rememberSaveable { mutableStateOf("") } // 국내 TV용 탭 선택 상태 추가
+    var selectedKoreanTab by rememberSaveable { mutableStateOf("") } 
 
     val currentPathStrings = remember(currentScreen, moviePathStack, aniPathStack, foreignTvPathStack, koreanTvPathStack) {
         when (currentScreen) {
@@ -603,9 +652,9 @@ fun App(driver: SqlDriver) {
                                         val standalone = fetchedData.filter { it.first == "__STANDALONE__" }.flatMap { it.second }
                                         val themes = fetchedData.filter { it.first != "__STANDALONE__" }
                                         val finalCategories = mutableListOf<Pair<String, List<Series>>>()
-                                        if (standalone.isNotEmpty()) { finalCategories.add(getThemeTitle("__STANDALONE__", selectedAniTab) to standalone) }
+                                        if (standalone.isNotEmpty()) { finalCategories.add((if (selectedAniTab == "라프텔") "라프텔 추천 명작" else "$selectedAniTab 추천 작품") to standalone) }
                                         val (multi, single) = themes.partition { it.second.size > 10 }
-                                        multi.forEach { (name, list) -> finalCategories.add(getThemeTitle(name) to list) }
+                                        multi.forEachIndexed { index, (name, list) -> finalCategories.add(getRandomThemeName(name, index + (if(standalone.isNotEmpty()) 1 else 0), isMovie = false, category = selectedAniTab) to list) }
                                         if (single.isNotEmpty()) finalCategories.add("기타 ${selectedAniTab} 작품" to single.flatMap { it.second })
                                         aniCategories = finalCategories.groupBy { it.first }.map { (name, groups) -> name to groups.flatMap { it.second }.distinctBy { it.title } }.toList()
                                         aniItems = rootRaw
@@ -654,9 +703,9 @@ fun App(driver: SqlDriver) {
                                         val standalone = fetchedData.filter { it.first == "__STANDALONE__" }.flatMap { it.second }
                                         val themes = fetchedData.filter { it.first != "__STANDALONE__" }
                                         val finalCategories = mutableListOf<Pair<String, List<Series>>>()
-                                        if (standalone.isNotEmpty()) { finalCategories.add(getThemeTitle("__STANDALONE__", selectedMovieTab) to standalone) }
+                                        if (standalone.isNotEmpty()) { finalCategories.add(("$selectedMovieTab 인기 영화") to standalone) }
                                         val (multi, single) = themes.partition { it.second.size > 10 }
-                                        multi.forEach { (name, list) -> finalCategories.add(getThemeTitle(name) to list) }
+                                        multi.forEachIndexed { index, (name, list) -> finalCategories.add(getRandomThemeName(name, index + (if(standalone.isNotEmpty()) 1 else 0), isMovie = true, category = selectedMovieTab) to list) }
                                         if (single.isNotEmpty()) finalCategories.add("기타 ${selectedMovieTab} 작품" to single.flatMap { it.second })
                                         movieCategories = finalCategories.groupBy { it.first }.map { (name, groups) -> name to groups.flatMap { it.second }.distinctBy { it.title } }.toList()
                                         movieItems = rootRaw.filter { it.name in listOf("제목", "최신", "UHD") }
@@ -705,9 +754,9 @@ fun App(driver: SqlDriver) {
                                         val standalone = fetchedData.filter { it.first == "__STANDALONE__" }.flatMap { it.second }
                                         val themes = fetchedData.filter { it.first != "__STANDALONE__" }
                                         val finalCategories = mutableListOf<Pair<String, List<Series>>>()
-                                        if (standalone.isNotEmpty()) { finalCategories.add(getThemeTitle("__STANDALONE__", selectedForeignTab) to standalone) }
+                                        if (standalone.isNotEmpty()) { finalCategories.add(("$selectedForeignTab 추천 명작") to standalone) }
                                         val (multi, single) = themes.partition { it.second.size > 10 }
-                                        multi.forEach { (name, list) -> finalCategories.add(getThemeTitle(name) to list) }
+                                        multi.forEachIndexed { index, (name, list) -> finalCategories.add(getRandomThemeName(name, index + (if(standalone.isNotEmpty()) 1 else 0), isMovie = false, category = selectedForeignTab) to list) }
                                         if (single.isNotEmpty()) finalCategories.add("기타 ${selectedForeignTab} 작품" to single.flatMap { it.second })
                                         foreignCategories = finalCategories.groupBy { it.first }.map { (name, groups) -> name to groups.flatMap { it.second }.distinctBy { it.title } }.toList()
                                     } else { foreignCategories = emptyList() }
@@ -760,9 +809,9 @@ fun App(driver: SqlDriver) {
                                                 val standalone = fetchedData.filter { it.first == "__STANDALONE__" }.flatMap { it.second }
                                                 val themes = fetchedData.filter { it.first != "__STANDALONE__" }
                                                 val finalCategories = mutableListOf<Pair<String, List<Series>>>()
-                                                if (standalone.isNotEmpty()) { finalCategories.add(getThemeTitle("__STANDALONE__", selectedKoreanTab) to standalone) }
+                                                if (standalone.isNotEmpty()) { finalCategories.add(("$selectedKoreanTab 인기 작품") to standalone) }
                                                 val (multi, single) = themes.partition { it.second.size > 10 }
-                                                multi.forEach { (name, list) -> finalCategories.add(getThemeTitle(name) to list) }
+                                                multi.forEachIndexed { index, (name, list) -> finalCategories.add(getRandomThemeName(name, index + (if(standalone.isNotEmpty()) 1 else 0), isMovie = false, category = selectedKoreanTab) to list) }
                                                 if (single.isNotEmpty()) finalCategories.add("기타 ${selectedKoreanTab} 작품" to single.flatMap { it.second })
                                                 koreanCategories = finalCategories.groupBy { it.first }.map { (name, groups) -> name to groups.flatMap { it.second }.distinctBy { it.title } }.toList()
                                             } else { koreanCategories = emptyList() }
