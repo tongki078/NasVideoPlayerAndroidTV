@@ -33,66 +33,77 @@ fun HomeScreen(
     watchHistory: List<WatchHistory>,
     latestMovies: List<Series>,
     animations: List<Series>,
+    isLoading: Boolean, // 로딩 상태 추가
     onSeriesClick: (Series) -> Unit,
     onPlayClick: (Movie) -> Unit
 ) {
-    val heroMovie = remember(latestMovies, animations) {
-        latestMovies.firstOrNull()?.episodes?.firstOrNull() 
-            ?: animations.firstOrNull()?.episodes?.firstOrNull()
-    }
-
-    LazyColumn(Modifier.fillMaxSize().background(Color.Black)) {
-        // 1. 히어로 섹션 (중앙 대형 포스터)
-        if (heroMovie != null) {
-            item {
-                HeroSection(
-                    movie = heroMovie,
-                    onClick = { 
-                        val target = latestMovies.find { it.episodes.contains(heroMovie) } ?: animations.find { it.episodes.contains(heroMovie) }
-                        target?.let { onSeriesClick(it) }
-                    },
-                    onPlay = onPlayClick
-                )
-            }
+    if (isLoading) {
+        // 로딩 중일 때는 중앙에 인디케이터 표시 (괴리감 방지)
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(color = Color.Red)
         }
-        
-        // 2. 시청 중인 콘텐츠
-        if (watchHistory.isNotEmpty()) {
-            item { SectionTitle("시청 중인 콘텐츠") }
-            item {
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
-                    items(watchHistory) { history ->
-                        MovieCard(title = history.title, onClick = { onSeriesClick(Series(history.title, emptyList())) })
+    } else {
+        val heroMovie = remember(latestMovies, animations) {
+            latestMovies.firstOrNull()?.episodes?.firstOrNull() 
+                ?: animations.firstOrNull()?.episodes?.firstOrNull()
+        }
+
+        LazyColumn(Modifier.fillMaxSize().background(Color.Black)) {
+            // 1. 히어로 섹션
+            if (heroMovie != null) {
+                item {
+                    HeroSection(
+                        movie = heroMovie,
+                        onClick = { 
+                            val target = latestMovies.find { it.episodes.contains(heroMovie) } ?: animations.find { it.episodes.contains(heroMovie) }
+                            target?.let { onSeriesClick(it) }
+                        },
+                        onPlay = onPlayClick
+                    )
+                }
+            }
+            
+            // 2. 시청 중인 콘텐츠 (로딩 완료 후 한 번에 표시)
+            if (watchHistory.isNotEmpty()) {
+                item { SectionTitle("시청 중인 콘텐츠") }
+                item {
+                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
+                        items(watchHistory) { history ->
+                            MovieCard(title = history.title, onClick = { onSeriesClick(Series(history.title, emptyList())) })
+                        }
                     }
                 }
             }
-        }
 
-        // 3. 최신 영화
-        if (latestMovies.isNotEmpty()) {
-            item { SectionTitle("최신 영화") }
-            item {
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
-                    items(latestMovies) { series ->
-                        MovieCard(title = series.title, typeHint = "movie", onClick = { onSeriesClick(series) })
+            // 3. 최신 영화
+            if (latestMovies.isNotEmpty()) {
+                item { SectionTitle("최신 영화") }
+                item {
+                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
+                        items(latestMovies) { series ->
+                            MovieCard(title = series.title, typeHint = "movie", onClick = { onSeriesClick(series) })
+                        }
                     }
                 }
             }
-        }
 
-        // 4. 애니메이션
-        if (animations.isNotEmpty()) {
-            item { SectionTitle("라프텔 애니메이션") }
-            item {
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
-                    items(animations) { series ->
-                        MovieCard(title = series.title, typeHint = "tv", onClick = { onSeriesClick(series) })
+            // 4. 애니메이션
+            if (animations.isNotEmpty()) {
+                item { SectionTitle("라프텔 애니메이션") }
+                item {
+                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
+                        items(animations) { series ->
+                            MovieCard(title = series.title, typeHint = "tv", onClick = { onSeriesClick(series) })
+                        }
                     }
                 }
             }
+            
+            item { Spacer(Modifier.height(100.dp)) }
         }
-        
-        item { Spacer(Modifier.height(100.dp)) }
     }
 }
 

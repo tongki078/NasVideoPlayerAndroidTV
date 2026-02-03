@@ -66,11 +66,20 @@ fun App(driver: SqlDriver) {
 
     var homeLatestSeries by remember { mutableStateOf<List<Series>>(emptyList()) }
     var homeAnimations by remember { mutableStateOf<List<Series>>(emptyList()) }
+    var isHomeLoading by remember { mutableStateOf(false) } // 홈 로딩 상태 추가
 
     LaunchedEffect(currentScreen) {
         if (currentScreen == Screen.HOME && homeLatestSeries.isEmpty()) {
-            homeLatestSeries = repository.getLatestMovies()
-            homeAnimations = repository.getAnimations()
+            isHomeLoading = true
+            try {
+                // 병렬 로딩으로 속도 개선
+                val latestDeferred = async { repository.getLatestMovies() }
+                val animationsDeferred = async { repository.getAnimations() }
+                homeLatestSeries = latestDeferred.await()
+                homeAnimations = animationsDeferred.await()
+            } finally {
+                isHomeLoading = false
+            }
         }
     }
 
@@ -135,13 +144,17 @@ fun App(driver: SqlDriver) {
                         }
                         currentScreen == Screen.HOME -> {
                             HomeScreen(
-                                watchHistory = watchHistory, latestMovies = homeLatestSeries, animations = homeAnimations,
-                                onSeriesClick = { selectedSeries = it }, onPlayClick = { selectedMovie = it }
+                                watchHistory = watchHistory, 
+                                latestMovies = homeLatestSeries, 
+                                animations = homeAnimations,
+                                isLoading = isHomeLoading, // 로딩 상태 전달
+                                onSeriesClick = { selectedSeries = it }, 
+                                onPlayClick = { selectedMovie = it }
                             )
                         }
                         else -> {
                             val categoryInfo = when (currentScreen) {
-                                Screen.ON_AIR -> "방송중" to "방송중" // 상위 경로만 전달
+                                Screen.ON_AIR -> "방송중" to "방송중"
                                 Screen.ANIMATIONS -> "애니메이션" to "애니메이션"
                                 Screen.MOVIES -> "영화" to "영화"
                                 Screen.FOREIGN_TV -> "외국TV" to "외국TV"
