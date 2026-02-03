@@ -1,4 +1,4 @@
-package org.nas.videoplayer
+package org.nas.videoplayerandroidtv
 
 import android.os.Build
 import coil3.PlatformContext

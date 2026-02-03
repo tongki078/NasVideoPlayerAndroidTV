@@ -1,4 +1,4 @@
-package org.nas.videoplayer
+package org.nas.videoplayerandroidtv
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -18,18 +18,18 @@ import coil3.compose.setSingletonImageLoaderFactory
 import okio.Path.Companion.toPath
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.map
-import org.nas.videoplayer.data.network.NasApiClient
-import org.nas.videoplayer.data.repository.VideoRepositoryImpl
-import org.nas.videoplayer.domain.model.*
-import org.nas.videoplayer.domain.repository.VideoRepository
-import org.nas.videoplayer.ui.home.HomeScreen
-import org.nas.videoplayer.ui.search.SearchScreen
-import org.nas.videoplayer.ui.detail.SeriesDetailScreen
-import org.nas.videoplayer.ui.player.VideoPlayerScreen
-import org.nas.videoplayer.ui.common.NetflixTopBar
-import org.nas.videoplayer.ui.category.ThemedCategoryScreen
-import org.nas.videoplayer.data.*
-import org.nas.videoplayer.db.AppDatabase
+import org.nas.videoplayerandroidtv.data.network.NasApiClient
+import org.nas.videoplayerandroidtv.data.repository.VideoRepositoryImpl
+import org.nas.videoplayerandroidtv.domain.model.*
+import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
+import org.nas.videoplayerandroidtv.ui.home.HomeScreen
+import org.nas.videoplayerandroidtv.ui.search.SearchScreen
+import org.nas.videoplayerandroidtv.ui.detail.SeriesDetailScreen
+import org.nas.videoplayerandroidtv.ui.player.VideoPlayerScreen
+import org.nas.videoplayerandroidtv.ui.common.NetflixTopBar
+import org.nas.videoplayerandroidtv.ui.category.ThemedCategoryScreen
+import org.nas.videoplayerandroidtv.data.*
+import org.nas.videoplayerandroidtv.db.AppDatabase
 import com.squareup.sqldelight.db.SqlDriver
 
 @Composable

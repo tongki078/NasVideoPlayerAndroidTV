@@ -79,17 +79,17 @@ kotlin {
 
 sqldelight {
     database("AppDatabase") {
-        packageName = "org.nas.videoplayer.db"
+        packageName = "org.nas.videoplayerandroidtv.db"
         sourceFolders = listOf("sqldelight")
     }
 }
 
 android {
-    namespace = "org.nas.videoplayer"
+    namespace = "org.nas.videoplayerandroidtv"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
 
     defaultConfig {
-        applicationId = "org.nas.videoplayer"
+        applicationId = "org.nas.videoplayerandroidtv"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 1

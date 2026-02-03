@@ -1,4 +1,4 @@
-rootProject.name = "NasVideoPlayer"
+rootProject.name = "NasVideoPlayerAndroidTV"
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 pluginManagement {

@@ -1,4 +1,4 @@
-package org.nas.videoplayer
+package org.nas.videoplayerandroidtv
 
 import androidx.annotation.OptIn
 import androidx.compose.foundation.layout.Box
