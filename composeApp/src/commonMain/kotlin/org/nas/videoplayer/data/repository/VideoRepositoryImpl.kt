@@ -51,6 +51,13 @@ class VideoRepositoryImpl : VideoRepository {
         emptyList()
     }
 
+    override suspend fun getAnimationsAll(): List<Series> = try {
+        val results: List<Category> = client.get("$baseUrl/animations_all").body()
+        results.flatMap { it.movies }.groupBySeries()
+    } catch (e: Exception) {
+        emptyList()
+    }
+
     private fun List<org.nas.videoplayer.domain.model.Movie>.groupBySeries(): List<Series> = 
         this.groupBy { it.title.cleanTitle(includeYear = false) }
             .map { (title, eps) -> 
@@ -59,7 +66,8 @@ class VideoRepositoryImpl : VideoRepository {
                     episodes = eps.sortedWith(
                         compareBy<org.nas.videoplayer.domain.model.Movie> { it.title.extractSeason() }
                             .thenBy { it.title.extractEpisode()?.filter { it.isDigit() }?.toIntOrNull() ?: 0 }
-                    )
+                    ),
+                    fullPath = null
                 ) 
             }.sortedBy { it.title }
 }

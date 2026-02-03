@@ -26,26 +26,33 @@ fun ThemedCategoryScreen(
     repository: VideoRepository,
     onSeriesClick: (Series) -> Unit
 ) {
-    val isAirScreen = categoryName == "방송중" || categoryName == "라프텔"
-    
+    val isAirScreen = categoryName == "방송중"
+    val isAniScreen = categoryName == "애니메이션"
+
     // 0: 라프텔 애니메이션, 1: 드라마
-    var selectedMode by remember(categoryName) { mutableStateOf(if (isAirScreen && !rootPath.contains("드라마")) 0 else 1) }
-    
-    val selectedCategoryText = if (selectedMode == 0) "라프텔 애니메이션" else "드라마"
+    var selectedAirMode by remember(categoryName) { mutableStateOf(0) }
+    // 0: 라프텔, 1: 시리즈
+    var selectedAniMode by remember(categoryName) { mutableStateOf(0) }
+
+    val selectedCategoryText = when {
+        isAirScreen -> if (selectedAirMode == 0) "라프텔 애니메이션" else "드라마"
+        isAniScreen -> if (selectedAniMode == 0) "라프텔" else "시리즈"
+        else -> categoryName
+    }
     var expanded by remember { mutableStateOf(false) }
 
-    var themedSections by remember(selectedMode, categoryName) { mutableStateOf<List<Pair<String, List<Series>>>>(emptyList()) }
+    var themedSections by remember(selectedAirMode, selectedAniMode, categoryName) { mutableStateOf<List<Pair<String, List<Series>>>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
 
-    LaunchedEffect(selectedMode, categoryName) {
+    LaunchedEffect(selectedAirMode, selectedAniMode, categoryName) {
         isLoading = true
         try {
             if (isAirScreen) {
                 // 방송중일 때는 서버의 전용 엔드포인트(/animations, /dramas)를 직접 호출
-                val allSeries = if (selectedMode == 0) repository.getAnimations() else repository.getDramas()
-                
+                val allSeries = if (selectedAirMode == 0) repository.getAnimations() else repository.getDramas()
+
                 if (allSeries.isNotEmpty()) {
-                    // 전체 리스트를 3개의 테마로 나누어 표시 (사용자 요청: 3~4개)
+                    // 전체 리스트를 3개의 테마로 나누어 표시
                     val shuffled = allSeries.shuffled()
                     val chunkSize = (shuffled.size / 3).coerceAtLeast(1)
                     
@@ -58,12 +65,18 @@ fun ThemedCategoryScreen(
                     themedSections = emptyList()
                 }
             } else {
-                // 일반 카테고리는 기존의 폴더 기반 테마 로직 유지
-                val themeFolders = repository.getCategoryList(rootPath)
+                // 애니메이션 및 일반 카테고리 로직
+                val currentRootPath = when {
+                    isAniScreen && selectedAniMode == 0 -> "애니메이션/라프텔"
+                    isAniScreen && selectedAniMode == 1 -> "애니메이션/시리즈"
+                    else -> rootPath
+                }
+
+                val themeFolders = repository.getCategoryList(currentRootPath)
                 coroutineScope {
                     themedSections = themeFolders.take(4).mapIndexed { index, folder ->
                         async {
-                            val folderPath = "$rootPath/${folder.name}"
+                            val folderPath = "$currentRootPath/${folder.name}"
                             val content = repository.getCategoryList(folderPath)
                             val hasDirectMovies = content.any { it.movies.isNotEmpty() }
                             val seriesList = if (hasDirectMovies) {
@@ -92,7 +105,7 @@ fun ThemedCategoryScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (isAirScreen) {
+        if (isAirScreen || isAniScreen) {
             Box(modifier = Modifier.padding(16.dp)) {
                 ExposedDropdownMenuBox(
                     expanded = expanded,
@@ -119,20 +132,37 @@ fun ThemedCategoryScreen(
                         expanded = expanded,
                         onDismissRequest = { expanded = false }
                     ) {
-                        DropdownMenuItem(
-                            text = { Text("라프텔 애니메이션") },
-                            onClick = {
-                                selectedMode = 0
-                                expanded = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("드라마") },
-                            onClick = {
-                                selectedMode = 1
-                                expanded = false
-                            }
-                        )
+                        if (isAirScreen) {
+                            DropdownMenuItem(
+                                text = { Text("라프텔 애니메이션") },
+                                onClick = {
+                                    selectedAirMode = 0
+                                    expanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("드라마") },
+                                onClick = {
+                                    selectedAirMode = 1
+                                    expanded = false
+                                }
+                            )
+                        } else if (isAniScreen) {
+                            DropdownMenuItem(
+                                text = { Text("라프텔") },
+                                onClick = {
+                                    selectedAniMode = 0
+                                    expanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("시리즈") },
+                                onClick = {
+                                    selectedAniMode = 1
+                                    expanded = false
+                                }
+                            )
+                        }
                     }
                 }
             }
