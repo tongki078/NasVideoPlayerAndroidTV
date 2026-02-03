@@ -82,7 +82,7 @@ fun App(driver: SqlDriver) {
 
     // 시청 기록 저장 함수 (중복 제거 및 최신화)
     val saveWatchHistory: (Movie) -> Unit = { movie ->
-        scope.launch {
+        scope.launch(Dispatchers.Default) {
             watchHistoryDataSource.insertWatchHistory(
                 id = movie.id,
                 title = movie.title,
@@ -180,7 +180,6 @@ fun App(driver: SqlDriver) {
                                 initialPosition = lastPlaybackPosition,
                                 onPositionUpdate = { 
                                     lastPlaybackPosition = it
-                                    // 재생 중일 때도 주기적으로 기록을 저장하도록 할 수 있음 (현재는 위치만 업데이트)
                                 },
                                 onBack = { selectedMovie = null }
                             )
@@ -196,8 +195,9 @@ fun App(driver: SqlDriver) {
                                     selectedMovie = movie
                                     moviePlaylist = playlist
                                     lastPlaybackPosition = pos
-                                    saveWatchHistory(movie) // 재생 시작 시 저장
-                                }
+                                    saveWatchHistory(movie)
+                                },
+                                onPreviewPlay = { movie -> saveWatchHistory(movie) } // 미리보기 콜백 연결
                             )
                         }
                         currentScreen == Screen.SEARCH -> {
@@ -226,32 +226,34 @@ fun App(driver: SqlDriver) {
                             )
                         }
                         currentScreen == Screen.HOME -> {
-                            HomeScreen(
-                                watchHistory = watchHistory, 
-                                latestMovies = homeLatestSeries, 
-                                animations = homeAnimations,
-                                isLoading = isHomeLoading, 
-                                lazyListState = homeLazyListState,
-                                onSeriesClick = { selectedSeries = it }, 
-                                onPlayClick = { movie ->
-                                    val parentSeries = (homeLatestSeries + homeAnimations).find { it.episodes.contains(movie) }
-                                    selectedMovie = movie
-                                    moviePlaylist = parentSeries?.episodes ?: listOf(movie)
-                                    lastPlaybackPosition = 0L
-                                    saveWatchHistory(movie) // 재생 시작 시 저장
-                                },
-                                onHistoryClick = { history ->
-                                    selectedMovie = Movie(
-                                        id = history.id,
-                                        title = history.title,
-                                        videoUrl = history.videoUrl,
-                                        thumbnailUrl = history.thumbnailUrl
-                                    )
-                                    moviePlaylist = listOf(selectedMovie!!)
-                                    lastPlaybackPosition = 0L 
-                                    saveWatchHistory(selectedMovie!!) // 기록 클릭 시에도 상단으로 올리기 위해 저장 호출
-                                }
-                            )
+                            key(watchHistory) { // watchHistory 변경 시 UI 갱신 유도
+                                HomeScreen(
+                                    watchHistory = watchHistory, 
+                                    latestMovies = homeLatestSeries, 
+                                    animations = homeAnimations,
+                                    isLoading = isHomeLoading, 
+                                    lazyListState = homeLazyListState,
+                                    onSeriesClick = { selectedSeries = it }, 
+                                    onPlayClick = { movie ->
+                                        val parentSeries = (homeLatestSeries + homeAnimations).find { it.episodes.contains(movie) }
+                                        selectedMovie = movie
+                                        moviePlaylist = parentSeries?.episodes ?: listOf(movie)
+                                        lastPlaybackPosition = 0L
+                                        saveWatchHistory(movie)
+                                    },
+                                    onHistoryClick = { history ->
+                                        selectedMovie = Movie(
+                                            id = history.id,
+                                            title = history.title,
+                                            videoUrl = history.videoUrl,
+                                            thumbnailUrl = history.thumbnailUrl
+                                        )
+                                        moviePlaylist = listOf(selectedMovie!!)
+                                        lastPlaybackPosition = 0L 
+                                        saveWatchHistory(selectedMovie!!)
+                                    }
+                                )
+                            }
                         }
                         else -> {
                             val categoryInfo = when (currentScreen) {
