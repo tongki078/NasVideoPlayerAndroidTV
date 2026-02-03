@@ -14,6 +14,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import org.nas.videoplayer.domain.model.Series
 import org.nas.videoplayer.domain.model.Movie
+import org.nas.videoplayer.domain.model.Category
 import org.nas.videoplayer.domain.repository.VideoRepository
 import org.nas.videoplayer.ui.common.MovieRow
 import org.nas.videoplayer.*
@@ -28,23 +29,41 @@ fun ThemedCategoryScreen(
 ) {
     val isAirScreen = categoryName == "방송중"
     val isAniScreen = categoryName == "애니메이션"
+    val isMovieScreen = categoryName == "영화"
+    val isForeignTvScreen = categoryName == "외국TV"
 
     // 0: 라프텔 애니메이션, 1: 드라마
     var selectedAirMode by remember(categoryName) { mutableStateOf(0) }
     // 0: 라프텔, 1: 시리즈
     var selectedAniMode by remember(categoryName) { mutableStateOf(0) }
+    // 0: 최신, 1: UHD, 2: 제목
+    var selectedMovieMode by remember(categoryName) { mutableStateOf(0) }
+    // 0: 중국 드라마, 1: 일본 드라마, 2: 미국 드라마, 3: 기타국가 드라마, 4: 다큐
+    var selectedForeignTvMode by remember(categoryName) { mutableStateOf(0) }
 
     val selectedCategoryText = when {
         isAirScreen -> if (selectedAirMode == 0) "라프텔 애니메이션" else "드라마"
         isAniScreen -> if (selectedAniMode == 0) "라프텔" else "시리즈"
+        isMovieScreen -> when(selectedMovieMode) {
+            0 -> "최신"
+            1 -> "UHD"
+            else -> "제목"
+        }
+        isForeignTvScreen -> when(selectedForeignTvMode) {
+            0 -> "중국 드라마"
+            1 -> "일본 드라마"
+            2 -> "미국 드라마"
+            3 -> "기타국가 드라마"
+            else -> "다큐"
+        }
         else -> categoryName
     }
     var expanded by remember { mutableStateOf(false) }
 
-    var themedSections by remember(selectedAirMode, selectedAniMode, categoryName) { mutableStateOf<List<Pair<String, List<Series>>>>(emptyList()) }
+    var themedSections by remember(selectedAirMode, selectedAniMode, selectedMovieMode, selectedForeignTvMode, categoryName) { mutableStateOf<List<Pair<String, List<Series>>>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
 
-    LaunchedEffect(selectedAirMode, selectedAniMode, categoryName) {
+    LaunchedEffect(selectedAirMode, selectedAniMode, selectedMovieMode, selectedForeignTvMode, categoryName) {
         isLoading = true
         try {
             if (isAirScreen) {
@@ -52,7 +71,6 @@ fun ThemedCategoryScreen(
                 val allSeries = if (selectedAirMode == 0) repository.getAnimations() else repository.getDramas()
 
                 if (allSeries.isNotEmpty()) {
-                    // 전체 리스트를 3개의 테마로 나누어 표시
                     val shuffled = allSeries.shuffled()
                     val chunkSize = (shuffled.size / 3).coerceAtLeast(1)
                     
@@ -65,15 +83,24 @@ fun ThemedCategoryScreen(
                     themedSections = emptyList()
                 }
             } else {
-                // 애니메이션 및 일반 카테고리 로직
+                // 일반 카테고리 로직
                 val currentRootPath = when {
                     isAniScreen && selectedAniMode == 0 -> "애니메이션/라프텔"
                     isAniScreen && selectedAniMode == 1 -> "애니메이션/시리즈"
+                    isMovieScreen && selectedMovieMode == 0 -> "영화/최신"
+                    isMovieScreen && selectedMovieMode == 1 -> "영화/UHD"
+                    isMovieScreen && selectedMovieMode == 2 -> "영화/제목"
+                    isForeignTvScreen && selectedForeignTvMode == 0 -> "외국TV/중국 드라마"
+                    isForeignTvScreen && selectedForeignTvMode == 1 -> "외국TV/일본 드라마"
+                    isForeignTvScreen && selectedForeignTvMode == 2 -> "외국TV/미국 드라마"
+                    isForeignTvScreen && selectedForeignTvMode == 3 -> "외국TV/기타국가 드라마"
+                    isForeignTvScreen && selectedForeignTvMode == 4 -> "외국TV/다큐"
                     else -> rootPath
                 }
 
                 val themeFolders = repository.getCategoryList(currentRootPath)
                 coroutineScope {
+                    // 테마 개수를 최대 4개로 제한
                     themedSections = themeFolders.take(4).mapIndexed { index, folder ->
                         async {
                             val folderPath = "$currentRootPath/${folder.name}"
@@ -91,7 +118,7 @@ fun ThemedCategoryScreen(
                                 }.filter { it.title.length > 1 }
                             }
                             if (seriesList.isNotEmpty()) {
-                                getRandomThemeName(folder.name, index, rootPath.contains("영화"), categoryName) to seriesList
+                                getRandomThemeName(folder.name, index, currentRootPath.contains("영화"), categoryName) to seriesList
                             } else null
                         }
                     }.awaitAll().filterNotNull()
@@ -105,7 +132,7 @@ fun ThemedCategoryScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (isAirScreen || isAniScreen) {
+        if (isAirScreen || isAniScreen || isMovieScreen || isForeignTvScreen) {
             Box(modifier = Modifier.padding(16.dp)) {
                 ExposedDropdownMenuBox(
                     expanded = expanded,
@@ -132,36 +159,27 @@ fun ThemedCategoryScreen(
                         expanded = expanded,
                         onDismissRequest = { expanded = false }
                     ) {
-                        if (isAirScreen) {
-                            DropdownMenuItem(
-                                text = { Text("라프텔 애니메이션") },
-                                onClick = {
-                                    selectedAirMode = 0
-                                    expanded = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("드라마") },
-                                onClick = {
-                                    selectedAirMode = 1
-                                    expanded = false
-                                }
-                            )
-                        } else if (isAniScreen) {
-                            DropdownMenuItem(
-                                text = { Text("라프텔") },
-                                onClick = {
-                                    selectedAniMode = 0
-                                    expanded = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("시리즈") },
-                                onClick = {
-                                    selectedAniMode = 1
-                                    expanded = false
-                                }
-                            )
+                        when {
+                            isAirScreen -> {
+                                DropdownMenuItem(text = { Text("라프텔 애니메이션") }, onClick = { selectedAirMode = 0; expanded = false })
+                                DropdownMenuItem(text = { Text("드라마") }, onClick = { selectedAirMode = 1; expanded = false })
+                            }
+                            isAniScreen -> {
+                                DropdownMenuItem(text = { Text("라프텔") }, onClick = { selectedAniMode = 0; expanded = false })
+                                DropdownMenuItem(text = { Text("시리즈") }, onClick = { selectedAniMode = 1; expanded = false })
+                            }
+                            isMovieScreen -> {
+                                DropdownMenuItem(text = { Text("최신") }, onClick = { selectedMovieMode = 0; expanded = false })
+                                DropdownMenuItem(text = { Text("UHD") }, onClick = { selectedMovieMode = 1; expanded = false })
+                                DropdownMenuItem(text = { Text("제목") }, onClick = { selectedMovieMode = 2; expanded = false })
+                            }
+                            isForeignTvScreen -> {
+                                DropdownMenuItem(text = { Text("중국 드라마") }, onClick = { selectedForeignTvMode = 0; expanded = false })
+                                DropdownMenuItem(text = { Text("일본 드라마") }, onClick = { selectedForeignTvMode = 1; expanded = false })
+                                DropdownMenuItem(text = { Text("미국 드라마") }, onClick = { selectedForeignTvMode = 2; expanded = false })
+                                DropdownMenuItem(text = { Text("기타국가 드라마") }, onClick = { selectedForeignTvMode = 3; expanded = false })
+                                DropdownMenuItem(text = { Text("다큐") }, onClick = { selectedForeignTvMode = 4; expanded = false })
+                            }
                         }
                     }
                 }
