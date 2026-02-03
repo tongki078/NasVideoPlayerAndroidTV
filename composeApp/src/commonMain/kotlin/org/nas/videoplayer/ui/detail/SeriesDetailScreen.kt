@@ -96,10 +96,11 @@ private suspend fun loadMetadataAndCredits(title: String): Pair<TmdbMetadata?, L
 fun SeriesDetailScreen(
     series: Series,
     repository: VideoRepository,
-    initialPlaybackPosition: Long = 0L, // 추가
-    onPositionUpdate: (Long) -> Unit,    // 추가
+    initialPlaybackPosition: Long = 0L,
+    onPositionUpdate: (Long) -> Unit,
     onBack: () -> Unit,
-    onPlay: (Movie, List<Movie>, Long) -> Unit // 파라미터 타입 변경 (pos 추가)
+    onPlay: (Movie, List<Movie>, Long) -> Unit,
+    onPreviewPlay: (Movie) -> Unit = {} // 미리보기 재생 시 호출될 콜백 추가
 ) {
     var state by remember { mutableStateOf(SeriesDetailState()) }
     var currentPlaybackTime by remember { mutableStateOf(initialPlaybackPosition) }
@@ -144,7 +145,8 @@ fun SeriesDetailScreen(
                     onPositionUpdate(it) 
                 },
                 onSeasonSelected = { index -> state = state.copy(selectedSeasonIndex = index) },
-                onPlay = onPlay
+                onPlay = onPlay,
+                onPreviewPlay = onPreviewPlay
             )
         }
     }
@@ -173,10 +175,18 @@ private fun DetailContent(
     initialPosition: Long,
     onPositionUpdate: (Long) -> Unit,
     onSeasonSelected: (Int) -> Unit,
-    onPlay: (Movie, List<Movie>, Long) -> Unit
+    onPlay: (Movie, List<Movie>, Long) -> Unit,
+    onPreviewPlay: (Movie) -> Unit
 ) {
     val firstSeason = state.seasons.firstOrNull()
     val firstEpisode = firstSeason?.episodes?.firstOrNull()
+
+    // 미리보기 재생 감지를 위한 효과
+    LaunchedEffect(firstEpisode) {
+        if (firstEpisode != null) {
+            onPreviewPlay(firstEpisode)
+        }
+    }
 
     val playFirstEpisode = {
         if (firstEpisode != null && firstSeason != null) {
