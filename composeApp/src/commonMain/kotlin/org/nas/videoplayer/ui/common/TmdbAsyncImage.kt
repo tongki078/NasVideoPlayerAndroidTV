@@ -24,21 +24,23 @@ fun TmdbAsyncImage(
     modifier: Modifier = Modifier, 
     contentScale: ContentScale = ContentScale.Crop, 
     typeHint: String? = null, 
-    isLarge: Boolean = false
+    isLarge: Boolean = false,
+    isAnimation: Boolean = false
 ) {
-    var metadata by remember(title) { mutableStateOf(tmdbCache[title]) }
-    var isError by remember(title) { mutableStateOf(false) }
-    var isLoading by remember(title) { mutableStateOf(metadata == null) }
+    val cacheKey = if (isAnimation) "ani_$title" else title
+    var metadata by remember(cacheKey) { mutableStateOf(tmdbCache[cacheKey]) }
+    var isError by remember(cacheKey) { mutableStateOf(false) }
+    var isLoading by remember(cacheKey) { mutableStateOf(metadata == null) }
     
     val imageUrl = metadata?.posterUrl?.replace(
         TMDB_POSTER_SIZE_MEDIUM, 
         if (isLarge) TMDB_POSTER_SIZE_LARGE else TMDB_POSTER_SIZE_SMALL
     )
 
-    LaunchedEffect(title) {
+    LaunchedEffect(cacheKey) {
         if (metadata == null) {
             isLoading = true
-            metadata = fetchTmdbMetadata(title, typeHint)
+            metadata = fetchTmdbMetadata(title, typeHint, isAnimation = isAnimation)
             isError = metadata?.posterUrl == null
             isLoading = false
         } else { 

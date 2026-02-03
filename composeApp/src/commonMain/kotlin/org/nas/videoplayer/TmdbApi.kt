@@ -82,64 +82,57 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     var cleaned = this
     if (cleaned.contains(".")) { val ext = cleaned.substringAfterLast('.'); if (ext.length in 2..4) cleaned = cleaned.substringBeforeLast('.') }
     
-    // 1. 한글/영어 붙어있는 경우 띄어쓰기 추가
-    cleaned = Regex("([가-힣])([a-zA-Z0-9])").replace(cleaned, "$1 $2")
-    cleaned = Regex("([a-zA-Z0-9])([가-힣])").replace(cleaned, "$1 $2")
+    cleaned = Regex("""([가-힣])([a-zA-Z0-9])""").replace(cleaned, "$1 $2")
+    cleaned = Regex("""([a-zA-Z0-9])([가-힣])""").replace(cleaned, "$1 $2")
     
-    // 2. 정렬용 접두어 제거 (예: 01. , 0Z. , [01] 등)
-    cleaned = Regex("^\\d+[.\\s_-]+").replace(cleaned, "")
-    cleaned = Regex("^[a-zA-Z]\\d+[.\\s_-]+").replace(cleaned, "")
-    cleaned = Regex("^\\[\\d+\\]\\s*").replace(cleaned, "")
+    cleaned = Regex("""^\d+[.\s_-]+""").replace(cleaned, "")
+    cleaned = Regex("""^[a-zA-Z]\d+[.\s_-]+""").replace(cleaned, "")
+    cleaned = Regex("""^\[\d+\]\s*""").replace(cleaned, "")
     
-    // 3. 연도 추출
-    val yearMatch = Regex("\\((19|20)\\d{2}\\)|(?<!\\d)(19|20)\\d{2}(?!\\d)").find(cleaned)
+    val yearMatch = Regex("""\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)""").find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     if (yearMatch != null) cleaned = cleaned.replace(yearMatch.value, " ")
     
-    // 대괄호/소괄호 내용 제거 (태그 등)
-    cleaned = Regex("\\[.*?\\]|\\(.*?\\)").replace(cleaned, " ")
+    cleaned = Regex("""\[.*?\]|\(.*?\)""").replace(cleaned, " ")
     
     if (!keepAfterHyphen) {
         if (preserveSubtitle) {
-            // 시즌/기수 정보는 남기고 그 뒤의 에피소드 정보만 제거
-            cleaned = Regex("(?i)[.\\s_](?:S\\d+E\\d+|E\\d+|\\d+\\s*(?:화|회)).*").replace(cleaned, "")
+            cleaned = Regex("""(?i)[.\s_](?:S\d+E\d+|E\d+|\d+\s*(?:화|회)).*""").replace(cleaned, "")
         } else {
-            cleaned = Regex("(?i)[.\\s_](?:S\\d+E\\d+|S\\d+|E\\d+|\\d+\\s*(?:화|회|기)|Season\\s*\\d+|Part\\s*\\d+).*").replace(cleaned, "")
+            cleaned = Regex("""(?i)[.\s_](?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+).*""").replace(cleaned, "")
         }
     }
     
-    // 극장판, OVA 등 검색에 중요한 키워드는 preserveSubtitle일 때 보존
     val tagRegex = if (preserveSubtitle) {
-        "(?i)[.\\s_](?:더빙|자막|무삭제|\\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|속편|무리무리|1부|2부|파트|완결).*"
+        """(?i)[.\s_](?:더빙|자막|무삭제|\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|속편|무리무리|1부|2부|파트|완결).*"""
     } else {
-        "(?i)[.\\s_](?:더빙|자막|무삭제|\\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|OVA|OAD|ONA|TV판|극장판|FLAC|xvid|DivX|MKV|MP4|AVI|속편|무리무리|1부|2부|파트|완결).*"
+        """(?i)[.\s_](?:더빙|자막|무삭제|\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|OVA|OAD|ONA|TV판|극장판|FLAC|xvid|DivX|MKV|MP4|AVI|속편|무리무리|1부|2부|파트|완결).*"""
     }
     cleaned = Regex(tagRegex).replace(cleaned, " ")
     
-    cleaned = Regex("[._\\-::!?【】『』「」\"'#@*※]").replace(cleaned, " ")
+    cleaned = Regex("""[._\-::!?【】『』「」"'#@*※]""").replace(cleaned, " ")
     
-    // 4. 시퀄 번호 보존 (1000 이상 연도만 제거)
-    val match = Regex("[.\\s_](\\d+)$").find(" $cleaned")
+    val match = Regex("""[.\s_](\d+)$""").find(" $cleaned")
     if (match != null) {
         val num = match.groupValues[1].toInt()
         if (num > 1900 && num < 2100) { cleaned = cleaned.replace(Regex("${match.groupValues[1]}$"), "") }
     }
 
-    cleaned = Regex("\\s+").replace(cleaned, " ").trim()
+    cleaned = Regex("""\s+""").replace(cleaned, " ").trim()
     if (includeYear && yearStr != null) cleaned = "$cleaned ($yearStr)"
     return if (cleaned.isBlank()) this else cleaned
 }
 
 fun String.extractEpisode(): String? {
-    Regex("(?i)[Ee](\\d+)").find(this)?.let { return "${it.groupValues[1].toInt()}화" }
-    Regex("(\\d+)\\s*(?:화|회)").find(this)?.let { return "${it.groupValues[1].toInt()}화" }
-    Regex("[.\\s_](\\d+)(?:$|[.\\s_])").find(this)?.let { if (it.groupValues[1].toInt() < 1000) return "${it.groupValues[1].toInt()}화" }
+    Regex("""(?i)[Ee](\d+)""").find(this)?.let { return "${it.groupValues[1].toInt()}화" }
+    Regex("""(\d+)\s*(?:화|회)""").find(this)?.let { return "${it.groupValues[1].toInt()}화" }
+    Regex("""[.\s_](\d+)(?:$|[.\s_])""").find(this)?.let { if (it.groupValues[1].toInt() < 1000) return "${it.groupValues[1].toInt()}화" }
     return null
 }
 
 fun String.extractSeason(): Int {
-    Regex("(?i)[Ss](\\d+)").find(this)?.let { return it.groupValues[1].toInt() }
-    Regex("(\\d+)\\s*기").find(this)?.let { return it.groupValues[1].toInt() }
+    Regex("""(?i)[Ss](\d+)""").find(this)?.let { return it.groupValues[1].toInt() }
+    Regex("""(\d+)\s*기""").find(this)?.let { return it.groupValues[1].toInt() }
     return 1
 }
 
@@ -150,7 +143,7 @@ fun String.prettyTitle(): String {
 }
 
 suspend fun translateToKorean(text: String): String {
-    if (text.isBlank() || text.contains(Regex("[가-힣]"))) return text
+    if (text.isBlank() || text.contains(Regex("""[가-힣]"""))) return text
     return try {
         val url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ko&dt=t&q=${text.encodeURLParameter()}"
         val response: String = tmdbClient.get(url).body()
@@ -160,43 +153,46 @@ suspend fun translateToKorean(text: String): String {
     } catch (e: Exception) { text }
 }
 
-suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null): TmdbMetadata {
+suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimation: Boolean = false): TmdbMetadata {
     if (TMDB_API_KEY.isBlank()) return TmdbMetadata()
-    tmdbCache[title]?.let { return it }
+    val cacheKey = if (isAnimation) "ani_$title" else title
+    tmdbCache[cacheKey]?.let { return it }
 
-    // 검색 시에는 부제(극장판, 기수 등)를 최대한 보존하여 검색
     val cleanTitleForSearch = title.cleanTitle(includeYear = false, preserveSubtitle = true)
-    val yearMatch = Regex("\\((19|20)\\d{2}\\)|(?<!\\d)(19|20)\\d{2}(?!\\d)").find(title)
+    val yearMatch = Regex("""\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)""").find(title)
     val year = yearMatch?.value?.replace("(", "")?.replace(")", "")
 
     val searchStrategies = mutableListOf<Triple<String, String?, String?>>()
+    
+    // 애니메이션인 경우 제목 뒤에 "애니메이션"을 붙여 검색 결과의 정확도를 높임
+    if (isAnimation) {
+        searchStrategies.add(Triple("$cleanTitleForSearch 애니메이션", "ko-KR", year))
+    }
+    
     searchStrategies.add(Triple(cleanTitleForSearch, "ko-KR", year))
     searchStrategies.add(Triple(cleanTitleForSearch, null, year))
     
-    // 만약 부제를 포함한 검색이 실패할 경우를 대비해 기존 방식(부제 제거)도 전략에 추가
     val baseTitle = title.cleanTitle(includeYear = false, preserveSubtitle = false)
     if (baseTitle != cleanTitleForSearch) {
         searchStrategies.add(Triple(baseTitle, "ko-KR", year))
     }
 
-    if (year != null) {
-        searchStrategies.add(Triple(cleanTitleForSearch, "ko-KR", null))
-        searchStrategies.add(Triple(baseTitle, "ko-KR", null))
-    }
-    
-    val words = baseTitle.split(" ").filter { it.isNotBlank() }
-    if (words.size > 2) {
-        val shortTitle = words.take(2).joinToString(" ")
-        searchStrategies.add(Triple(shortTitle, "ko-KR", year))
-    }
-
     var finalMetadata: TmdbMetadata? = null
     var hasNetworkError = false
 
+    // 애니메이션은 주로 TV 섹션에 많으므로 힌트가 없으면 tv로 시도
+    val effectiveTypeHint = if (isAnimation && (typeHint == null || typeHint == "multi")) "tv" else typeHint
+
     for ((q, lang, y) in searchStrategies.distinct()) {
-        val (res, error) = searchTmdb(q, lang, typeHint, y)
+        val (res, error) = searchTmdb(q, lang, effectiveTypeHint, y, isAnimation)
         if (error != null) { hasNetworkError = true; break }
+        
         if (res != null && (res.posterUrl != null || res.tmdbId != null)) {
+            // 애니메이션 검색일 경우, 애니메이션 장르(16)가 포함된 결과를 찾을 때까지 계속 탐색 가능하도록 로직 보완
+            if (isAnimation && !res.genreIds.contains(16)) {
+                if (finalMetadata == null) finalMetadata = res
+                continue 
+            }
             finalMetadata = res
             if (res.posterUrl != null) break
         }
@@ -212,15 +208,15 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null): TmdbMeta
         }
     }
 
-    if (!result.overview.isNullOrBlank() && !result.overview!!.contains(Regex("[가-힣]"))) {
+    if (!result.overview.isNullOrBlank() && !result.overview!!.contains(Regex("""[가-힣]"""))) {
         result = result.copy(overview = translateToKorean(result.overview!!))
     }
 
-    if (!hasNetworkError) tmdbCache[title] = result
+    if (!hasNetworkError) tmdbCache[cacheKey] = result
     return result
 }
 
-private suspend fun searchTmdb(query: String, language: String?, typeHint: String? = null, year: String? = null): Pair<TmdbMetadata?, Exception?> {
+private suspend fun searchTmdb(query: String, language: String?, typeHint: String? = null, year: String? = null, isAnimation: Boolean = false): Pair<TmdbMetadata?, Exception?> {
     if (query.isBlank()) return null to null
     return try {
         val endpoint = if (typeHint != null) typeHint else "multi"
@@ -241,15 +237,26 @@ private suspend fun searchTmdb(query: String, language: String?, typeHint: Strin
         if (results.isEmpty()) return null to null
 
         val result = results.sortedWith(
-            compareByDescending<TmdbResult> { it.posterPath != null }
-                .thenByDescending { if (language == "ko-KR") it.originCountry?.contains("KR") == true else false }
-                .thenByDescending { it.voteCount ?: 0 }
+            compareByDescending<TmdbResult> { 
+                // 1. 애니메이션 검색 시 장르 ID 16(애니메이션) 최우선
+                if (isAnimation) it.genreIds?.contains(16) == true else true 
+            }.thenByDescending { 
+                // 2. 제목 일치 여부
+                it.name?.equals(query, ignoreCase = true) == true || it.title?.equals(query, ignoreCase = true) == true 
+            }.thenByDescending { 
+                it.posterPath != null 
+            }.thenByDescending { 
+                // 3. 일본 원산지 우선 (애니메이션인 경우)
+                if (isAnimation) it.originCountry?.contains("JP") == true else false 
+            }.thenByDescending { 
+                it.voteCount ?: 0 
+            }
         ).firstOrNull()
 
         if (result != null) {
             val path = result.posterPath ?: result.backdropPath
             val posterUrl = path?.let { "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM$it" }
-            val mediaType = result.mediaType ?: typeHint ?: "movie"
+            val mediaType = result.mediaType ?: typeHint ?: (if (isAnimation) "tv" else "movie")
             Pair(TmdbMetadata(tmdbId = result.id, mediaType = mediaType, posterUrl = posterUrl, overview = result.overview, genreIds = result.genreIds ?: emptyList()), null)
         } else Pair(null, null)
     } catch (e: Exception) { Pair(null, e) }

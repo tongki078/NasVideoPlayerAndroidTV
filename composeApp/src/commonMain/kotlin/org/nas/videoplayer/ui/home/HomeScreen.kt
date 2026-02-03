@@ -62,8 +62,10 @@ fun HomeScreen(
         ) {
             if (heroMovie != null) {
                 item {
+                    val isAniHero = animations.any { it.episodes.contains(heroMovie) }
                     HeroSection(
                         movie = heroMovie,
+                        isAnimation = isAniHero,
                         onClick = { 
                             val target = latestMovies.find { it.episodes.contains(heroMovie) } ?: animations.find { it.episodes.contains(heroMovie) }
                             target?.let { onSeriesClick(it) }
@@ -103,7 +105,7 @@ fun HomeScreen(
                 item {
                     LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
                         items(animations) { series ->
-                            MovieCard(title = series.title, typeHint = "tv", onClick = { onSeriesClick(series) })
+                            MovieCard(title = series.title, typeHint = "tv", isAnimation = true, onClick = { onSeriesClick(series) })
                         }
                     }
                 }
@@ -115,7 +117,7 @@ fun HomeScreen(
 }
 
 @Composable
-private fun HeroSection(movie: Movie, onClick: () -> Unit, onPlay: (Movie) -> Unit) {
+private fun HeroSection(movie: Movie, isAnimation: Boolean = false, onClick: () -> Unit, onPlay: (Movie) -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -127,7 +129,8 @@ private fun HeroSection(movie: Movie, onClick: () -> Unit, onPlay: (Movie) -> Un
             title = movie.title,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
-            isLarge = true
+            isLarge = true,
+            isAnimation = isAnimation
         )
         
         Box(
@@ -154,7 +157,7 @@ private fun HeroSection(movie: Movie, onClick: () -> Unit, onPlay: (Movie) -> Un
             shape = RoundedCornerShape(8.dp),
             elevation = CardDefaults.cardElevation(defaultElevation = 16.dp)
         ) {
-            TmdbAsyncImage(title = movie.title, modifier = Modifier.fillMaxSize(), isLarge = true)
+            TmdbAsyncImage(title = movie.title, modifier = Modifier.fillMaxSize(), isLarge = true, isAnimation = isAnimation)
         }
 
         Column(
@@ -200,14 +203,14 @@ private fun SectionTitle(title: String) {
 }
 
 @Composable
-private fun MovieCard(title: String, typeHint: String? = null, onClick: () -> Unit) {
+private fun MovieCard(title: String, typeHint: String? = null, isAnimation: Boolean = false, onClick: () -> Unit) {
     Card(
         Modifier
             .size(130.dp, 200.dp)
             .padding(end = 12.dp)
             .clickable(onClick = onClick)
     ) {
-        TmdbAsyncImage(title, Modifier.fillMaxSize(), typeHint = typeHint)
+        TmdbAsyncImage(title, Modifier.fillMaxSize(), typeHint = typeHint, isAnimation = isAnimation)
     }
 }
 

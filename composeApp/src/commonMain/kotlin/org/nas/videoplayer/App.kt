@@ -100,9 +100,10 @@ fun App(driver: SqlDriver) {
         if (query.length >= 2) {
             isSearchLoading = true
             val results = repository.searchVideos(query, category)
+            val isAniSearch = category == "애니메이션"
             coroutineScope {
                 results.take(9).map { series -> 
-                    async { fetchTmdbMetadata(series.title, if (category != "전체") category.lowercase() else null) }
+                    async { fetchTmdbMetadata(series.title, if (category != "전체") category.lowercase() else null, isAnimation = isAniSearch) }
                 }.awaitAll()
             }
             searchResultSeries = results
@@ -121,9 +122,13 @@ fun App(driver: SqlDriver) {
                 val latest = latestDeferred.await()
                 val animations = animationsDeferred.await()
                 coroutineScope {
-                    (latest.take(6) + animations.take(6)).map { series ->
+                    val latestJobs = latest.take(6).map { series ->
                         async { fetchTmdbMetadata(series.title) }
-                    }.awaitAll()
+                    }
+                    val aniJobs = animations.take(6).map { series ->
+                        async { fetchTmdbMetadata(series.title, isAnimation = true) }
+                    }
+                    (latestJobs + aniJobs).awaitAll()
                 }
                 homeLatestSeries = latest
                 homeAnimations = animations
