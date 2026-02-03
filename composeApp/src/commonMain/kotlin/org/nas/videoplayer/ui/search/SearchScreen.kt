@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -19,6 +20,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -26,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import org.nas.videoplayer.ui.common.TmdbAsyncImage
 import org.nas.videoplayer.data.SearchHistory
 import org.nas.videoplayer.domain.model.Series
+import org.nas.videoplayer.ui.common.shimmerBrush
 
 @Composable
 fun SearchScreen(
@@ -56,9 +59,8 @@ fun SearchScreen(
 
         // 3. 결과 표시부 (로딩 / 최근검색어 / 결과그리드)
         if (isLoading) {
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                CircularProgressIndicator(color = Color.Red)
-            }
+            // 로딩 아이콘 제거 및 스켈레톤 그리드 표시
+            SearchSkeletonGrid()
         } else if (query.isEmpty()) {
             RecentQueriesList(
                 queries = recentQueries,
@@ -178,6 +180,26 @@ private fun SearchResultsGrid(
                     TmdbAsyncImage(series.title, Modifier.fillMaxSize())
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SearchSkeletonGrid() {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(3),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(9) {
+            Box(
+                modifier = Modifier
+                    .aspectRatio(0.67f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(shimmerBrush())
+            )
         }
     }
 }

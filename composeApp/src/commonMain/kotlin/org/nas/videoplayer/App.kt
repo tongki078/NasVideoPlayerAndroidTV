@@ -1,6 +1,7 @@
 package org.nas.videoplayer
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
@@ -63,12 +64,18 @@ fun App(driver: SqlDriver) {
     var selectedSeries by remember { mutableStateOf<Series?>(null) }
     var selectedMovie by remember { mutableStateOf<Movie?>(null) }
     var moviePlaylist by remember { mutableStateOf<List<Movie>>(emptyList()) }
+    
+    // 재생 위치 관리
+    var lastPlaybackPosition by rememberSaveable { mutableStateOf(0L) }
 
     var homeLatestSeries by remember { mutableStateOf<List<Series>>(emptyList()) }
     var homeAnimations by remember { mutableStateOf<List<Series>>(emptyList()) }
-    var isHomeLoading by remember { mutableStateOf(false) } // 홈 로딩 상태 추가
+    var isHomeLoading by remember { mutableStateOf(false) } 
     
-    // 각 테마 카테고리별 하위 메뉴 선택 상태를 App 레벨에서 중앙 관리
+    // 각 화면 스크롤 상태 보존
+    val homeLazyListState = rememberLazyListState()
+    val themedCategoryLazyListState = rememberLazyListState()
+
     var selectedAirMode by rememberSaveable { mutableStateOf(0) }
     var selectedAniMode by rememberSaveable { mutableStateOf(0) }
     var selectedMovieMode by rememberSaveable { mutableStateOf(0) }
@@ -79,11 +86,17 @@ fun App(driver: SqlDriver) {
         if (currentScreen == Screen.HOME && homeLatestSeries.isEmpty()) {
             isHomeLoading = true
             try {
-                // 병렬 로딩으로 속도 개선
                 val latestDeferred = async { repository.getLatestMovies() }
                 val animationsDeferred = async { repository.getAnimations() }
-                homeLatestSeries = latestDeferred.await()
-                homeAnimations = animationsDeferred.await()
+                val latest = latestDeferred.await()
+                val animations = animationsDeferred.await()
+                coroutineScope {
+                    (latest.take(6) + animations.take(6)).map { series ->
+                        async { fetchTmdbMetadata(series.title) }
+                    }.awaitAll()
+                }
+                homeLatestSeries = latest
+                homeAnimations = animations
             } finally {
                 isHomeLoading = false
             }
@@ -93,7 +106,13 @@ fun App(driver: SqlDriver) {
     LaunchedEffect(searchQuery, searchCategory) {
         if (searchQuery.length >= 2) {
             delay(500); isSearchLoading = true
-            searchResultSeries = repository.searchVideos(searchQuery, searchCategory)
+            val results = repository.searchVideos(searchQuery, searchCategory)
+            coroutineScope {
+                results.take(9).map { series -> 
+                    async { fetchTmdbMetadata(series.title, if (searchCategory != "전체") searchCategory.lowercase() else null) }
+                }.awaitAll()
+            }
+            searchResultSeries = results
             isSearchLoading = false
         } else searchResultSeries = emptyList()
     }
@@ -129,14 +148,26 @@ fun App(driver: SqlDriver) {
                 Box(Modifier.padding(pv).fillMaxSize()) {
                     when {
                         selectedMovie != null -> {
-                            VideoPlayerScreen(movie = selectedMovie!!, onBack = { selectedMovie = null })
+                            VideoPlayerScreen(
+                                movie = selectedMovie!!, 
+                                playlist = moviePlaylist,
+                                initialPosition = lastPlaybackPosition,
+                                onPositionUpdate = { lastPlaybackPosition = it },
+                                onBack = { selectedMovie = null }
+                            )
                         }
                         selectedSeries != null -> {
                             SeriesDetailScreen(
                                 series = selectedSeries!!, 
                                 repository = repository, 
+                                initialPlaybackPosition = lastPlaybackPosition,
+                                onPositionUpdate = { lastPlaybackPosition = it },
                                 onBack = { selectedSeries = null }, 
-                                onPlay = { movie, playlist -> selectedMovie = movie; moviePlaylist = playlist }
+                                onPlay = { movie, playlist, pos -> 
+                                    selectedMovie = movie
+                                    moviePlaylist = playlist
+                                    lastPlaybackPosition = pos
+                                }
                             )
                         }
                         currentScreen == Screen.SEARCH -> {
@@ -154,13 +185,19 @@ fun App(driver: SqlDriver) {
                                 watchHistory = watchHistory, 
                                 latestMovies = homeLatestSeries, 
                                 animations = homeAnimations,
-                                isLoading = isHomeLoading, // 로딩 상태 전달
+                                isLoading = isHomeLoading, 
+                                lazyListState = homeLazyListState,
                                 onSeriesClick = { selectedSeries = it }, 
-                                onPlayClick = { selectedMovie = it }
+                                onPlayClick = { movie ->
+                                    val parentSeries = (homeLatestSeries + homeAnimations).find { it.episodes.contains(movie) }
+                                    selectedMovie = movie
+                                    moviePlaylist = parentSeries?.episodes ?: listOf(movie)
+                                    lastPlaybackPosition = 0L
+                                }
                             )
                         }
                         else -> {
-                            val categoryInfo: Triple<String, String, Int> = when (currentScreen) {
+                            val categoryInfo = when (currentScreen) {
                                 Screen.ON_AIR -> Triple("방송중", "방송중", selectedAirMode)
                                 Screen.ANIMATIONS -> Triple("애니메이션", "애니메이션", selectedAniMode)
                                 Screen.MOVIES -> Triple("영화", "영화", selectedMovieMode)
@@ -185,6 +222,7 @@ fun App(driver: SqlDriver) {
                                     repository = repository,
                                     selectedMode = categoryInfo.third,
                                     onModeChange = onModeChange,
+                                    lazyListState = themedCategoryLazyListState,
                                     onSeriesClick = { selectedSeries = it }
                                 )
                             }

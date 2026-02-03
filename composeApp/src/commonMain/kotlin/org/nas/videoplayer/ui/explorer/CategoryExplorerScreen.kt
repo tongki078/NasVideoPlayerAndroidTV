@@ -1,5 +1,6 @@
 package org.nas.videoplayer.ui.explorer
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -7,6 +8,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
@@ -14,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -22,6 +25,7 @@ import org.nas.videoplayer.domain.model.Category
 import org.nas.videoplayer.domain.model.Series
 import org.nas.videoplayer.domain.repository.VideoRepository
 import org.nas.videoplayer.ui.common.TmdbAsyncImage
+import org.nas.videoplayer.ui.common.shimmerBrush
 
 @Composable
 fun CategoryExplorerScreen(
@@ -41,7 +45,6 @@ fun CategoryExplorerScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // 상단 경로 표시 (Breadcrumbs 대용)
         Text(
             text = pathStack.last(),
             modifier = Modifier.padding(16.dp),
@@ -51,14 +54,12 @@ fun CategoryExplorerScreen(
         )
 
         if (isLoading) {
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                CircularProgressIndicator(color = Color.Red)
-            }
+            // 로딩 아이콘 제거 및 스켈레톤 그리드 표시
+            ExplorerSkeletonGrid()
         } else {
             val hasMovies = items.any { it.movies.isNotEmpty() }
             
             if (hasMovies) {
-                // 영화/에피소드가 있는 경우 그리드 표시
                 val seriesList = items.flatMap { it.movies }.groupBySeries()
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
@@ -74,7 +75,6 @@ fun CategoryExplorerScreen(
                     }
                 }
             } else {
-                // 폴더만 있는 경우 리스트 표시
                 LazyColumn {
                     items(items) { item ->
                         ListItem(
@@ -91,7 +91,26 @@ fun CategoryExplorerScreen(
     }
 }
 
-// 로컬 헬퍼 함수 (RepositoryImpl에 있는 것과 동일한 로직)
+@Composable
+private fun ExplorerSkeletonGrid() {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(3),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(9) {
+            Box(
+                modifier = Modifier
+                    .aspectRatio(0.67f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(shimmerBrush())
+            )
+        }
+    }
+}
+
 private fun List<org.nas.videoplayer.domain.model.Movie>.groupBySeries(): List<Series> = 
     this.groupBy { it.title.replace(Regex("(?i)[.\\s_](?:S\\d+E\\d+|S\\d+|E\\d+|\\d+\\s*(?:화|회|기)|Season\\s*\\d+|Part\\s*\\d+).*"), "").trim() }
         .map { (title, eps) -> Series(title, eps.sortedBy { it.title }) }

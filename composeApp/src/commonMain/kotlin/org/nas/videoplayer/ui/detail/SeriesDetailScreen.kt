@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -49,13 +50,11 @@ private data class SeriesDetailState(
 // 2. Business Logic (비즈니스 로직 세분화)
 // ==========================================================
 
-// 에피소드 정렬 유틸
 private fun List<Movie>.sortedByEpisode(): List<Movie> = this.sortedWith(
     compareBy<Movie> { it.title.extractSeason() }
         .thenBy { it.title.extractEpisode()?.filter { char -> char.isDigit() }?.toIntOrNull() ?: 0 }
 )
 
-// 시즌 정보 로드
 private suspend fun loadSeasons(series: Series, repository: VideoRepository): List<Season> {
     val path = series.fullPath ?: return if (series.episodes.isNotEmpty()) {
         listOf(Season("에피소드", series.episodes.sortedByEpisode()))
@@ -82,7 +81,6 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
     }
 }
 
-// 메타데이터 및 출연진 로드
 private suspend fun loadMetadataAndCredits(title: String): Pair<TmdbMetadata?, List<TmdbCast>> {
     val metadata = fetchTmdbMetadata(title)
     val credits = if (metadata.tmdbId != null) {
@@ -98,10 +96,13 @@ private suspend fun loadMetadataAndCredits(title: String): Pair<TmdbMetadata?, L
 fun SeriesDetailScreen(
     series: Series,
     repository: VideoRepository,
+    initialPlaybackPosition: Long = 0L, // 추가
+    onPositionUpdate: (Long) -> Unit,    // 추가
     onBack: () -> Unit,
-    onPlay: (Movie, List<Movie>) -> Unit
+    onPlay: (Movie, List<Movie>, Long) -> Unit // 파라미터 타입 변경 (pos 추가)
 ) {
     var state by remember { mutableStateOf(SeriesDetailState()) }
+    var currentPlaybackTime by remember { mutableStateOf(initialPlaybackPosition) }
 
     LaunchedEffect(series) {
         state = state.copy(isLoading = true)
@@ -127,12 +128,21 @@ fun SeriesDetailScreen(
         containerColor = Color.Black
     ) { pv ->
         if (state.isLoading) {
-            LoadingIndicator()
+            Column(modifier = Modifier.fillMaxSize().padding(pv).verticalScroll(rememberScrollState())) {
+                HeaderSkeleton()
+                Spacer(Modifier.height(16.dp))
+                EpisodeListSkeleton()
+            }
         } else {
             DetailContent(
                 paddingValues = pv,
                 series = series,
                 state = state,
+                initialPosition = currentPlaybackTime,
+                onPositionUpdate = { 
+                    currentPlaybackTime = it
+                    onPositionUpdate(it) 
+                },
                 onSeasonSelected = { index -> state = state.copy(selectedSeasonIndex = index) },
                 onPlay = onPlay
             )
@@ -156,22 +166,35 @@ private fun DetailTopBar(title: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun LoadingIndicator() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator(color = Color.Red)
-    }
-}
-
-@Composable
 private fun DetailContent(
     paddingValues: PaddingValues,
     series: Series,
     state: SeriesDetailState,
+    initialPosition: Long,
+    onPositionUpdate: (Long) -> Unit,
     onSeasonSelected: (Int) -> Unit,
-    onPlay: (Movie, List<Movie>) -> Unit
+    onPlay: (Movie, List<Movie>, Long) -> Unit
 ) {
+    val firstSeason = state.seasons.firstOrNull()
+    val firstEpisode = firstSeason?.episodes?.firstOrNull()
+
+    val playFirstEpisode = {
+        if (firstEpisode != null && firstSeason != null) {
+            onPlay(firstEpisode, firstSeason.episodes, initialPosition)
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(paddingValues).verticalScroll(rememberScrollState())) {
-        SeriesDetailHeader(series = series, metadata = state.metadata, credits = state.credits)
+        SeriesDetailHeader(
+            series = series, 
+            metadata = state.metadata, 
+            credits = state.credits,
+            previewUrl = firstEpisode?.videoUrl,
+            initialPosition = initialPosition,
+            onPositionUpdate = onPositionUpdate,
+            onPlayClick = playFirstEpisode,
+            onFullscreenClick = playFirstEpisode
+        )
 
         Spacer(Modifier.height(16.dp))
 
@@ -188,7 +211,7 @@ private fun DetailContent(
             EpisodeList(
                 episodes = currentEpisodes,
                 metadata = state.metadata,
-                onPlay = { movie -> onPlay(movie, currentEpisodes) }
+                onPlay = { movie -> onPlay(movie, currentEpisodes, 0L) }
             )
         } else {
             Text("영상 정보를 찾을 수 없습니다.", color = Color.Gray, modifier = Modifier.padding(16.dp))
@@ -224,9 +247,62 @@ private fun SeasonSelector(seasons: List<Season>, selectedIndex: Int, onSeasonSe
 }
 
 @Composable
-private fun SeriesDetailHeader(series: Series, metadata: TmdbMetadata?, credits: List<TmdbCast>) {
-    TmdbAsyncImage(title = series.title, modifier = Modifier.fillMaxWidth().height(280.dp), contentScale = ContentScale.Crop, isLarge = true)
-    Text(metadata?.overview ?: "상세 정보를 불러오는 중입니다...", modifier = Modifier.padding(16.dp), color = Color.LightGray, fontSize = 14.sp, lineHeight = 20.sp)
+private fun SeriesDetailHeader(
+    series: Series, 
+    metadata: TmdbMetadata?, 
+    credits: List<TmdbCast>,
+    previewUrl: String? = null,
+    initialPosition: Long = 0L,
+    onPositionUpdate: (Long) -> Unit = {},
+    onPlayClick: () -> Unit,
+    onFullscreenClick: () -> Unit = {}
+) {
+    Box(modifier = Modifier.fillMaxWidth().height(300.dp)) {
+        if (previewUrl != null) {
+            VideoPlayer(
+                url = previewUrl,
+                modifier = Modifier.fillMaxSize(),
+                initialPosition = initialPosition,
+                onPositionUpdate = onPositionUpdate,
+                onFullscreenClick = onFullscreenClick
+            )
+        } else {
+            TmdbAsyncImage(title = series.title, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, isLarge = true)
+            
+            Icon(
+                imageVector = Icons.Default.PlayArrow,
+                contentDescription = "Play",
+                tint = Color.White.copy(alpha = 0.8f),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(80.dp)
+                    .clickable { onPlayClick() }
+                    .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                    .padding(8.dp)
+            )
+        }
+        
+        Box(
+            modifier = Modifier.fillMaxSize().background(
+                androidx.compose.ui.graphics.Brush.verticalGradient(
+                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.5f))
+                )
+            )
+        )
+    }
+    
+    Button(
+        onClick = onPlayClick,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+        shape = RoundedCornerShape(4.dp)
+    ) {
+        Icon(Icons.Default.PlayArrow, null, tint = Color.Black)
+        Spacer(Modifier.width(8.dp))
+        Text("재생", color = Color.Black, fontWeight = FontWeight.Bold)
+    }
+
+    Text(metadata?.overview ?: "상세 정보를 불러오는 중입니다...", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = Color.LightGray, fontSize = 14.sp, lineHeight = 20.sp)
 
     if (credits.isNotEmpty()) {
         Text("성우 및 출연진", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
@@ -305,6 +381,57 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
             Text(movie.title.prettyTitle(), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(4.dp))
             Text(text = episodeDetails?.overview ?: "줄거리 정보가 없습니다.", color = Color.Gray, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp)
+        }
+    }
+}
+
+// ==========================================================
+// 5. Skeleton UI Components (스켈레톤 UI)
+// ==========================================================
+@Composable
+private fun ShimmeringBox(modifier: Modifier) {
+    Box(modifier = modifier.background(shimmerBrush()))
+}
+
+@Composable
+private fun HeaderSkeleton() {
+    Column {
+        ShimmeringBox(modifier = Modifier.fillMaxWidth().height(280.dp))
+        Spacer(Modifier.height(16.dp))
+        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ShimmeringBox(modifier = Modifier.fillMaxWidth().height(20.dp))
+            ShimmeringBox(modifier = Modifier.fillMaxWidth(0.9f).height(20.dp))
+            ShimmeringBox(modifier = Modifier.fillMaxWidth(0.7f).height(20.dp))
+        }
+        Spacer(Modifier.height(24.dp))
+        Text("성우 및 출연진", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
+            items(5) {
+                Column(Modifier.padding(end = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    ShimmeringBox(modifier = Modifier.size(70.dp).clip(CircleShape))
+                    Spacer(Modifier.height(4.dp))
+                    ShimmeringBox(modifier = Modifier.width(60.dp).height(12.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpisodeListSkeleton() {
+    Column {
+        Text("에피소드", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        Column(Modifier.padding(horizontal = 8.dp)) {
+            repeat(3) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    ShimmeringBox(modifier = Modifier.width(140.dp).height(80.dp).clip(RoundedCornerShape(4.dp)))
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        ShimmeringBox(modifier = Modifier.fillMaxWidth(0.8f).height(14.dp))
+                        ShimmeringBox(modifier = Modifier.fillMaxWidth(0.95f).height(12.dp))
+                    }
+                }
+            }
         }
     }
 }
