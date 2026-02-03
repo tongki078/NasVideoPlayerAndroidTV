@@ -67,6 +67,12 @@ fun App(driver: SqlDriver) {
     var homeLatestSeries by remember { mutableStateOf<List<Series>>(emptyList()) }
     var homeAnimations by remember { mutableStateOf<List<Series>>(emptyList()) }
     var isHomeLoading by remember { mutableStateOf(false) } // 홈 로딩 상태 추가
+    
+    // 각 테마 카테고리별 하위 메뉴 선택 상태를 App 레벨에서 중앙 관리
+    var selectedAirMode by rememberSaveable { mutableStateOf(0) }
+    var selectedAniMode by rememberSaveable { mutableStateOf(0) }
+    var selectedMovieMode by rememberSaveable { mutableStateOf(0) }
+    var selectedForeignTvMode by rememberSaveable { mutableStateOf(0) }
 
     LaunchedEffect(currentScreen) {
         if (currentScreen == Screen.HOME && homeLatestSeries.isEmpty()) {
@@ -153,18 +159,31 @@ fun App(driver: SqlDriver) {
                             )
                         }
                         else -> {
-                            val categoryInfo = when (currentScreen) {
-                                Screen.ON_AIR -> "방송중" to "방송중"
-                                Screen.ANIMATIONS -> "애니메이션" to "애니메이션"
-                                Screen.MOVIES -> "영화" to "영화"
-                                Screen.FOREIGN_TV -> "외국TV" to "외국TV"
-                                Screen.KOREAN_TV -> "국내TV" to "국내TV"
-                                else -> "" to ""
+                            val categoryInfo: Triple<String, String, Int> = when (currentScreen) {
+                                Screen.ON_AIR -> Triple("방송중", "방송중", selectedAirMode)
+                                Screen.ANIMATIONS -> Triple("애니메이션", "애니메이션", selectedAniMode)
+                                Screen.MOVIES -> Triple("영화", "영화", selectedMovieMode)
+                                Screen.FOREIGN_TV -> Triple("외국TV", "외국TV", selectedForeignTvMode)
+                                Screen.KOREAN_TV -> Triple("국내TV", "국내TV", 0)
+                                else -> Triple("", "", 0)
                             }
+                            
+                            val onModeChange: (Int) -> Unit = when (currentScreen) {
+                                Screen.ON_AIR -> { mode -> selectedAirMode = mode }
+                                Screen.ANIMATIONS -> { mode -> selectedAniMode = mode }
+                                Screen.MOVIES -> { mode -> selectedMovieMode = mode }
+                                Screen.FOREIGN_TV -> { mode -> selectedForeignTvMode = mode }
+                                else -> { _ -> }
+                            }
+
                             if (categoryInfo.first.isNotEmpty()) {
                                 ThemedCategoryScreen(
-                                    categoryName = categoryInfo.first, rootPath = categoryInfo.second,
-                                    repository = repository, onSeriesClick = { selectedSeries = it }
+                                    categoryName = categoryInfo.first,
+                                    rootPath = categoryInfo.second,
+                                    repository = repository,
+                                    selectedMode = categoryInfo.third,
+                                    onModeChange = onModeChange,
+                                    onSeriesClick = { selectedSeries = it }
                                 )
                             }
                         }
