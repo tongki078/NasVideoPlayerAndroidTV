@@ -78,7 +78,7 @@ data class TmdbRole(val character: String, @SerialName("episode_count") val epis
 
 internal val tmdbCache = mutableMapOf<String, TmdbMetadata>()
 
-fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = true): String {
+fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = true, preserveSubtitle: Boolean = false): String {
     var cleaned = this
     if (cleaned.contains(".")) { val ext = cleaned.substringAfterLast('.'); if (ext.length in 2..4) cleaned = cleaned.substringBeforeLast('.') }
     
@@ -91,18 +91,31 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     cleaned = Regex("^[a-zA-Z]\\d+[.\\s_-]+").replace(cleaned, "")
     cleaned = Regex("^\\[\\d+\\]\\s*").replace(cleaned, "")
     
-    // 3. 연도 추출 및 제거
+    // 3. 연도 추출
     val yearMatch = Regex("\\((19|20)\\d{2}\\)|(?<!\\d)(19|20)\\d{2}(?!\\d)").find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     if (yearMatch != null) cleaned = cleaned.replace(yearMatch.value, " ")
     
+    // 대괄호/소괄호 내용 제거 (태그 등)
     cleaned = Regex("\\[.*?\\]|\\(.*?\\)").replace(cleaned, " ")
     
     if (!keepAfterHyphen) {
-        cleaned = Regex("(?i)[.\\s_](?:S\\d+E\\d+|S\\d+|E\\d+|\\d+\\s*(?:화|회|기)|Season\\s*\\d+|Part\\s*\\d+).*").replace(cleaned, "")
+        if (preserveSubtitle) {
+            // 시즌/기수 정보는 남기고 그 뒤의 에피소드 정보만 제거
+            cleaned = Regex("(?i)[.\\s_](?:S\\d+E\\d+|E\\d+|\\d+\\s*(?:화|회)).*").replace(cleaned, "")
+        } else {
+            cleaned = Regex("(?i)[.\\s_](?:S\\d+E\\d+|S\\d+|E\\d+|\\d+\\s*(?:화|회|기)|Season\\s*\\d+|Part\\s*\\d+).*").replace(cleaned, "")
+        }
     }
     
-    cleaned = Regex("(?i)[.\\s_](?:더빙|자막|무삭제|\\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|OVA|OAD|ONA|TV판|극장판|FLAC|xvid|DivX|MKV|MP4|AVI|속편|무리무리|1부|2부|파트|완결).*").replace(cleaned, "")
+    // 극장판, OVA 등 검색에 중요한 키워드는 preserveSubtitle일 때 보존
+    val tagRegex = if (preserveSubtitle) {
+        "(?i)[.\\s_](?:더빙|자막|무삭제|\\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|속편|무리무리|1부|2부|파트|완결).*"
+    } else {
+        "(?i)[.\\s_](?:더빙|자막|무삭제|\\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|OVA|OAD|ONA|TV판|극장판|FLAC|xvid|DivX|MKV|MP4|AVI|속편|무리무리|1부|2부|파트|완결).*"
+    }
+    cleaned = Regex(tagRegex).replace(cleaned, " ")
+    
     cleaned = Regex("[._\\-::!?【】『』「」\"'#@*※]").replace(cleaned, " ")
     
     // 4. 시퀄 번호 보존 (1000 이상 연도만 제거)
@@ -151,23 +164,30 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null): TmdbMeta
     if (TMDB_API_KEY.isBlank()) return TmdbMetadata()
     tmdbCache[title]?.let { return it }
 
-    val cleanTitle = title.cleanTitle(includeYear = false)
+    // 검색 시에는 부제(극장판, 기수 등)를 최대한 보존하여 검색
+    val cleanTitleForSearch = title.cleanTitle(includeYear = false, preserveSubtitle = true)
     val yearMatch = Regex("\\((19|20)\\d{2}\\)|(?<!\\d)(19|20)\\d{2}(?!\\d)").find(title)
     val year = yearMatch?.value?.replace("(", "")?.replace(")", "")
 
     val searchStrategies = mutableListOf<Triple<String, String?, String?>>()
-    searchStrategies.add(Triple(cleanTitle, "ko-KR", year))
-    searchStrategies.add(Triple(cleanTitle, null, year))
+    searchStrategies.add(Triple(cleanTitleForSearch, "ko-KR", year))
+    searchStrategies.add(Triple(cleanTitleForSearch, null, year))
+    
+    // 만약 부제를 포함한 검색이 실패할 경우를 대비해 기존 방식(부제 제거)도 전략에 추가
+    val baseTitle = title.cleanTitle(includeYear = false, preserveSubtitle = false)
+    if (baseTitle != cleanTitleForSearch) {
+        searchStrategies.add(Triple(baseTitle, "ko-KR", year))
+    }
+
     if (year != null) {
-        searchStrategies.add(Triple(cleanTitle, "ko-KR", null))
-        searchStrategies.add(Triple(cleanTitle, null, null))
+        searchStrategies.add(Triple(cleanTitleForSearch, "ko-KR", null))
+        searchStrategies.add(Triple(baseTitle, "ko-KR", null))
     }
     
-    val words = cleanTitle.split(" ").filter { it.isNotBlank() }
+    val words = baseTitle.split(" ").filter { it.isNotBlank() }
     if (words.size > 2) {
         val shortTitle = words.take(2).joinToString(" ")
         searchStrategies.add(Triple(shortTitle, "ko-KR", year))
-        searchStrategies.add(Triple(shortTitle, "ko-KR", null))
     }
 
     var finalMetadata: TmdbMetadata? = null

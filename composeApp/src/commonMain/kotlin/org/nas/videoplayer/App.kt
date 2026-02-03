@@ -80,6 +80,23 @@ fun App(driver: SqlDriver) {
     var selectedForeignTvMode by rememberSaveable { mutableStateOf(0) }
     var selectedKoreanTvMode by rememberSaveable { mutableStateOf(0) }
 
+    // 검색을 실행하는 공통 함수
+    val performSearch: suspend (String, String) -> Unit = { query, category ->
+        if (query.length >= 2) {
+            isSearchLoading = true
+            val results = repository.searchVideos(query, category)
+            coroutineScope {
+                results.take(9).map { series -> 
+                    async { fetchTmdbMetadata(series.title, if (category != "전체") category.lowercase() else null) }
+                }.awaitAll()
+            }
+            searchResultSeries = results
+            isSearchLoading = false
+        } else {
+            searchResultSeries = emptyList()
+        }
+    }
+
     LaunchedEffect(currentScreen) {
         if (currentScreen == Screen.HOME && homeLatestSeries.isEmpty()) {
             isHomeLoading = true
@@ -101,18 +118,14 @@ fun App(driver: SqlDriver) {
         }
     }
 
+    // 텍스트 입력 시 자동 검색 (500ms 지연)
     LaunchedEffect(searchQuery, searchCategory) {
-        if (searchQuery.length >= 2) {
-            delay(500); isSearchLoading = true
-            val results = repository.searchVideos(searchQuery, searchCategory)
-            coroutineScope {
-                results.take(9).map { series -> 
-                    async { fetchTmdbMetadata(series.title, if (searchCategory != "전체") searchCategory.lowercase() else null) }
-                }.awaitAll()
-            }
-            searchResultSeries = results
-            isSearchLoading = false
-        } else searchResultSeries = emptyList()
+        if (searchQuery.isNotEmpty()) {
+            delay(500)
+            performSearch(searchQuery, searchCategory)
+        } else {
+            searchResultSeries = emptyList()
+        }
     }
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Color.Red, background = Color.Black)) {
@@ -170,10 +183,26 @@ fun App(driver: SqlDriver) {
                         }
                         currentScreen == Screen.SEARCH -> {
                             SearchScreen(
-                                query = searchQuery, onQueryChange = { searchQuery = it },
-                                selectedCategory = searchCategory, onCategoryChange = { searchCategory = it },
-                                recentQueries = recentQueries, searchResults = searchResultSeries, isLoading = isSearchLoading,
-                                onSaveQuery = { scope.launch { searchHistoryDataSource.insertQuery(it, currentTimeMillis()) } },
+                                query = searchQuery, 
+                                onQueryChange = { 
+                                    if (searchQuery == it && it.isNotEmpty()) {
+                                        // 동일한 검색어를 다시 클릭했을 때도 검색이 트리거되도록 함
+                                        scope.launch { performSearch(it, searchCategory) }
+                                    } else {
+                                        searchQuery = it 
+                                    }
+                                },
+                                selectedCategory = searchCategory, 
+                                onCategoryChange = { searchCategory = it },
+                                recentQueries = recentQueries, 
+                                searchResults = searchResultSeries, 
+                                isLoading = isSearchLoading,
+                                onSaveQuery = { 
+                                    scope.launch { 
+                                        searchHistoryDataSource.insertQuery(it, currentTimeMillis())
+                                        performSearch(it, searchCategory) // 검색 저장 시 즉시 실행
+                                    }
+                                },
                                 onDeleteQuery = { scope.launch { searchHistoryDataSource.deleteQuery(it) } },
                                 onSeriesClick = { selectedSeries = it }
                             )
