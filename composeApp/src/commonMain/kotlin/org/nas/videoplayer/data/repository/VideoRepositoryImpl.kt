@@ -58,7 +58,7 @@ class VideoRepositoryImpl : VideoRepository {
         emptyList()
     }
 
-    private fun List<org.nas.videoplayer.domain.model.Movie>.groupBySeries(): List<Series> = 
+    private fun List<org.nas.videoplayer.domain.model.Movie>.groupBySeries(basePath: String? = null): List<Series> = 
         this.groupBy { it.title.cleanTitle(includeYear = false) }
             .map { (title, eps) -> 
                 Series(
@@ -67,7 +67,7 @@ class VideoRepositoryImpl : VideoRepository {
                         compareBy<org.nas.videoplayer.domain.model.Movie> { it.title.extractSeason() }
                             .thenBy { it.title.extractEpisode()?.filter { it.isDigit() }?.toIntOrNull() ?: 0 }
                     ),
-                    fullPath = null
+                    fullPath = basePath
                 ) 
             }.sortedBy { it.title }
 }

@@ -107,7 +107,7 @@ fun ThemedCategoryScreen(
                             val content = repository.getCategoryList(folderPath)
                             val hasDirectMovies = content.any { it.movies.isNotEmpty() }
                             val seriesList = if (hasDirectMovies) {
-                                content.flatMap { it.movies }.groupBySeries()
+                                content.flatMap { it.movies }.groupBySeries(folderPath)
                             } else {
                                 content.map { subFolder ->
                                     Series(
@@ -211,7 +211,7 @@ fun ThemedCategoryScreen(
     }
 }
 
-private fun List<Movie>.groupBySeries(): List<Series> = 
+private fun List<Movie>.groupBySeries(basePath: String? = null): List<Series> = 
     this.groupBy { it.title.cleanTitle(includeYear = false) }
         .map { (title, eps) -> 
             Series(
@@ -220,7 +220,7 @@ private fun List<Movie>.groupBySeries(): List<Series> =
                     compareBy<Movie> { it.title.extractSeason() }
                         .thenBy { it.title.extractEpisode()?.filter { char -> char.isDigit() }?.toIntOrNull() ?: 0 }
                 ),
-                fullPath = null
+                fullPath = basePath // 에피소드가 직접 포함된 경우에도 basePath를 전달
             ) 
         }
         .sortedBy { it.title }

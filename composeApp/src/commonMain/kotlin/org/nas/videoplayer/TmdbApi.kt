@@ -246,6 +246,17 @@ suspend fun fetchTmdbSeasonDetails(tmdbId: Int, season: Int): List<TmdbEpisode> 
     } catch (e: Exception) { emptyList() }
 }
 
+suspend fun fetchTmdbEpisodeDetails(tmdbId: Int, season: Int, episodeNum: Int): TmdbEpisode? {
+    return try {
+        val episode: TmdbEpisode = tmdbClient.get("$TMDB_BASE_URL/tv/$tmdbId/season/$season/episode/$episodeNum") {
+            if (TMDB_API_KEY.startsWith("eyJ")) header("Authorization", "Bearer $TMDB_API_KEY")
+            else parameter("api_key", TMDB_API_KEY)
+            parameter("language", "ko-KR")
+        }.body()
+        episode
+    } catch (e: Exception) { null }
+}
+
 suspend fun fetchTmdbCredits(tmdbId: Int, mediaType: String?): List<TmdbCast> {
     if (tmdbId == 0 || mediaType == null) return emptyList()
     return try {
