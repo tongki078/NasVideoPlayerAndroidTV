@@ -11,6 +11,8 @@ import kotlinx.coroutines.*
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 
 // TMDB 관련 상수
 const val TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk"
@@ -135,7 +137,9 @@ suspend fun translateToKorean(text: String): String {
         val response: String = tmdbClient.get(url).body()
         val jsonArray = Json.parseToJsonElement(response).jsonArray
         val translatedParts = jsonArray[0].jsonArray
-        translatedParts.joinToString("") { it.jsonArray[0].toString().replace("\"", "") }
+        translatedParts.joinToString("") { part -> 
+            part.jsonArray[0].jsonPrimitive.content 
+        }
     } catch (e: Exception) { text }
 }
 
@@ -160,9 +164,9 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null): TmdbMeta
     
     val words = cleanTitle.split(" ").filter { it.isNotBlank() }
     if (words.size > 2) {
-        val short = words.take(2).joinToString(" ")
-        searchStrategies.add(Triple(short, "ko-KR", year))
-        searchStrategies.add(Triple(short, "ko-KR", null))
+        val shortTitle = words.take(2).joinToString(" ")
+        searchStrategies.add(Triple(shortTitle, "ko-KR", year))
+        searchStrategies.add(Triple(shortTitle, "ko-KR", null))
     }
 
     var finalMetadata: TmdbMetadata? = null
@@ -171,9 +175,15 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null): TmdbMeta
     for ((q, lang, y) in searchStrategies.distinct()) {
         val (res, error) = searchTmdb(q, lang, typeHint, y)
         if (error != null) { hasNetworkError = true; break }
-        if (res != null && (res.posterUrl != null || res.tmdbId != null)) {
+        
+        // 포스터가 있는 결과를 찾으면 즉시 채택
+        if (res != null && res.posterUrl != null) {
             finalMetadata = res
-            if (res.posterUrl != null) break
+            break
+        }
+        // 포스터는 없더라도 ID라도 찾았으면 일단 보관 (더 나은 검색 단계에서 포스터를 찾을 수도 있음)
+        if (res != null && finalMetadata == null) {
+            finalMetadata = res
         }
     }
 
