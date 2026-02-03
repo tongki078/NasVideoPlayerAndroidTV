@@ -83,13 +83,14 @@ fun App(driver: SqlDriver) {
     // 시청 기록 저장 함수 (중복 제거 및 최신화)
     val saveWatchHistory: (Movie) -> Unit = { movie ->
         scope.launch(Dispatchers.Default) {
+            val isAni = movie.videoUrl.contains("애니메이션") || movie.title.contains("애니메이션")
             watchHistoryDataSource.insertWatchHistory(
                 id = movie.id,
                 title = movie.title,
                 videoUrl = movie.videoUrl,
                 thumbnailUrl = movie.thumbnailUrl,
                 timestamp = currentTimeMillis(),
-                screenType = "movie",
+                screenType = if (isAni) "animation" else "movie",
                 pathStackJson = ""
             )
         }

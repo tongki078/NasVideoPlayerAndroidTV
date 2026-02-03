@@ -80,8 +80,15 @@ fun HomeScreen(
                 item {
                     LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
                         items(watchHistory) { history ->
+                            // 기존 기록 중에서도 애니메이션 여부를 제목 대조를 통해 다시 확인
+                            val cleanedHistoryTitle = history.title.cleanTitle(includeYear = false)
+                            val isAniHistory = history.screenType == "animation" || 
+                                               history.videoUrl.contains("애니메이션") ||
+                                               animations.any { it.title.cleanTitle(includeYear = false).equals(cleanedHistoryTitle, ignoreCase = true) }
+
                             MovieCard(
                                 title = history.title, 
+                                isAnimation = isAniHistory,
                                 onClick = { onHistoryClick(history) } // history 클릭 핸들러 사용
                             )
                         }
