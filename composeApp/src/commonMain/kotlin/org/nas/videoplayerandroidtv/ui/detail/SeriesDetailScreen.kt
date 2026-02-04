@@ -35,6 +35,7 @@ import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
+import org.nas.videoplayerandroidtv.ui.player.VideoPlayer
 
 // ==========================================================
 // 1. Data Models (데이터 구조)

@@ -15,15 +15,36 @@ class VideoRepositoryImpl : VideoRepository {
     private val client = NasApiClient.client
     private val baseUrl = NasApiClient.BASE_URL
 
-    override suspend fun getCategoryList(path: String): List<Category> = try {
-        println("VideoRepository: Requesting category list for path: $path")
-        val response: List<Category> = client.get("$baseUrl/list?path=${path.encodeURLParameter()}").body()
-        println("VideoRepository: Received ${response.size} categories")
-        response
+    override suspend fun getCategoryList(path: String, limit: Int, offset: Int): List<Category> = try {
+        println("VideoRepository: Requesting category list for path: $path, limit: $limit, offset: $offset")
+        
+        // 서버가 limit, offset을 지원한다고 가정하고 쿼리 파라미터 추가
+        val response: List<Category> = client.get("$baseUrl/list") {
+            parameter("path", path)
+            parameter("limit", limit)
+            parameter("offset", offset)
+        }.body()
+        
+        // 영상이 10개 미만인 카테고리는 제외 (단, 하위 디렉토리가 있는 경우는 예외로 둘 수 있으나, 요구사항에 맞춰 필터링)
+        val filtered = response.filter { category ->
+            val totalVideos = category.movies.size
+            totalVideos >= 10 || category.subCategories.isNotEmpty()
+        }
+        
+        println("VideoRepository: Received ${response.size} categories, filtered to ${filtered.size}")
+        filtered
     } catch (e: Exception) {
         println("VideoRepository ERROR (getCategoryList): ${e.message}")
         e.printStackTrace()
         emptyList()
+    }
+
+    override suspend fun getCategoryVideoCount(path: String): Int = try {
+        // 서버에 count API가 있다고 가정하거나, 없으면 전체 리스트를 가져와서 확인 (임시로 전체 가져오기)
+        val response: List<Category> = client.get("$baseUrl/list?path=${path.encodeURLParameter()}").body()
+        response.sumOf { it.movies.size }
+    } catch (e: Exception) {
+        0
     }
 
     override suspend fun searchVideos(query: String, category: String): List<Series> = try {

@@ -27,7 +27,6 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.model.Movie
-import org.nas.videoplayerandroidtv.domain.model.Category
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.common.MovieRow
 import org.nas.videoplayerandroidtv.*
@@ -65,12 +64,12 @@ fun ThemedCategoryScreen(
     LaunchedEffect(selectedMode, categoryName) {
         isLoading = true
         try {
-            val sections = if (isAirScreen) {
+            val sections: List<Pair<String, List<Series>>> = if (isAirScreen) {
                 val allSeries = if (selectedMode == 0) repository.getAnimations() else repository.getDramas()
                 if (allSeries.isNotEmpty()) {
                     val shuffled = allSeries.shuffled()
                     val chunkSize = (shuffled.size / 3).coerceAtLeast(1)
-                    listOf(
+                    listOf<Pair<String, List<Series>>>(
                         getRandomThemeName("인기", 0, false, selectedCategoryText) to shuffled.take(chunkSize),
                         getRandomThemeName("최근 업데이트", 1, false, selectedCategoryText) to shuffled.drop(chunkSize).take(chunkSize),
                         getRandomThemeName("오늘의 추천", 2, false, selectedCategoryText) to shuffled.drop(chunkSize * 2)
@@ -103,7 +102,7 @@ fun ThemedCategoryScreen(
                             val folderPath = "$currentRootPath/${folder.name}"
                             val content = repository.getCategoryList(folderPath)
                             val hasDirectMovies = content.any { it.movies.isNotEmpty() }
-                            val seriesList = if (hasDirectMovies) {
+                            val seriesList: List<Series> = if (hasDirectMovies) {
                                 content.flatMap { it.movies }.groupBySeries(folderPath)
                             } else {
                                 content.map { subFolder ->
@@ -122,6 +121,7 @@ fun ThemedCategoryScreen(
                 }
             }
 
+            // TMDB 프리페칭
             coroutineScope {
                 sections.flatMap { it.second.take(5) }.map { series ->
                     async { fetchTmdbMetadata(series.title) }

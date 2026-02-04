@@ -1,11 +1,7 @@
 package org.nas.videoplayerandroidtv
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -56,12 +52,12 @@ fun App(driver: SqlDriver) {
     
     val recentQueriesState = searchHistoryDataSource.getRecentQueries()
         .map { list -> list.map { it.toData() } }
-        .collectAsState(initial = emptyList<SearchHistory>())
+        .collectAsState(initial = emptyList())
     val recentQueries by recentQueriesState
 
     val watchHistoryState = watchHistoryDataSource.getWatchHistory()
         .map { list -> list.map { it.toData() } }
-        .collectAsState(initial = emptyList<WatchHistory>())
+        .collectAsState(initial = emptyList())
     val watchHistory by watchHistoryState
 
     val scope = rememberCoroutineScope()
@@ -91,7 +87,7 @@ fun App(driver: SqlDriver) {
     var selectedKoreanTvMode by rememberSaveable { mutableStateOf(0) }
 
     // ==========================================
-    // BackHandler 추가
+    // BackHandler 수정 (PlatformUtils의 BackHandler 사용)
     // ==========================================
     BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME) {
         when {
@@ -177,7 +173,6 @@ fun App(driver: SqlDriver) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Scaffold(
                 topBar = {
-                    // 영상 재생 중이 아닐 때만 상단 바 표시 (검색 화면 포함)
                     if (selectedMovie == null) {
                         NetflixTopBar(currentScreen) { 
                             currentScreen = it
@@ -185,7 +180,6 @@ fun App(driver: SqlDriver) {
                         }
                     }
                 }
-                // 하단 바(bottomBar)를 제거하여 화면을 더 넓게 사용
             ) { pv ->
                 Box(Modifier.padding(pv).fillMaxSize()) {
                     when {
