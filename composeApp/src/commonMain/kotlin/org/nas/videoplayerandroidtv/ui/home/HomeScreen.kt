@@ -1,7 +1,10 @@
 package org.nas.videoplayerandroidtv.ui.home
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -12,11 +15,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
@@ -41,7 +45,7 @@ fun HomeScreen(
     lazyListState: LazyListState = rememberLazyListState(),
     onSeriesClick: (Series) -> Unit,
     onPlayClick: (Movie) -> Unit,
-    onHistoryClick: (WatchHistory) -> Unit = {} // 추가
+    onHistoryClick: (WatchHistory) -> Unit = {}
 ) {
     if (isLoading) {
         LazyColumn(Modifier.fillMaxSize().background(Color.Black)) {
@@ -80,7 +84,6 @@ fun HomeScreen(
                 item {
                     LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
                         items(watchHistory) { history ->
-                            // 기존 기록 중에서도 애니메이션 여부를 제목 대조를 통해 다시 확인
                             val cleanedHistoryTitle = history.title.cleanTitle(includeYear = false)
                             val isAniHistory = history.screenType == "animation" || 
                                                history.videoUrl.contains("애니메이션") ||
@@ -89,7 +92,7 @@ fun HomeScreen(
                             MovieCard(
                                 title = history.title, 
                                 isAnimation = isAniHistory,
-                                onClick = { onHistoryClick(history) } // history 클릭 핸들러 사용
+                                onClick = { onHistoryClick(history) }
                             )
                         }
                     }
@@ -125,12 +128,18 @@ fun HomeScreen(
 
 @Composable
 private fun HeroSection(movie: Movie, isAnimation: Boolean = false, onClick: () -> Unit, onPlay: (Movie) -> Unit) {
+    var isFocused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f)
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(550.dp)
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable()
             .clickable { onClick() }
             .background(Color.Black)
+            .scale(scale)
     ) {
         TmdbAsyncImage(
             title = movie.title,
@@ -160,7 +169,12 @@ private fun HeroSection(movie: Movie, isAnimation: Boolean = false, onClick: () 
                 .width(280.dp)
                 .height(400.dp)
                 .align(Alignment.TopCenter)
-                .padding(top = 40.dp),
+                .padding(top = 40.dp)
+                .border(
+                    width = if (isFocused) 4.dp else 0.dp,
+                    color = if (isFocused) Color.White else Color.Transparent,
+                    shape = RoundedCornerShape(8.dp)
+                ),
             shape = RoundedCornerShape(8.dp),
             elevation = CardDefaults.cardElevation(defaultElevation = 16.dp)
         ) {
@@ -186,13 +200,15 @@ private fun HeroSection(movie: Movie, isAnimation: Boolean = false, onClick: () 
             Spacer(Modifier.height(20.dp))
             Button(
                 onClick = { onPlay(movie) },
-                colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isFocused) Color.Red else Color.White
+                ),
                 shape = RoundedCornerShape(4.dp),
                 modifier = Modifier.width(120.dp).height(45.dp)
             ) {
-                Icon(Icons.Default.PlayArrow, null, tint = Color.Black)
+                Icon(Icons.Default.PlayArrow, null, tint = if (isFocused) Color.White else Color.Black)
                 Spacer(Modifier.width(8.dp))
-                Text("재생", color = Color.Black, fontWeight = FontWeight.Bold)
+                Text("재생", color = if (isFocused) Color.White else Color.Black, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -211,10 +227,21 @@ private fun SectionTitle(title: String) {
 
 @Composable
 private fun MovieCard(title: String, typeHint: String? = null, isAnimation: Boolean = false, onClick: () -> Unit) {
+    var isFocused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (isFocused) 1.1f else 1f)
+
     Card(
         Modifier
             .size(130.dp, 200.dp)
             .padding(end = 12.dp)
+            .scale(scale)
+            .onFocusChanged { isFocused = it.isFocused }
+            .border(
+                width = if (isFocused) 3.dp else 0.dp,
+                color = if (isFocused) Color.White else Color.Transparent,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .focusable()
             .clickable(onClick = onClick)
     ) {
         TmdbAsyncImage(title, Modifier.fillMaxSize(), typeHint = typeHint, isAnimation = isAnimation)

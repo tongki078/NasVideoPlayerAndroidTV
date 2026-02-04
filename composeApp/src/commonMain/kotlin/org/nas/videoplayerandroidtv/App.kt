@@ -11,7 +11,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import coil3.ImageLoader
-import coil3.network.ktor3.KtorNetworkFetcherFactory
+import coil3.network.ktor2.KtorNetworkFetcherFactory
 import coil3.request.crossfade
 import coil3.disk.DiskCache
 import coil3.compose.setSingletonImageLoaderFactory
@@ -30,7 +30,7 @@ import org.nas.videoplayerandroidtv.ui.common.NetflixTopBar
 import org.nas.videoplayerandroidtv.ui.category.ThemedCategoryScreen
 import org.nas.videoplayerandroidtv.data.*
 import org.nas.videoplayerandroidtv.db.AppDatabase
-import com.squareup.sqldelight.db.SqlDriver
+import app.cash.sqldelight.db.SqlDriver
 
 @Composable
 fun App(driver: SqlDriver) {
@@ -52,8 +52,18 @@ fun App(driver: SqlDriver) {
     val db = remember { AppDatabase(driver) }
     val searchHistoryDataSource = remember { SearchHistoryDataSource(db) }
     val watchHistoryDataSource = remember { WatchHistoryDataSource(db) }
-    val recentQueries by searchHistoryDataSource.getRecentQueries().map { list -> list.map { it.toData() } }.collectAsState(initial = emptyList<SearchHistory>())
-    val watchHistory by watchHistoryDataSource.getWatchHistory().map { list -> list.map { it.toData() } }.collectAsState(initial = emptyList<WatchHistory>())
+    
+    // Explicit types specified to solve inference errors
+    val recentQueriesState = searchHistoryDataSource.getRecentQueries()
+        .map { list -> list.map { it.toData() } }
+        .collectAsState(initial = emptyList<SearchHistory>())
+    val recentQueries by recentQueriesState
+
+    val watchHistoryState = watchHistoryDataSource.getWatchHistory()
+        .map { list -> list.map { it.toData() } }
+        .collectAsState(initial = emptyList<WatchHistory>())
+    val watchHistory by watchHistoryState
+
     val scope = rememberCoroutineScope()
 
     var currentScreen by rememberSaveable { mutableStateOf(Screen.HOME) }
@@ -162,6 +172,8 @@ fun App(driver: SqlDriver) {
                 },
                 bottomBar = { 
                     if (selectedMovie == null) {
+                        // NavigationBar 대신 NavigationRail 또는 TV 전용 사이드바를 고려할 수 있으나, 
+                        // 일단 TV UI에선 하단 바보다는 포커스 가능한 메뉴가 중요합니다.
                         NavigationBar(containerColor = Color.Black) {
                             NavigationBarItem(
                                 selected = currentScreen == Screen.HOME, 

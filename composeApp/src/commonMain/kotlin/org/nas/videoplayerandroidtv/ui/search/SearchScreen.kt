@@ -1,7 +1,10 @@
-package org.nas.videoplayer.ui.search
+package org.nas.videoplayerandroidtv.ui.search
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -20,17 +23,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.nas.videoplayer.*
-import org.nas.videoplayer.data.SearchHistory
-import org.nas.videoplayer.domain.model.Series
-import org.nas.videoplayer.ui.common.TmdbAsyncImage
-import org.nas.videoplayer.ui.common.shimmerBrush
+import org.nas.videoplayerandroidtv.*
+import org.nas.videoplayerandroidtv.data.SearchHistory
+import org.nas.videoplayerandroidtv.domain.model.Series
+import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
+import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
 
 @Composable
 fun SearchScreen(
@@ -80,12 +85,17 @@ private fun SearchTextField(
     onQueryChange: (String) -> Unit,
     onSaveQuery: (String) -> Unit
 ) {
+    var isFocused by remember { mutableStateOf(false) }
+    
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
-        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+            .onFocusChanged { isFocused = it.isFocused },
         placeholder = { Text("영화, 애니메이션, TV 프로그램 검색", color = Color.Gray) },
-        leadingIcon = { Icon(Icons.Default.Search, null, tint = Color.Gray) },
+        leadingIcon = { Icon(Icons.Default.Search, null, tint = if (isFocused) Color.Red else Color.Gray) },
         trailingIcon = {
             if (query.isNotEmpty()) {
                 IconButton(onClick = { onQueryChange("") }) {
@@ -113,15 +123,28 @@ private fun CategoryFilters(
 ) {
     LazyRow(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         items(listOf("전체", "영화", "애니메이션", "TV")) { cat ->
+            var isFocused by remember { mutableStateOf(false) }
+            val scale by animateFloatAsState(if (isFocused) 1.1f else 1f)
+            
             FilterChip(
                 selected = selectedCategory == cat,
                 onClick = { onCategoryChange(cat) },
                 label = { Text(cat) },
-                modifier = Modifier.padding(end = 8.dp),
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .scale(scale)
+                    .onFocusChanged { isFocused = it.isFocused }
+                    .focusable(),
                 colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Color.Red.copy(alpha = 0.2f),
+                    selectedContainerColor = Color.Red,
                     selectedLabelColor = Color.White,
                     labelColor = Color.Gray
+                ),
+                border = FilterChipDefaults.filterChipBorder(
+                    enabled = true,
+                    selected = selectedCategory == cat,
+                    borderColor = if (isFocused) Color.White else Color.Transparent,
+                    borderWidth = if (isFocused) 2.dp else 0.dp
                 )
             )
         }
@@ -164,6 +187,7 @@ private fun RecentSearchItem(
     onQueryClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
+    var isFocused by remember { mutableStateOf(false) }
     var metadata by remember(history.query) { mutableStateOf<TmdbMetadata?>(null) }
     
     LaunchedEffect(history.query) {
@@ -173,7 +197,14 @@ private fun RecentSearchItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable()
             .clickable(onClick = onQueryClick)
+            .background(if (isFocused) Color.DarkGray.copy(alpha = 0.5f) else Color.Transparent)
+            .border(
+                width = if (isFocused) 2.dp else 0.dp,
+                color = if (isFocused) Color.White else Color.Transparent
+            )
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -243,8 +274,21 @@ private fun SearchResultsGrid(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             items(results) { series ->
+                var isFocused by remember { mutableStateOf(false) }
+                val scale by animateFloatAsState(if (isFocused) 1.1f else 1f)
+
                 Card(
-                    modifier = Modifier.aspectRatio(0.67f).clickable { onSeriesClick(series) }
+                    modifier = Modifier
+                        .aspectRatio(0.67f)
+                        .scale(scale)
+                        .onFocusChanged { isFocused = it.isFocused }
+                        .border(
+                            width = if (isFocused) 3.dp else 0.dp,
+                            color = if (isFocused) Color.White else Color.Transparent,
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .focusable()
+                        .clickable { onSeriesClick(series) }
                 ) {
                     TmdbAsyncImage(series.title, Modifier.fillMaxSize())
                 }

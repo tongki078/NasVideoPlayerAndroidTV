@@ -5,15 +5,16 @@ plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.composeMultiplatform)
-    alias(libs.plugins.composeCompiler)
     alias(libs.plugins.kotlinSerialization)
-    id("com.squareup.sqldelight") version "1.5.5"
+    alias(libs.plugins.sqldelight)
 }
 
 kotlin {
     androidTarget {
-        compilerOptions {
-            jvmTarget.set(JvmTarget.JVM_11)
+        compilations.all {
+            kotlinOptions {
+                jvmTarget = "11"
+            }
         }
     }
     
@@ -46,6 +47,10 @@ kotlin {
             implementation(libs.androidx.media3.ui)
             implementation(libs.androidx.media3.hls)
             implementation(libs.sqldelight.android)
+            
+            // TV UI dependencies
+            implementation(libs.androidx.tv.foundation)
+            implementation(libs.androidx.tv.material)
         }
         
         commonMain.dependencies {
@@ -78,9 +83,10 @@ kotlin {
 }
 
 sqldelight {
-    database("AppDatabase") {
-        packageName = "org.nas.videoplayerandroidtv.db"
-        sourceFolders = listOf("sqldelight")
+    databases {
+        create("AppDatabase") {
+            packageName.set("org.nas.videoplayerandroidtv.db")
+        }
     }
 }
 
