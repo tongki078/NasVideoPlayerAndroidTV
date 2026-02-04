@@ -58,46 +58,42 @@ fun ThemedCategoryScreen(
     }
     
     val selectedCategoryText = modes.getOrNull(selectedMode) ?: categoryName
+    // 전체 섹션 리스트
     var themedSections by remember(selectedMode, categoryName) { mutableStateOf<List<Pair<String, List<Series>>>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    
+    // 점진적 로딩을 위한 상태
+    var currentOffset by remember(selectedMode, categoryName) { mutableIntStateOf(0) }
+    val pageSize = 8 // 한 번에 로드할 폴더 개수
 
-    LaunchedEffect(selectedMode, categoryName) {
-        isLoading = true
+    // 초기 및 추가 데이터 로딩 함수
+    val loadNextPage = suspend {
         try {
-            val sections: List<Pair<String, List<Series>>> = if (isAirScreen) {
-                val allSeries = if (selectedMode == 0) repository.getAnimations() else repository.getDramas()
-                if (allSeries.isNotEmpty()) {
-                    val shuffled = allSeries.shuffled()
-                    val chunkSize = (shuffled.size / 3).coerceAtLeast(1)
-                    listOf<Pair<String, List<Series>>>(
-                        getRandomThemeName("인기", 0, false, selectedCategoryText) to shuffled.take(chunkSize),
-                        getRandomThemeName("최근 업데이트", 1, false, selectedCategoryText) to shuffled.drop(chunkSize).take(chunkSize),
-                        getRandomThemeName("오늘의 추천", 2, false, selectedCategoryText) to shuffled.drop(chunkSize * 2)
-                    ).filter { it.second.isNotEmpty() }
-                } else emptyList()
-            } else {
-                val currentRootPath = when {
-                    isAniScreen && selectedMode == 0 -> "애니메이션/라프텔"
-                    isAniScreen && selectedMode == 1 -> "애니메이션/시리즈"
-                    isMovieScreen && selectedMode == 0 -> "영화/최신"
-                    isMovieScreen && selectedMode == 1 -> "영화/UHD"
-                    isMovieScreen && selectedMode == 2 -> "영화/제목"
-                    isForeignTvScreen && selectedMode == 0 -> "외국TV/중국 드라마"
-                    isForeignTvScreen && selectedMode == 1 -> "외국TV/일본 드라마"
-                    isForeignTvScreen && selectedMode == 2 -> "외국TV/미국 드라마"
-                    isForeignTvScreen && selectedMode == 3 -> "외국TV/기타국가 드라마"
-                    isForeignTvScreen && selectedMode == 4 -> "외국TV/다큐"
-                    isKoreanTvScreen && selectedMode == 0 -> "국내TV/드라마"
-                    isKoreanTvScreen && selectedMode == 1 -> "국내TV/시트콤"
-                    isKoreanTvScreen && selectedMode == 2 -> "국내TV/교양"
-                    isKoreanTvScreen && selectedMode == 3 -> "국내TV/다큐멘터리"
-                    isKoreanTvScreen && selectedMode == 4 -> "국내TV/예능"
-                    else -> rootPath
-                }
+            val currentRootPath = when {
+                isAniScreen && selectedMode == 0 -> "애니메이션/라프텔"
+                isAniScreen && selectedMode == 1 -> "애니메이션/시리즈"
+                isMovieScreen && selectedMode == 0 -> "영화/최신"
+                isMovieScreen && selectedMode == 1 -> "영화/UHD"
+                isMovieScreen && selectedMode == 2 -> "영화/제목"
+                isForeignTvScreen && selectedMode == 0 -> "외국TV/중국 드라마"
+                isForeignTvScreen && selectedMode == 1 -> "외국TV/일본 드라마"
+                isForeignTvScreen && selectedMode == 2 -> "외국TV/미국 드라마"
+                isForeignTvScreen && selectedMode == 3 -> "외국TV/기타국가 드라마"
+                isForeignTvScreen && selectedMode == 4 -> "외국TV/다큐"
+                isKoreanTvScreen && selectedMode == 0 -> "국내TV/드라마"
+                isKoreanTvScreen && selectedMode == 1 -> "국내TV/시트콤"
+                isKoreanTvScreen && selectedMode == 2 -> "국내TV/교양"
+                isKoreanTvScreen && selectedMode == 3 -> "국내TV/다큐멘터리"
+                isKoreanTvScreen && selectedMode == 4 -> "국내TV/예능"
+                else -> rootPath
+            }
 
-                val themeFolders = repository.getCategoryList(currentRootPath)
-                coroutineScope {
-                    themeFolders.take(4).mapIndexed { index, folder ->
+            // 폴더 목록 가져오기 (페이징 적용)
+            val themeFolders = repository.getCategoryList(currentRootPath, limit = pageSize, offset = currentOffset)
+            
+            if (themeFolders.isNotEmpty()) {
+                val newSections = coroutineScope {
+                    themeFolders.mapIndexed { index, folder ->
                         async {
                             val folderPath = "$currentRootPath/${folder.name}"
                             val content = repository.getCategoryList(folderPath)
@@ -113,31 +109,74 @@ fun ThemedCategoryScreen(
                                     )
                                 }.filter { it.title.length > 1 }
                             }
-                            if (seriesList.isNotEmpty()) {
-                                getRandomThemeName(folder.name, index, currentRootPath.contains("영화"), categoryName) to seriesList
+                            
+                            // 10개 미만 섹션 필터링
+                            if (seriesList.size >= 10) {
+                                getRandomThemeName(folder.name, currentOffset + index, currentRootPath.contains("영화"), categoryName) to seriesList
                             } else null
                         }
                     }.awaitAll().filterNotNull()
                 }
+                
+                themedSections = themedSections + newSections
+                currentOffset += pageSize
+                
+                // TMDB 프리페칭 (새로 추가된 섹션에 대해서만)
+                coroutineScope {
+                    newSections.flatMap { it.second.take(5) }.map { series ->
+                        async { fetchTmdbMetadata(series.title) }
+                    }.awaitAll()
+                }
             }
-
-            // TMDB 프리페칭
-            coroutineScope {
-                sections.flatMap { it.second.take(5) }.map { series ->
-                    async { fetchTmdbMetadata(series.title) }
-                }.awaitAll()
-            }
-
-            themedSections = sections
         } catch (e: Exception) {
-            themedSections = emptyList()
-        } finally {
-            isLoading = false
+            println("Error loading page: ${e.message}")
+        }
+    }
+
+    LaunchedEffect(selectedMode, categoryName) {
+        isLoading = true
+        themedSections = emptyList()
+        currentOffset = 0
+        
+        if (isAirScreen) {
+            // 방송중 화면은 기존 로직 유지 (또는 유사하게 점진적 로딩 적용 가능)
+            val allSeries = if (selectedMode == 0) repository.getAnimations() else repository.getDramas()
+            if (allSeries.isNotEmpty()) {
+                val shuffled = allSeries.shuffled()
+                val chunkSize = (shuffled.size / 5).coerceAtLeast(1)
+                themedSections = listOf(
+                    getRandomThemeName("인기", 0, false, selectedCategoryText) to shuffled.take(chunkSize),
+                    getRandomThemeName("최근 업데이트", 1, false, selectedCategoryText) to shuffled.drop(chunkSize).take(chunkSize),
+                    getRandomThemeName("오늘의 추천", 2, false, selectedCategoryText) to shuffled.drop(chunkSize * 2).take(chunkSize),
+                    getRandomThemeName("다시보기", 3, false, selectedCategoryText) to shuffled.drop(chunkSize * 3).take(chunkSize),
+                    getRandomThemeName("명작 컬렉션", 4, false, selectedCategoryText) to shuffled.drop(chunkSize * 4)
+                ).filter { it.second.size >= 10 }
+            }
+        } else {
+            // 초기 2페이지(16개 폴더) 정도 미리 로드
+            loadNextPage()
+            if (themedSections.size < 5) { // 결과가 너무 적으면 한 번 더 로드
+                loadNextPage()
+            }
+        }
+        isLoading = false
+    }
+
+    // 스크롤 감지를 통한 추가 로딩
+    val isAtBottom = remember {
+        derivedStateOf {
+            val lastItem = lazyListState.layoutInfo.visibleItemsInfo.lastOrNull()
+            lastItem != null && lastItem.index >= lazyListState.layoutInfo.totalItemsCount - 2
+        }
+    }
+
+    LaunchedEffect(isAtBottom.value) {
+        if (isAtBottom.value && !isLoading && !isAirScreen) {
+            loadNextPage()
         }
     }
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFF0F0F0F))) {
-        // TV 전용 가로형 카테고리 탭 바
         if (modes.isNotEmpty()) {
             LazyRow(
                 modifier = Modifier
@@ -156,13 +195,13 @@ fun ThemedCategoryScreen(
             }
         }
 
-        if (isLoading) {
+        if (isLoading && themedSections.isEmpty()) {
             LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 100.dp)) {
                 items(3) { CategorySectionSkeleton() }
             }
-        } else if (themedSections.isEmpty()) {
+        } else if (themedSections.isEmpty() && !isLoading) {
             Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Text("불러올 영상이 없습니다.", color = Color.Gray)
+                Text("영상이 10개 이상인 폴더가 없습니다.", color = Color.Gray)
             }
         } else {
             LazyColumn(
@@ -176,6 +215,15 @@ fun ThemedCategoryScreen(
                         seriesList = seriesList,
                         onSeriesClick = onSeriesClick
                     )
+                }
+                
+                // 로딩 중 표시 (푸터)
+                if (isLoading) {
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = Color.Red, modifier = Modifier.size(32.dp))
+                        }
+                    }
                 }
             }
         }
