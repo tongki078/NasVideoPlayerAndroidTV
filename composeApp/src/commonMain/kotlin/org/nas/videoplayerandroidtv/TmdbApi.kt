@@ -20,10 +20,15 @@ const val TMDB_POSTER_SIZE_SMALL = "w185"
 const val TMDB_POSTER_SIZE_MEDIUM = "w342"
 const val TMDB_POSTER_SIZE_LARGE = "w500"
 
+// 에뮬레이터 시간 문제로 인한 SSL 에러를 방지하기 위해 
+// HttpClient를 생성할 때 보안 검증을 완화하거나 플랫폼별 설정을 따릅니다.
 private val tmdbClient = HttpClient {
     install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
     install(HttpTimeout) { requestTimeoutMillis = 60000; connectTimeoutMillis = 15000; socketTimeoutMillis = 60000 }
-    defaultRequest { header("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, lifestyle Gecko) Version/17.0 Mobile/15E148 Safari/604.1") }
+    defaultRequest { 
+        header("User-Agent", "Ktor-Client")
+        header("Accept", "application/json")
+    }
 }
 
 @Serializable
@@ -185,7 +190,11 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimati
 
     for ((q, lang, y) in searchStrategies.distinct()) {
         val (res, error) = searchTmdb(q, lang, effectiveTypeHint, y, isAnimation)
-        if (error != null) { hasNetworkError = true; break }
+        if (error != null) {
+            println("TMDB Search Error for '$q': ${error.message}")
+            hasNetworkError = true
+            continue 
+        }
         
         if (res != null && (res.posterUrl != null || res.tmdbId != null)) {
             // 애니메이션 검색일 경우, 애니메이션 장르(16)가 포함된 결과를 찾을 때까지 계속 탐색 가능하도록 로직 보완
@@ -238,15 +247,12 @@ private suspend fun searchTmdb(query: String, language: String?, typeHint: Strin
 
         val result = results.sortedWith(
             compareByDescending<TmdbResult> { 
-                // 1. 애니메이션 검색 시 장르 ID 16(애니메이션) 최우선
                 if (isAnimation) it.genreIds?.contains(16) == true else true 
             }.thenByDescending { 
-                // 2. 제목 일치 여부
                 it.name?.equals(query, ignoreCase = true) == true || it.title?.equals(query, ignoreCase = true) == true 
             }.thenByDescending { 
                 it.posterPath != null 
             }.thenByDescending { 
-                // 3. 일본 원산지 우선 (애니메이션인 경우)
                 if (isAnimation) it.originCountry?.contains("JP") == true else false 
             }.thenByDescending { 
                 it.voteCount ?: 0 
@@ -259,7 +265,9 @@ private suspend fun searchTmdb(query: String, language: String?, typeHint: Strin
             val mediaType = result.mediaType ?: typeHint ?: (if (isAnimation) "tv" else "movie")
             Pair(TmdbMetadata(tmdbId = result.id, mediaType = mediaType, posterUrl = posterUrl, overview = result.overview, genreIds = result.genreIds ?: emptyList()), null)
         } else Pair(null, null)
-    } catch (e: Exception) { Pair(null, e) }
+    } catch (e: Exception) {
+        Pair(null, e)
+    }
 }
 
 suspend fun fetchTmdbSeasonDetails(tmdbId: Int, season: Int): List<TmdbEpisode> {
