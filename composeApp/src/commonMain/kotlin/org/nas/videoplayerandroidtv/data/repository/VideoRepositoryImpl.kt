@@ -16,31 +16,48 @@ class VideoRepositoryImpl : VideoRepository {
     private val baseUrl = NasApiClient.BASE_URL
 
     override suspend fun getCategoryList(path: String): List<Category> = try {
-        client.get("$baseUrl/list?path=${path.encodeURLParameter()}").body()
+        println("VideoRepository: Requesting category list for path: $path")
+        val response: List<Category> = client.get("$baseUrl/list?path=${path.encodeURLParameter()}").body()
+        println("VideoRepository: Received ${response.size} categories")
+        response
     } catch (e: Exception) {
+        println("VideoRepository ERROR (getCategoryList): ${e.message}")
+        e.printStackTrace()
         emptyList()
     }
 
     override suspend fun searchVideos(query: String, category: String): List<Series> = try {
-        val url = "$baseUrl/search?q=${query.encodeURLParameter()}" + 
+        val url = "$baseUrl/search?q=${query.encodeURLParameter()}" +
                 if (category != "전체") "&category=${category.encodeURLParameter()}" else ""
+        println("VideoRepository: Searching videos with url: $url")
         val results: List<Category> = client.get(url).body()
+        println("VideoRepository: Search results found ${results.size} categories")
         results.flatMap { it.movies }.groupBySeries()
     } catch (e: Exception) {
+        println("VideoRepository ERROR (searchVideos): ${e.message}")
+        e.printStackTrace()
         emptyList()
     }
 
     override suspend fun getLatestMovies(): List<Series> = try {
+        println("VideoRepository: Requesting latest movies")
         val results: List<Category> = client.get("$baseUrl/latestmovies").body()
+        println("VideoRepository: Received ${results.size} latest categories")
         results.flatMap { it.movies }.groupBySeries()
     } catch (e: Exception) {
+        println("VideoRepository ERROR (getLatestMovies): ${e.message}")
+        e.printStackTrace()
         emptyList()
     }
 
     override suspend fun getAnimations(): List<Series> = try {
+        println("VideoRepository: Requesting animations")
         val results: List<Category> = client.get("$baseUrl/animations").body()
+        println("VideoRepository: Received ${results.size} animation categories")
         results.flatMap { it.movies }.groupBySeries()
     } catch (e: Exception) {
+        println("VideoRepository ERROR (getAnimations): ${e.message}")
+        e.printStackTrace()
         emptyList()
     }
 
@@ -48,6 +65,7 @@ class VideoRepositoryImpl : VideoRepository {
         val results: List<Category> = client.get("$baseUrl/dramas").body()
         results.flatMap { it.movies }.groupBySeries()
     } catch (e: Exception) {
+        println("VideoRepository ERROR (getDramas): ${e.message}")
         emptyList()
     }
 
@@ -55,6 +73,7 @@ class VideoRepositoryImpl : VideoRepository {
         val results: List<Category> = client.get("$baseUrl/animations_all").body()
         results.flatMap { it.movies }.groupBySeries()
     } catch (e: Exception) {
+        println("VideoRepository ERROR (getAnimationsAll): ${e.message}")
         emptyList()
     }
 

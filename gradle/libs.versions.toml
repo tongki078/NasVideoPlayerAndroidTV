@@ -1,8 +1,8 @@
 [versions]
-agp = "8.11.2"
-android-compileSdk = "36"
+agp = "8.6.1"
+android-compileSdk = "35"
 android-minSdk = "24"
-android-targetSdk = "36"
+android-targetSdk = "34"
 androidx-activity = "1.8.0"
 androidx-appcompat = "1.6.1"
 androidx-core = "1.12.0"
@@ -14,7 +14,7 @@ junit = "4.13.2"
 kotlin = "1.9.24"
 ktor = "2.3.11"
 kotlinx-serialization = "1.6.3"
-media3 = "1.5.1"
+media3 = "1.4.1"
 coil = "3.0.0-rc01"
 androidx-room = "2.7.0-alpha11"
 sqlite = "2.5.0-alpha11"
@@ -50,6 +50,7 @@ androidx-tv-material = { module = "androidx.tv:tv-material", version.ref = "andr
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
 ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
+ktor-client-logging = { module = "io.ktor:ktor-client-logging", version.ref = "ktor" }
 ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 

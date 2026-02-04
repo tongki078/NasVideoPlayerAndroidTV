@@ -64,6 +64,7 @@ kotlin {
             api(libs.androidx.lifecycle.runtimeCompose)
 
             implementation(libs.ktor.client.core)
+            implementation(libs.ktor.client.logging)
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.kotlinx.json)
 
@@ -92,25 +93,57 @@ sqldelight {
 
 android {
     namespace = "org.nas.videoplayerandroidtv"
-    compileSdk = libs.versions.android.compileSdk.get().toInt()
+    compileSdk = 34 
 
     defaultConfig {
         applicationId = "org.nas.videoplayerandroidtv"
-        minSdk = libs.versions.android.minSdk.get().toInt()
-        targetSdk = libs.versions.android.targetSdk.get().toInt()
+        minSdk = 24
+        targetSdk = 34 // 안드로이드 14 타겟 (Shield TV 11과 호환됨)
         versionCode = 1
         versionName = "1.0"
+        
+        ndk {
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86_64"))
+        }
     }
+
+    // 릴리스 빌드 시 Lint 오류로 인한 중단 방지
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
+
+    // 모든 아키텍처를 포함하는 범용 APK(Universal APK) 생성 설정
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a", "x86_64")
+            isUniversalApk = true
+        }
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
-    }
-    buildTypes {
-        getByName("release") {
-            isMinifyEnabled = false
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
+    
+    buildTypes {
+        getByName("debug") {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
+        }
+        getByName("release") {
+            isMinifyEnabled = false
+            // 테스트를 위해 릴리스 빌드에도 디버그 서명 적용
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11

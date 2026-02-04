@@ -103,7 +103,7 @@ fun SeriesDetailScreen(
     onPositionUpdate: (Long) -> Unit,
     onBack: () -> Unit,
     onPlay: (Movie, List<Movie>, Long) -> Unit,
-    onPreviewPlay: (Movie) -> Unit = {} // 미리보기 재생 시 호출될 콜백 추가
+    onPreviewPlay: (Movie) -> Unit = {}
 ) {
     var state by remember { mutableStateOf(SeriesDetailState()) }
     var currentPlaybackTime by remember { mutableStateOf(initialPlaybackPosition) }
@@ -132,7 +132,7 @@ fun SeriesDetailScreen(
         containerColor = Color.Black
     ) { pv ->
         if (state.isLoading) {
-            Column(modifier = Modifier.fillMaxSize().padding(pv).verticalScroll(rememberScrollState())) {
+            Column(modifier = Modifier.fillMaxSize().padding(pv)) {
                 HeaderSkeleton()
                 Spacer(Modifier.height(16.dp))
                 EpisodeListSkeleton()
@@ -164,7 +164,7 @@ private fun DetailTopBar(title: String, onBack: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     
     Row(
-        modifier = Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp),
+        modifier = Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         IconButton(
@@ -179,7 +179,8 @@ private fun DetailTopBar(title: String, onBack: () -> Unit) {
         ) { 
             Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = if (isFocused) Color.Red else Color.White) 
         }
-        Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.width(8.dp))
+        Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -197,7 +198,6 @@ private fun DetailContent(
     val firstSeason = state.seasons.firstOrNull()
     val firstEpisode = firstSeason?.episodes?.firstOrNull()
 
-    // 미리보기 재생 감지를 위한 효과
     LaunchedEffect(firstEpisode) {
         if (firstEpisode != null) {
             onPreviewPlay(firstEpisode)
@@ -222,7 +222,7 @@ private fun DetailContent(
             onFullscreenClick = playFirstEpisode
         )
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(24.dp))
 
         if (state.seasons.isNotEmpty()) {
             if (state.seasons.size > 1) {
@@ -242,7 +242,7 @@ private fun DetailContent(
         } else {
             Text("영상 정보를 찾을 수 없습니다.", color = Color.Gray, modifier = Modifier.padding(16.dp))
         }
-        Spacer(Modifier.height(50.dp))
+        Spacer(Modifier.height(100.dp))
     }
 }
 
@@ -266,14 +266,15 @@ private fun SeasonSelector(seasons: List<Season>, selectedIndex: Int, onSeasonSe
                     unfocusedTextColor = Color.White
                 ),
                 modifier = Modifier
-                    .widthIn(min = 160.dp)
+                    .widthIn(min = 200.dp)
                     .menuAnchor()
                     .onFocusChanged { isFocused = it.isFocused }
                     .border(
-                        width = if (isFocused) 2.dp else 0.dp,
-                        color = if (isFocused) Color.White else Color.Transparent,
+                        width = if (isFocused) 3.dp else 0.dp,
+                        color = if (isFocused) Color.Yellow else Color.Transparent,
                         shape = RoundedCornerShape(4.dp)
                     )
+                    .focusable()
             )
             ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 seasons.forEachIndexed { index, season ->
@@ -296,102 +297,79 @@ private fun SeriesDetailHeader(
     onFullscreenClick: () -> Unit = {}
 ) {
     var isPlayButtonFocused by remember { mutableStateOf(false) }
+    var isPlayerFocused by remember { mutableStateOf(false) }
 
-    Box(modifier = Modifier.fillMaxWidth().height(300.dp)) {
-        if (previewUrl != null) {
-            VideoPlayer(
-                url = previewUrl,
-                modifier = Modifier.fillMaxSize(),
-                initialPosition = initialPosition,
-                onPositionUpdate = onPositionUpdate,
-                onFullscreenClick = onFullscreenClick
-            )
-        } else {
-            TmdbAsyncImage(title = series.title, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, isLarge = true)
+    Column {
+        // 상단 플레이어 영역 (포커스 가능하게 개선)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(350.dp)
+                .onFocusChanged { isPlayerFocused = it.isFocused }
+                .focusable()
+                .clickable { onFullscreenClick() }
+                .border(
+                    width = if (isPlayerFocused) 4.dp else 0.dp,
+                    color = if (isPlayerFocused) Color.White else Color.Transparent
+                )
+        ) {
+            if (previewUrl != null) {
+                VideoPlayer(
+                    url = previewUrl,
+                    modifier = Modifier.fillMaxSize(),
+                    initialPosition = initialPosition,
+                    onPositionUpdate = onPositionUpdate,
+                    onFullscreenClick = onFullscreenClick
+                )
+            } else {
+                TmdbAsyncImage(title = series.title, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, isLarge = true)
+            }
             
-            Icon(
-                imageVector = Icons.Default.PlayArrow,
-                contentDescription = "Play",
-                tint = Color.White.copy(alpha = 0.8f),
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(80.dp)
-                    .clickable { onPlayClick() }
-                    .background(Color.Black.copy(alpha = 0.4f), CircleShape)
-                    .padding(8.dp)
-            )
+            if (isPlayerFocused) {
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(80.dp), tint = Color.White)
+                    Text("전체화면으로 보기", color = Color.White, modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp), fontWeight = FontWeight.Bold)
+                }
+            }
         }
         
-        Box(
-            modifier = Modifier.fillMaxSize().background(
-                androidx.compose.ui.graphics.Brush.verticalGradient(
-                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.5f))
-                )
-            )
-        )
-    }
-    
-    Button(
-        onClick = onPlayClick,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .onFocusChanged { isPlayButtonFocused = it.isFocused }
-            .border(
-                width = if (isPlayButtonFocused) 4.dp else 0.dp,
-                color = if (isPlayButtonFocused) Color.White else Color.Transparent,
-                shape = RoundedCornerShape(4.dp)
-            ),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (isPlayButtonFocused) Color.Red else Color.White
-        ),
-        shape = RoundedCornerShape(4.dp)
-    ) {
-        Icon(Icons.Default.PlayArrow, null, tint = if (isPlayButtonFocused) Color.White else Color.Black)
-        Spacer(Modifier.width(8.dp))
-        Text("재생", color = if (isPlayButtonFocused) Color.White else Color.Black, fontWeight = FontWeight.Bold)
-    }
+        Spacer(Modifier.height(16.dp))
 
-    Text(metadata?.overview ?: "상세 정보를 불러오는 중입니다...", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = Color.LightGray, fontSize = 14.sp, lineHeight = 20.sp)
-
-    if (credits.isNotEmpty()) {
-        Text("성우 및 출연진", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
-            items(credits) { cast ->
-                var isCastFocused by remember { mutableStateOf(false) }
-                val scale by animateFloatAsState(if (isCastFocused) 1.1f else 1f)
-
-                Column(
+        // 정보 영역
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(series.title.cleanTitle(), color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = onPlayClick,
                     modifier = Modifier
-                        .width(90.dp)
-                        .padding(end = 12.dp)
-                        .scale(scale)
-                        .onFocusChanged { isCastFocused = it.isFocused }
-                        .focusable(), 
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .width(150.dp)
+                        .height(48.dp)
+                        .onFocusChanged { isPlayButtonFocused = it.isFocused }
+                        .border(
+                            width = if (isPlayButtonFocused) 3.dp else 0.dp,
+                            color = if (isPlayButtonFocused) Color.Yellow else Color.Transparent,
+                            shape = RoundedCornerShape(4.dp)
+                        ),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isPlayButtonFocused) Color.White else Color.Red
+                    ),
+                    shape = RoundedCornerShape(4.dp)
                 ) {
-                    var isLoading by remember { mutableStateOf(true) }
-                    Box(
-                        modifier = Modifier
-                            .size(70.dp)
-                            .clip(CircleShape)
-                            .background(shimmerBrush(showShimmer = isLoading))
-                            .border(
-                                width = if (isCastFocused) 2.dp else 0.dp,
-                                color = if (isCastFocused) Color.White else Color.Transparent,
-                                shape = CircleShape
-                            )
-                    ) {
-                        AsyncImage(
-                            model = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_SMALL${cast.profilePath}",
-                            contentDescription = cast.name,
-                            onState = { state -> isLoading = state is AsyncImagePainter.State.Loading },
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Text(cast.name, color = if (isCastFocused) Color.Red else Color.White, fontSize = 11.sp, textAlign = TextAlign.Center, maxLines = 2)
+                    Icon(Icons.Default.PlayArrow, null, tint = if (isPlayButtonFocused) Color.Black else Color.White)
+                    Spacer(Modifier.width(8.dp))
+                    Text("재생", color = if (isPlayButtonFocused) Color.Black else Color.White, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(metadata?.overview ?: "상세 정보를 불러오는 중입니다...", color = Color.LightGray, fontSize = 15.sp, lineHeight = 22.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
+            }
+        }
+
+        if (credits.isNotEmpty()) {
+            Text("출연진", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), fontSize = 18.sp)
+            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
+                items(credits) { cast ->
+                    CastItem(cast)
                 }
             }
         }
@@ -399,8 +377,47 @@ private fun SeriesDetailHeader(
 }
 
 @Composable
+private fun CastItem(cast: TmdbCast) {
+    var isFocused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (isFocused) 1.1f else 1f)
+
+    Column(
+        modifier = Modifier
+            .width(100.dp)
+            .padding(end = 16.dp)
+            .scale(scale)
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable(), 
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        var isLoading by remember { mutableStateOf(true) }
+        Box(
+            modifier = Modifier
+                .size(80.dp)
+                .clip(CircleShape)
+                .background(shimmerBrush(showShimmer = isLoading))
+                .border(
+                    width = if (isFocused) 3.dp else 0.dp,
+                    color = if (isFocused) Color.White else Color.Transparent,
+                    shape = CircleShape
+                )
+        ) {
+            AsyncImage(
+                model = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_SMALL${cast.profilePath}",
+                contentDescription = cast.name,
+                onState = { state -> isLoading = state is AsyncImagePainter.State.Loading },
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(cast.name, color = if (isFocused) Color.Red else Color.White, fontSize = 12.sp, textAlign = TextAlign.Center, maxLines = 2, fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal)
+    }
+}
+
+@Composable
 private fun EpisodeList(episodes: List<Movie>, metadata: TmdbMetadata?, onPlay: (Movie) -> Unit) {
-    Text("에피소드", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+    Text("에피소드", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 12.dp), fontSize = 20.sp)
     Column(Modifier.padding(horizontal = 8.dp)) {
         episodes.forEach { ep -> EpisodeItem(ep, metadata, onPlay = { onPlay(ep) }) }
     }
@@ -418,20 +435,21 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
             episodeDetails = fetchTmdbEpisodeDetails(seriesMeta.tmdbId, season, episodeNum)
         }
     }
+    
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp, horizontal = 8.dp)
+            .padding(vertical = 6.dp, horizontal = 8.dp)
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable(onClick = onPlay)
-            .background(if (isFocused) Color.DarkGray.copy(alpha = 0.4f) else Color.Transparent)
+            .background(if (isFocused) Color.White.copy(alpha = 0.15f) else Color.Transparent, RoundedCornerShape(8.dp))
             .border(
-                width = if (isFocused) 2.dp else 0.dp,
+                width = if (isFocused) 3.dp else 0.dp,
                 color = if (isFocused) Color.White else Color.Transparent,
-                shape = RoundedCornerShape(4.dp)
+                shape = RoundedCornerShape(8.dp)
             )
-            .padding(8.dp), 
+            .padding(12.dp), 
         verticalAlignment = Alignment.CenterVertically
     ) {
         val imageUrl = when {
@@ -443,8 +461,8 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
         var isLoading by remember { mutableStateOf(true) }
         Box(
             modifier = Modifier
-                .width(140.dp)
-                .height(80.dp)
+                .width(160.dp)
+                .height(90.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .background(shimmerBrush(showShimmer = isLoading && imageUrl.isNotEmpty()))
         ) {
@@ -459,11 +477,11 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
             }
         }
 
-        Spacer(Modifier.width(16.dp))
+        Spacer(Modifier.width(20.dp))
         Column(Modifier.weight(1f)) {
-            Text(movie.title.prettyTitle(), color = if (isFocused) Color.Red else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(4.dp))
-            Text(text = episodeDetails?.overview ?: "줄거리 정보가 없습니다.", color = Color.Gray, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp)
+            Text(movie.title.prettyTitle(), color = if (isFocused) Color.Yellow else Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(6.dp))
+            Text(text = episodeDetails?.overview ?: "줄거리 정보가 없습니다.", color = Color.Gray, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 18.sp)
         }
     }
 }
@@ -479,40 +497,26 @@ private fun ShimmeringBox(modifier: Modifier) {
 @Composable
 private fun HeaderSkeleton() {
     Column {
-        ShimmeringBox(modifier = Modifier.fillMaxWidth().height(280.dp))
+        ShimmeringBox(modifier = Modifier.fillMaxWidth().height(300.dp))
         Spacer(Modifier.height(16.dp))
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ShimmeringBox(modifier = Modifier.width(200.dp).height(30.dp))
             ShimmeringBox(modifier = Modifier.fillMaxWidth().height(20.dp))
-            ShimmeringBox(modifier = Modifier.fillMaxWidth(0.9f).height(20.dp))
             ShimmeringBox(modifier = Modifier.fillMaxWidth(0.7f).height(20.dp))
-        }
-        Spacer(Modifier.height(24.dp))
-        Text("성우 및 출연진", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
-            items(5) {
-                Column(Modifier.padding(end = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    ShimmeringBox(modifier = Modifier.size(70.dp).clip(CircleShape))
-                    Spacer(Modifier.height(4.dp))
-                    ShimmeringBox(modifier = Modifier.width(60.dp).height(12.dp))
-                }
-            }
         }
     }
 }
 
 @Composable
 private fun EpisodeListSkeleton() {
-    Column {
-        Text("에피소드", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-        Column(Modifier.padding(horizontal = 8.dp)) {
-            repeat(3) {
-                Row(Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ShimmeringBox(modifier = Modifier.width(140.dp).height(80.dp).clip(RoundedCornerShape(4.dp)))
-                    Spacer(Modifier.width(16.dp))
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        ShimmeringBox(modifier = Modifier.fillMaxWidth(0.8f).height(14.dp))
-                        ShimmeringBox(modifier = Modifier.fillMaxWidth(0.95f).height(12.dp))
-                    }
+    Column(Modifier.padding(16.dp)) {
+        repeat(3) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                ShimmeringBox(modifier = Modifier.width(140.dp).height(80.dp).clip(RoundedCornerShape(4.dp)))
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    ShimmeringBox(modifier = Modifier.fillMaxWidth(0.8f).height(14.dp))
+                    ShimmeringBox(modifier = Modifier.fillMaxWidth(0.95f).height(12.dp))
                 }
             }
         }

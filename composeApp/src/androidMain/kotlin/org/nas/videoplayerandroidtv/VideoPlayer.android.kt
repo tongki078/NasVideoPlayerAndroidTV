@@ -17,6 +17,9 @@ import androidx.media3.ui.PlayerView
 import android.util.Log
 import android.view.View
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
 
 @OptIn(UnstableApi::class)
@@ -31,6 +34,7 @@ actual fun VideoPlayer(
     onVideoEnded: (() -> Unit)?
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnVideoEnded by rememberUpdatedState(onVideoEnded)
     val currentOnPositionUpdate by rememberUpdatedState(onPositionUpdate)
     val currentOnVisibilityChanged by rememberUpdatedState(onControllerVisibilityChanged)
@@ -58,6 +62,28 @@ actual fun VideoPlayer(
             }
     }
 
+    // 라이프사이클 관찰 (홈 이동 시 재생 중단 해결)
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> {
+                    exoPlayer.pause()
+                }
+                Lifecycle.Event.ON_RESUME -> {
+                    // 필요 시 다시 자동 재생 (playWhenReady가 true면 자동 재생됨)
+                    // exoPlayer.play() 
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            exoPlayer.stop()
+            exoPlayer.release()
+        }
+    }
+
     LaunchedEffect(exoPlayer) {
         while (true) {
             if (exoPlayer.isPlaying) {
@@ -76,20 +102,12 @@ actual fun VideoPlayer(
         exoPlayer.play()
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            exoPlayer.stop()
-            exoPlayer.release()
-        }
-    }
-
     Box(modifier = modifier) {
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     player = exoPlayer
                     useController = true
-                    // 최신 Media3 가시성 리스너 설정
                     setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
                         currentOnVisibilityChanged?.invoke(visibility == View.VISIBLE)
                     })

@@ -1,5 +1,6 @@
 package org.nas.videoplayerandroidtv
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -53,7 +54,6 @@ fun App(driver: SqlDriver) {
     val searchHistoryDataSource = remember { SearchHistoryDataSource(db) }
     val watchHistoryDataSource = remember { WatchHistoryDataSource(db) }
     
-    // Explicit types specified to solve inference errors
     val recentQueriesState = searchHistoryDataSource.getRecentQueries()
         .map { list -> list.map { it.toData() } }
         .collectAsState(initial = emptyList<SearchHistory>())
@@ -90,7 +90,23 @@ fun App(driver: SqlDriver) {
     var selectedForeignTvMode by rememberSaveable { mutableStateOf(0) }
     var selectedKoreanTvMode by rememberSaveable { mutableStateOf(0) }
 
-    // 시청 기록 저장 함수 (중복 제거 및 최신화)
+    // ==========================================
+    // BackHandler 추가
+    // ==========================================
+    BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME) {
+        when {
+            selectedMovie != null -> {
+                selectedMovie = null
+            }
+            selectedSeries != null -> {
+                selectedSeries = null
+            }
+            currentScreen != Screen.HOME -> {
+                currentScreen = Screen.HOME
+            }
+        }
+    }
+
     val saveWatchHistory: (Movie) -> Unit = { movie ->
         scope.launch(Dispatchers.Default) {
             val isAni = movie.videoUrl.contains("애니메이션") || movie.title.contains("애니메이션")
@@ -106,7 +122,6 @@ fun App(driver: SqlDriver) {
         }
     }
 
-    // 검색을 실행하는 공통 함수
     val performSearch: suspend (String, String) -> Unit = { query, category ->
         if (query.length >= 2) {
             isSearchLoading = true
@@ -149,7 +164,6 @@ fun App(driver: SqlDriver) {
         }
     }
 
-    // 텍스트 입력 시 자동 검색 (500ms 지연)
     LaunchedEffect(searchQuery, searchCategory) {
         if (searchQuery.isNotEmpty()) {
             delay(500)
@@ -163,31 +177,15 @@ fun App(driver: SqlDriver) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Scaffold(
                 topBar = {
-                    if (selectedMovie == null && currentScreen != Screen.SEARCH) {
+                    // 영상 재생 중이 아닐 때만 상단 바 표시 (검색 화면 포함)
+                    if (selectedMovie == null) {
                         NetflixTopBar(currentScreen) { 
                             currentScreen = it
                             selectedSeries = null 
                         }
                     }
-                },
-                bottomBar = { 
-                    if (selectedMovie == null) {
-                        // NavigationBar 대신 NavigationRail 또는 TV 전용 사이드바를 고려할 수 있으나, 
-                        // 일단 TV UI에선 하단 바보다는 포커스 가능한 메뉴가 중요합니다.
-                        NavigationBar(containerColor = Color.Black) {
-                            NavigationBarItem(
-                                selected = currentScreen == Screen.HOME, 
-                                onClick = { currentScreen = Screen.HOME; selectedSeries = null }, 
-                                icon = { Icon(Icons.Default.Home, null) }, label = { Text("홈") }
-                            )
-                            NavigationBarItem(
-                                selected = currentScreen == Screen.SEARCH, 
-                                onClick = { currentScreen = Screen.SEARCH; selectedSeries = null }, 
-                                icon = { Icon(Icons.Default.Search, null) }, label = { Text("검색") }
-                            )
-                        }
-                    }
                 }
+                // 하단 바(bottomBar)를 제거하여 화면을 더 넓게 사용
             ) { pv ->
                 Box(Modifier.padding(pv).fillMaxSize()) {
                     when {
@@ -215,7 +213,7 @@ fun App(driver: SqlDriver) {
                                     lastPlaybackPosition = pos
                                     saveWatchHistory(movie)
                                 },
-                                onPreviewPlay = { movie -> saveWatchHistory(movie) } // 미리보기 콜백 연결
+                                onPreviewPlay = { movie -> saveWatchHistory(movie) }
                             )
                         }
                         currentScreen == Screen.SEARCH -> {
@@ -244,7 +242,7 @@ fun App(driver: SqlDriver) {
                             )
                         }
                         currentScreen == Screen.HOME -> {
-                            key(watchHistory) { // watchHistory 변경 시 UI 갱신 유도
+                            key(watchHistory) {
                                 HomeScreen(
                                     watchHistory = watchHistory, 
                                     latestMovies = homeLatestSeries, 

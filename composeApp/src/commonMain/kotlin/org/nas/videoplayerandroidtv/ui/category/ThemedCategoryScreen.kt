@@ -1,6 +1,9 @@
 package org.nas.videoplayerandroidtv.ui.category
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -13,8 +16,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -26,7 +33,6 @@ import org.nas.videoplayerandroidtv.ui.common.MovieRow
 import org.nas.videoplayerandroidtv.*
 import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ThemedCategoryScreen(
     categoryName: String,
@@ -34,7 +40,7 @@ fun ThemedCategoryScreen(
     repository: VideoRepository,
     selectedMode: Int,
     onModeChange: (Int) -> Unit,
-    lazyListState: LazyListState = rememberLazyListState(), // 스크롤 상태 보존
+    lazyListState: LazyListState = rememberLazyListState(),
     onSeriesClick: (Series) -> Unit
 ) {
     val isAirScreen = categoryName == "방송중"
@@ -43,16 +49,16 @@ fun ThemedCategoryScreen(
     val isForeignTvScreen = categoryName == "외국TV"
     val isKoreanTvScreen = categoryName == "국내TV"
 
-    val selectedCategoryText = when {
-        isAirScreen -> if (selectedMode == 0) "라프텔 애니메이션" else "드라마"
-        isAniScreen -> if (selectedMode == 0) "라프텔" else "시리즈"
-        isMovieScreen -> when(selectedMode) { 0 -> "최신"; 1 -> "UHD"; else -> "제목" }
-        isForeignTvScreen -> when(selectedMode) { 0 -> "중국 드라마"; 1 -> "일본 드라마"; 2 -> "미국 드라마"; 3 -> "기타국가 드라마"; else -> "다큐" }
-        isKoreanTvScreen -> when(selectedMode) { 0 -> "드라마"; 1 -> "시트콤"; 2 -> "교양"; 3 -> "다큐멘터리"; else -> "예능" }
-        else -> categoryName
+    val modes = when {
+        isAirScreen -> listOf("라프텔 애니메이션", "드라마")
+        isAniScreen -> listOf("라프텔", "시리즈")
+        isMovieScreen -> listOf("최신", "UHD", "제목")
+        isForeignTvScreen -> listOf("중국 드라마", "일본 드라마", "미국 드라마", "기타국가 드라마", "다큐")
+        isKoreanTvScreen -> listOf("드라마", "시트콤", "교양", "다큐멘터리", "예능")
+        else -> emptyList()
     }
     
-    var expanded by remember { mutableStateOf(false) }
+    val selectedCategoryText = modes.getOrNull(selectedMode) ?: categoryName
     var themedSections by remember(selectedMode, categoryName) { mutableStateOf<List<Pair<String, List<Series>>>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
@@ -130,41 +136,22 @@ fun ThemedCategoryScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        if (isAirScreen || isAniScreen || isMovieScreen || isForeignTvScreen || isKoreanTvScreen) {
-            ExposedCategoryDropdown(
-                expanded = expanded,
-                onExpandedChange = { expanded = it },
-                selectedText = selectedCategoryText
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF0F0F0F))) {
+        // TV 전용 가로형 카테고리 탭 바
+        if (modes.isNotEmpty()) {
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp, horizontal = 48.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                when {
-                    isAirScreen -> {
-                        DropdownMenuItem(text = { Text("라프텔 애니메이션") }, onClick = { onModeChange(0); expanded = false })
-                        DropdownMenuItem(text = { Text("드라마") }, onClick = { onModeChange(1); expanded = false })
-                    }
-                    isAniScreen -> {
-                        DropdownMenuItem(text = { Text("라프텔") }, onClick = { onModeChange(0); expanded = false })
-                        DropdownMenuItem(text = { Text("시리즈") }, onClick = { onModeChange(1); expanded = false })
-                    }
-                    isMovieScreen -> {
-                        DropdownMenuItem(text = { Text("최신") }, onClick = { onModeChange(0); expanded = false })
-                        DropdownMenuItem(text = { Text("UHD") }, onClick = { onModeChange(1); expanded = false })
-                        DropdownMenuItem(text = { Text("제목") }, onClick = { onModeChange(2); expanded = false })
-                    }
-                    isForeignTvScreen -> {
-                        DropdownMenuItem(text = { Text("중국 드라마") }, onClick = { onModeChange(0); expanded = false })
-                        DropdownMenuItem(text = { Text("일본 드라마") }, onClick = { onModeChange(1); expanded = false })
-                        DropdownMenuItem(text = { Text("미국 드라마") }, onClick = { onModeChange(2); expanded = false })
-                        DropdownMenuItem(text = { Text("기타국가 드라마") }, onClick = { onModeChange(3); expanded = false })
-                        DropdownMenuItem(text = { Text("다큐") }, onClick = { onModeChange(4); expanded = false })
-                    }
-                    isKoreanTvScreen -> {
-                        DropdownMenuItem(text = { Text("드라마") }, onClick = { onModeChange(0); expanded = false })
-                        DropdownMenuItem(text = { Text("시트콤") }, onClick = { onModeChange(1); expanded = false })
-                        DropdownMenuItem(text = { Text("교양") }, onClick = { onModeChange(2); expanded = false })
-                        DropdownMenuItem(text = { Text("다큐멘터리") }, onClick = { onModeChange(3); expanded = false })
-                        DropdownMenuItem(text = { Text("예능") }, onClick = { onModeChange(4); expanded = false })
-                    }
+                items(modes.size) { index ->
+                    CategoryTabItem(
+                        text = modes[index],
+                        isSelected = selectedMode == index,
+                        onClick = { onModeChange(index) }
+                    )
                 }
             }
         }
@@ -196,55 +183,59 @@ fun ThemedCategoryScreen(
 }
 
 @Composable
-@OptIn(ExperimentalMaterial3Api::class)
-private fun ExposedCategoryDropdown(
-    expanded: Boolean,
-    onExpandedChange: (Boolean) -> Unit,
-    selectedText: String,
-    content: @Composable ColumnScope.() -> Unit
+private fun CategoryTabItem(
+    text: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
 ) {
-     Box(modifier = Modifier.padding(16.dp)) {
-        ExposedDropdownMenuBox(
-            expanded = expanded,
-            onExpandedChange = onExpandedChange,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            OutlinedTextField(
-                value = selectedText,
-                onValueChange = {},
-                readOnly = true,
-                label = { Text("카테고리 선택", color = Color.Gray) },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Red,
-                    unfocusedBorderColor = Color.Gray,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedLabelColor = Color.Red,
-                    unfocusedLabelColor = Color.Gray
-                ),
-                modifier = Modifier.fillMaxWidth().menuAnchor()
-            )
-            ExposedDropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { onExpandedChange(false) },
-                content = content
-            )
+    var isFocused by remember { mutableStateOf(false) }
+    
+    val backgroundColor by animateColorAsState(
+        when {
+            isFocused -> Color.White
+            isSelected -> Color.Red
+            else -> Color.Gray.copy(alpha = 0.2f)
         }
+    )
+    
+    val textColor by animateColorAsState(
+        when {
+            isFocused -> Color.Black
+            isSelected -> Color.White
+            else -> Color.Gray
+        }
+    )
+
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(24.dp))
+            .background(backgroundColor)
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable()
+            .clickable { onClick() }
+            .padding(horizontal = 20.dp, vertical = 8.dp)
+            .scale(if (isFocused) 1.1f else 1.0f),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = textColor,
+            fontSize = 16.sp,
+            fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
+        )
     }
 }
 
 @Composable
 private fun CategorySectionSkeleton() {
-    Column(Modifier.padding(vertical = 16.dp)) {
-        Box(Modifier.padding(horizontal = 16.dp).width(150.dp).height(24.dp).clip(RoundedCornerShape(4.dp)).background(shimmerBrush()))
+    Column(Modifier.padding(vertical = 16.dp, horizontal = 48.dp)) {
+        Box(Modifier.width(150.dp).height(24.dp).clip(RoundedCornerShape(4.dp)).background(shimmerBrush()))
         Spacer(Modifier.height(16.dp))
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             items(5) {
                 Box(
                     modifier = Modifier
-                        .size(130.dp, 200.dp)
-                        .padding(end = 12.dp)
+                        .size(140.dp, 210.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(shimmerBrush())
                 )
