@@ -91,7 +91,9 @@ fun HomeScreen(
             val popular = (latestMovies.take(5) + animations.take(5)).shuffled()
             val finalData = listOf(
                 "지금 가장 핫한 인기작" to popular,
-                "최근 업데이트" to latestMovies.take(limit),
+                "영화" to latestMovies.take(limit),
+                "애니메이션" to animations.take(limit),
+                "최근 업데이트" to (latestMovies + animations).take(limit),
                 "시간 순삭! 액션 & 판타지" to action,
                 "유쾌한 웃음! 코미디 & 일상" to comedy,
                 "가슴 뭉클! 감동 드라마" to drama
@@ -125,8 +127,8 @@ fun HomeScreen(
                 if (heroMovie != null) {
                     HeroSection(
                         movie = heroMovie,
-                        isAnimation = false,
-                        onClick = { onSeriesClick(latestMovies.first()) },
+                        isAnimation = animations.any { it.title == heroMovie.title },
+                        onClick = { onSeriesClick(latestMovies.firstOrNull { it.title == heroMovie.title } ?: animations.first { it.title == heroMovie.title }) },
                         onPlay = onPlayClick,
                         horizontalPadding = horizontalPadding
                     )

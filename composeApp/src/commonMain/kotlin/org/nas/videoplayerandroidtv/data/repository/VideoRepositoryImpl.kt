@@ -10,26 +10,31 @@ import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.cleanTitle
 import kotlinx.coroutines.*
 
-private val REGEX_GROUP_BY_SERIES = Regex("""(?i)[.\s_-]+(?:S\d+E\d+|S\d+|E\d+|EP\d+|\d+화|\d+회|시즌\d+|\d+기).*""")
+private val REGEX_GROUP_BY_SERIES = Regex("""(?i)[.\s_-]+(?:S\d+E\d+|S\d+|E\d+|EP\d+|\d+화|\d+회|시즌\d+|\d+기|\(\d+\)).*""")
 
 class VideoRepositoryImpl : VideoRepository {
     private val client = NasApiClient.client
     private val baseUrl = NasApiClient.BASE_URL
 
     override suspend fun getCategoryList(path: String, limit: Int, offset: Int): List<Category> = try {
-        client.get("$baseUrl/list") {
+        val categories: List<Category> = client.get("$baseUrl/list") {
             parameter("path", path)
             parameter("limit", limit)
             parameter("offset", offset)
         }.body()
+        categories.distinctBy { it.name ?: it.path }
+            .map { it.copy(movies = it.movies?.distinctBy { m -> m.id }) }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         emptyList()
     }
 
     override suspend fun getCategoryVideoCount(path: String): Int = try {
-        val response: List<Category> = client.get("$baseUrl/list?path=${path.encodeURLParameter()}").body()
-        response.sumOf { it.movies?.size ?: 0 }
+        val response: List<Category> = client.get("$baseUrl/list") {
+            parameter("path", path)
+        }.body()
+        response.distinctBy { it.name ?: it.path }
+            .sumOf { it.movies?.distinctBy { m -> m.id }?.size ?: 0 }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         0
@@ -37,7 +42,10 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun searchVideos(query: String, category: String): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val results: List<Category> = client.get("$baseUrl/search?q=${query.encodeURLParameter()}${if (category != "전체") "&category=${category.encodeURLParameter()}" else ""}").body()
+            val results: List<Category> = client.get("$baseUrl/search") {
+                parameter("q", query)
+                if (category != "전체") parameter("category", category)
+            }.body()
             results.flatMap { it.movies ?: emptyList() }.groupBySeries()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -45,13 +53,36 @@ class VideoRepositoryImpl : VideoRepository {
         }
     }
 
-    override suspend fun getLatestMovies(): List<Series> = withContext(Dispatchers.Default) {
+    override suspend fun getLatestMovies(limit: Int, offset: Int): List<Series> = getMoviesFlat("최신", limit, offset)
+    override suspend fun getPopularMovies(limit: Int, offset: Int): List<Series> = getLatestMovies(limit, offset)
+    override suspend fun getUhdMovies(limit: Int, offset: Int): List<Series> = getMoviesFlat("UHD", limit, offset)
+    override suspend fun getMoviesByTitle(limit: Int, offset: Int): List<Series> = getMoviesFlat("제목", limit, offset)
+
+    private suspend fun getMoviesFlat(route: String, limit: Int, offset: Int): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val results: List<Category> = client.get("$baseUrl/movies").body()
-            results.flatMap { it.movies ?: emptyList() }.groupBySeries()
+            // [개선] lite=true를 보내서 파일 상세 정보를 제외하고 장르/포스터 정보만 가져옴
+            val response: List<Category> = client.get("$baseUrl/movies") {
+                parameter("route", route)
+                parameter("limit", limit)
+                parameter("offset", offset)
+                parameter("lite", "true")
+            }.body()
+            
+            response
+                .distinctBy { it.name ?: it.path }
+                .map { cat ->
+                    Series(
+                        title = cat.name ?: "Unknown",
+                        episodes = emptyList(), // 메인 리스트에선 비워둠
+                        fullPath = "영화/${cat.path}",
+                        genreIds = cat.genreIds ?: emptyList(), // 서버측 장르 정보 활용
+                        posterPath = cat.posterPath // 서버측 포스터 경로 활용
+                    )
+                }
+                .distinctBy { it.title }
+                .sortedBy { it.title }
         } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            getAirDataInternal() 
+            emptyList()
         }
     }
 
@@ -68,6 +99,7 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getAnimationsAll(): List<Series> = withContext(Dispatchers.Default) {
         try {
             val response = client.get("$baseUrl/animations_all") {
+                parameter("lite", "true")
                 timeout { requestTimeoutMillis = 30000 }
             }
             if (response.status == HttpStatusCode.OK) {
@@ -79,20 +111,24 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun getAnimationsRaftel(limit: Int, offset: Int): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val categories: List<Category> = client.get("$baseUrl/anim_raftel").body()
+            val categories: List<Category> = client.get("$baseUrl/anim_raftel") {
+                parameter("limit", limit)
+                parameter("offset", offset)
+                parameter("lite", "true")
+            }.body()
             categories.groupCategoriesToSeries("애니메이션")
-        } catch (e: Exception) {
-            emptyList() 
-        }
+        } catch (e: Exception) { emptyList() }
     }
 
     override suspend fun getAnimationsSeries(limit: Int, offset: Int): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val categories: List<Category> = client.get("$baseUrl/anim_series").body()
+            val categories: List<Category> = client.get("$baseUrl/anim_series") {
+                parameter("limit", limit)
+                parameter("offset", offset)
+                parameter("lite", "true")
+            }.body()
             categories.groupCategoriesToSeries("애니메이션")
-        } catch (e: Exception) {
-            emptyList() 
-        }
+        } catch (e: Exception) { emptyList() }
     }
 
     override suspend fun getDramas(): List<Series> = withContext(Dispatchers.Default) {
@@ -105,35 +141,41 @@ class VideoRepositoryImpl : VideoRepository {
         }
     }
     
-    override suspend fun getAnimationsAir(): List<Series> = 
-        getAirDataInternal(filterKeyword = "라프텔")
-
-    override suspend fun getDramasAir(): List<Series> = 
-        getAirDataInternal(filterKeyword = "드라마")
+    override suspend fun getAnimationsAir(): List<Series> = getAirDataInternal("라프텔")
+    override suspend fun getDramasAir(): List<Series> = getAirDataInternal("드라마")
+    override suspend fun getLatestForeignTV(): List<Series> = getAirDataInternal("외국TV")
+    override suspend fun getPopularForeignTV(): List<Series> = getLatestForeignTV()
+    override suspend fun getLatestKoreanTV(): List<Series> = getAirDataInternal("국내TV")
+    override suspend fun getPopularKoreanTV(): List<Series> = getLatestKoreanTV()
 
     private suspend fun getAirDataInternal(filterKeyword: String? = null): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val response = client.get("$baseUrl/air")
+            val response = client.get("$baseUrl/air") {
+                parameter("lite", "true")
+            }
             if (response.status != HttpStatusCode.OK) return@withContext emptyList()
             
             val categories: List<Category> = response.body()
             val normalizedKeyword = filterKeyword?.replace(" ", "")?.lowercase()
             
-            val allMoviesWithPaths = categories
-                .filter { cat -> 
-                    if (normalizedKeyword == null) true
-                    else {
-                        val name = (cat.name ?: "").replace(" ", "").lowercase()
-                        val path = (cat.path ?: "").replace(" ", "").lowercase()
-                        name.contains(normalizedKeyword) || path.contains(normalizedKeyword)
-                    }
+            val filtered = categories.filter { cat -> 
+                if (normalizedKeyword == null) true
+                else {
+                    val name = (cat.name ?: "").replace(" ", "").lowercase()
+                    val path = (cat.path ?: "").replace(" ", "").lowercase()
+                    name.contains(normalizedKeyword) || path.contains(normalizedKeyword)
                 }
-                .flatMap { cat ->
-                    val catPath = cat.path ?: cat.name
-                    (cat.movies ?: emptyList()).map { it to catPath }
-                }
+            }
             
-            allMoviesWithPaths.groupBySeriesWithPaths()
+            filtered.map { cat ->
+                Series(
+                    title = cat.name ?: "Unknown",
+                    episodes = emptyList(),
+                    fullPath = cat.path,
+                    genreIds = cat.genreIds ?: emptyList(),
+                    posterPath = cat.posterPath
+                )
+            }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
@@ -148,9 +190,11 @@ class VideoRepositoryImpl : VideoRepository {
             val catPath = firstCat.path ?: firstCat.name ?: ""
             val fullPath = if (basePathPrefix.isNotEmpty()) "$basePathPrefix/$catPath" else catPath
             Series(
-                title = title,
-                episodes = emptyList(),
-                fullPath = fullPath
+                title = title, 
+                episodes = emptyList(), 
+                fullPath = fullPath,
+                genreIds = firstCat.genreIds ?: emptyList(),
+                posterPath = firstCat.posterPath
             )
         }.sortedBy { it.title }
     }
