@@ -9,6 +9,9 @@ import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.cleanTitle
 import kotlinx.coroutines.CancellationException
 
+// 미리 컴파일된 정규식으로 CPU 연산 최적화
+private val REGEX_GROUP_BY_SERIES = Regex("""(?i)[.\s_-]+(?:S\d+E\d+|S\d+|E\d+|EP\d+|\d+화|\d+회|시즌\d+|\d+기).*""")
+
 class VideoRepositoryImpl : VideoRepository {
     private val client = NasApiClient.client
     private val baseUrl = NasApiClient.BASE_URL
@@ -113,7 +116,7 @@ class VideoRepositoryImpl : VideoRepository {
 
     private fun List<Movie>.groupBySeries(basePath: String? = null): List<Series> = 
         this.groupBy { movie -> 
-            (movie.title ?: "").cleanTitle(false).replace(Regex("""(?i)[.\s_-]+(?:S\d+E\d+|S\d+|E\d+|EP\d+|\d+화|\d+회|시즌\d+|\d+기).*"""), " ").trim()
+            (movie.title ?: "").cleanTitle(false).replace(REGEX_GROUP_BY_SERIES, " ").trim()
         }.map { (title, eps) -> 
             Series(title = title, episodes = eps.sortedBy { it.title ?: "" }, fullPath = basePath)
         }.sortedByDescending { it.episodes.size }

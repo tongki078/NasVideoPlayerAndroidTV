@@ -124,7 +124,6 @@ fun App(driver: SqlDriver) {
             searchResultSeries = results
             isSearchLoading = false
             
-            // 검색 결과 메타데이터는 화면 표시 후 백그라운드 로드
             scope.launch {
                 results.take(9).forEach { series -> 
                     fetchTmdbMetadata(series.title, if (category != "전체") category.lowercase() else null, isAnimation = category == "애니메이션")
@@ -139,17 +138,17 @@ fun App(driver: SqlDriver) {
         if (currentScreen == Screen.HOME && homeLatestSeries.isEmpty()) {
             isHomeLoading = true
             try {
-                // 1. 서버에서 기본 데이터만 즉시 로드
-                val latest = repository.getLatestMovies()
-                val animations = repository.getAnimationsAir()
+                // [병렬 최적화] 영화와 애니메이션을 동시에 요청합니다.
+                val latestDeferred = async { repository.getLatestMovies() }
+                val animationsDeferred = async { repository.getAnimationsAir() }
+                
+                val latest = latestDeferred.await()
+                val animations = animationsDeferred.await()
                 
                 homeLatestSeries = latest
                 homeAnimations = animations
-                
-                // 2. 서버 데이터가 오면 로딩 인디케이터 즉시 종료
                 isHomeLoading = false
                 
-                // 3. 포스터 정보(TMDB)는 백그라운드에서 점진적으로 로드
                 scope.launch {
                     val latestJobs = latest.take(8).map { series ->
                         async { fetchTmdbMetadata(series.title) }

@@ -27,52 +27,70 @@ fun TmdbAsyncImage(
     isLarge: Boolean = false,
     isAnimation: Boolean = false
 ) {
-    val cacheKey = if (isAnimation) "ani_$title" else title
+    val cacheKey = remember(title, isAnimation) { if (isAnimation) "ani_$title" else title }
+    
+    // 캐시에서 즉시 초기값 로드 (LaunchedEffect를 기다리지 않음)
     var metadata by remember(cacheKey) { mutableStateOf(tmdbCache[cacheKey]) }
-    var isError by remember(cacheKey) { mutableStateOf(false) }
     var isLoading by remember(cacheKey) { mutableStateOf(metadata == null) }
     
-    val imageUrl = metadata?.posterUrl?.replace(
-        TMDB_POSTER_SIZE_MEDIUM, 
-        if (isLarge) TMDB_POSTER_SIZE_LARGE else TMDB_POSTER_SIZE_SMALL
-    )
+    val imageUrl = remember(metadata, isLarge) {
+        metadata?.posterUrl?.replace(
+            TMDB_POSTER_SIZE_MEDIUM, 
+            if (isLarge) TMDB_POSTER_SIZE_LARGE else TMDB_POSTER_SIZE_SMALL
+        )
+    }
 
     LaunchedEffect(cacheKey) {
         if (metadata == null) {
-            isLoading = true
-            metadata = fetchTmdbMetadata(title, typeHint, isAnimation = isAnimation)
-            isError = metadata?.posterUrl == null
+            // 다시 한번 캐시 확인 (그 사이 채워졌을 수 있음)
+            val cached = tmdbCache[cacheKey]
+            if (cached != null) {
+                metadata = cached
+                isLoading = false
+            } else {
+                isLoading = true
+                val fetched = fetchTmdbMetadata(title, typeHint, isAnimation = isAnimation)
+                metadata = fetched
+                isLoading = false
+            }
+        } else {
             isLoading = false
-        } else { 
-            isError = metadata?.posterUrl == null
-            isLoading = false 
         }
     }
     
     Box(
-        modifier = modifier
-            .background(shimmerBrush(showShimmer = isLoading && !isError))
+        modifier = modifier.background(if (metadata?.posterUrl == null && !isLoading) Color(0xFF1A1A1A) else Color.Transparent)
     ) {
-        if (imageUrl != null && !isLoading) {
+        // 이미지가 있는 경우 표시
+        if (imageUrl != null) {
             AsyncImage(
                 model = ImageRequest.Builder(LocalPlatformContext.current)
                     .data(imageUrl)
-                    .crossfade(300)
+                    .crossfade(400) // 부드러운 전환
                     .build(),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = contentScale,
-                onSuccess = { isLoading = false },
-                onError = { isError = true; isLoading = false }
+                onState = { state ->
+                    if (state is coil3.compose.AsyncImagePainter.State.Success) {
+                        isLoading = false
+                    }
+                }
             )
         }
         
-        if (isError && !isLoading && imageUrl == null) {
-            Box(Modifier.fillMaxSize().padding(8.dp), Alignment.Center) {
+        // 로딩 중일 때 Shimmer 표시 (이미지 URL이 있을 때만)
+        if (isLoading && imageUrl != null) {
+            Box(Modifier.fillMaxSize().background(shimmerBrush(showShimmer = true)))
+        }
+        
+        // 에러 또는 결과 없음 (포스터가 아예 없는 경우)
+        if (!isLoading && metadata != null && metadata!!.posterUrl == null) {
+            Box(Modifier.fillMaxSize().padding(12.dp), Alignment.Center) {
                 Text(
                     text = title.cleanTitle(includeYear = false), 
                     color = Color.Gray, 
-                    fontSize = 10.sp, 
+                    fontSize = 12.sp,
                     textAlign = TextAlign.Center, 
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis

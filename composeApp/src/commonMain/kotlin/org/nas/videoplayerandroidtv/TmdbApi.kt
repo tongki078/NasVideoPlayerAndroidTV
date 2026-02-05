@@ -94,37 +94,46 @@ data class TmdbCast(
 @Serializable
 data class TmdbRole(val character: String, @SerialName("episode_count") val episodeCount: Int)
 
+// 전역 캐시 및 중복 요청 방지용 맵
 internal val tmdbCache = mutableMapOf<String, TmdbMetadata>()
+private val tmdbInFlightRequests = mutableMapOf<String, Deferred<TmdbMetadata>>()
+
+// 미리 컴파일된 정규식 상수로 성능 최적화
+private val REGEX_EXT = Regex("""\.[a-zA-Z0-9]{2,4}$""")
+private val REGEX_HANGUL_ALPHA = Regex("""([가-힣])([a-zA-Z0-9])""")
+private val REGEX_ALPHA_HANGUL = Regex("""([a-zA-Z0-9])([가-힣])""")
+private val REGEX_START_NUM = Regex("""^\d+[.\s_-]+""")
+private val REGEX_START_PREFIX = Regex("""^[a-zA-Z]\d+[.\s_-]+""")
+private val REGEX_BRACKET_NUM = Regex("""^\[\d+\]\s*""")
+private val REGEX_YEAR = Regex("""\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)""")
+private val REGEX_BRACKETS = Regex("""\[.*?\]|\(.*?\)""")
+private val REGEX_TAGS = Regex("""(?i)[.\s_](?:더빙|자막|무삭제|\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|OVA|OAD|ONA|TV판|극장판|FLAC|xvid|DivX|MKV|MP4|AVI|속편|1부|2부|파트|완결|상|하).*""")
+private val REGEX_SPECIAL_CHARS = Regex("""[._\-::!?【】『』「」"'#@*※]""")
+private val REGEX_SPACES = Regex("""\s+""")
+private val REGEX_EP_SUFFIX = Regex("""(?i)[.\s_](?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+).*""")
+private val REGEX_SUBTITLE_SUFFIX = Regex("""(?i)[.\s_](?:S\d+E\d+|E\d+|\d+\s*(?:화|회)).*""")
 
 fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = true, preserveSubtitle: Boolean = false): String {
-    var cleaned = this
-    if (cleaned.contains(".")) { 
-        val ext = cleaned.substringAfterLast('.'); 
-        if (ext.length in 2..4) cleaned = cleaned.substringBeforeLast('.') 
-    }
-    cleaned = Regex("""([가-힣])([a-zA-Z0-9])""").replace(cleaned, "$1 $2")
-    cleaned = Regex("""([a-zA-Z0-9])([가-힣])""").replace(cleaned, "$1 $2")
-    cleaned = Regex("""^\d+[.\s_-]+""").replace(cleaned, "")
-    cleaned = Regex("""^[a-zA-Z]\d+[.\s_-]+""").replace(cleaned, "")
-    cleaned = Regex("""^\[\d+\]\s*""").replace(cleaned, "")
-    val yearMatch = Regex("""\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)""").find(cleaned)
+    var cleaned = REGEX_EXT.replace(this, "")
+    cleaned = REGEX_HANGUL_ALPHA.replace(cleaned, "$1 $2")
+    cleaned = REGEX_ALPHA_HANGUL.replace(cleaned, "$1 $2")
+    cleaned = REGEX_START_NUM.replace(cleaned, "")
+    cleaned = REGEX_START_PREFIX.replace(cleaned, "")
+    cleaned = REGEX_BRACKET_NUM.replace(cleaned, "")
+    
+    val yearMatch = REGEX_YEAR.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     if (yearMatch != null) cleaned = cleaned.replace(yearMatch.value, " ")
-    cleaned = Regex("""\[.*?\]|\(.*?\)""").replace(cleaned, " ")
+    
+    cleaned = REGEX_BRACKETS.replace(cleaned, " ")
     if (!keepAfterHyphen) {
-        val epRegex = if (preserveSubtitle) """(?i)[.\s_](?:S\d+E\d+|E\d+|\d+\s*(?:화|회)).*"""
-        else """(?i)[.\s_](?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+).*"""
-        cleaned = Regex(epRegex).replace(cleaned, "")
+        cleaned = if (preserveSubtitle) REGEX_SUBTITLE_SUFFIX.replace(cleaned, "")
+        else REGEX_EP_SUFFIX.replace(cleaned, "")
     }
-    val tagRegex = """(?i)[.\s_](?:더빙|자막|무삭제|\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|OVA|OAD|ONA|TV판|극장판|FLAC|xvid|DivX|MKV|MP4|AVI|속편|1부|2부|파트|완결|상|하).*"""
-    cleaned = Regex(tagRegex).replace(cleaned, " ")
-    cleaned = Regex("""[._\-::!?【】『』「」"'#@*※]""").replace(cleaned, " ")
-    val match = Regex("""\s+(\d+)$""").find(cleaned)
-    if (match != null) {
-        val num = match.groupValues[1].toInt()
-        if (num > 1900 && num < 2100) { cleaned = cleaned.replace(Regex("${match.groupValues[1]}$"), "") }
-    }
-    cleaned = Regex("""\s+""").replace(cleaned, " ").trim()
+    cleaned = REGEX_TAGS.replace(cleaned, " ")
+    cleaned = REGEX_SPECIAL_CHARS.replace(cleaned, " ")
+    cleaned = REGEX_SPACES.replace(cleaned, " ").trim()
+    
     if (includeYear && yearStr != null) cleaned = "$cleaned ($yearStr)"
     return if (cleaned.isBlank()) this else cleaned
 }
@@ -155,14 +164,26 @@ fun String.prettyTitle(): String {
 suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimation: Boolean = false): TmdbMetadata {
     if (TMDB_API_KEY.isBlank()) return TmdbMetadata()
     val cacheKey = if (isAnimation) "ani_$title" else title
+    
+    // 1. 이미 완료된 캐시가 있는지 확인
     tmdbCache[cacheKey]?.let { return it }
 
-    val cleanTitle = title.cleanTitle(includeYear = false, preserveSubtitle = true)
-    val metadata = performSearchSimple(cleanTitle, typeHint, isAnimation)
+    // 2. 현재 진행 중인 동일한 요청이 있는지 확인 (중복 요청 방지)
+    val deferred = synchronized(tmdbInFlightRequests) {
+        tmdbInFlightRequests.getOrPut(cacheKey) {
+            GlobalScope.async(Dispatchers.Default) {
+                val cleanTitle = title.cleanTitle(includeYear = false, preserveSubtitle = true)
+                val metadata = performSearchSimple(cleanTitle, typeHint, isAnimation)
+                val result = metadata ?: TmdbMetadata()
+                
+                synchronized(tmdbCache) { tmdbCache[cacheKey] = result }
+                synchronized(tmdbInFlightRequests) { tmdbInFlightRequests.remove(cacheKey) }
+                result
+            }
+        }
+    }
     
-    val finalResult = metadata ?: TmdbMetadata()
-    tmdbCache[cacheKey] = finalResult
-    return finalResult
+    return deferred.await()
 }
 
 private suspend fun performSearchSimple(query: String, typeHint: String?, isAnimation: Boolean): TmdbMetadata? {
