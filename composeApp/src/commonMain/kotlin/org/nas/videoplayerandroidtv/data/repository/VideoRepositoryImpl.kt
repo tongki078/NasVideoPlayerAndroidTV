@@ -7,6 +7,7 @@ import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.domain.model.*
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.cleanTitle
+import kotlinx.coroutines.CancellationException
 
 class VideoRepositoryImpl : VideoRepository {
     private val client = NasApiClient.client
@@ -18,28 +19,41 @@ class VideoRepositoryImpl : VideoRepository {
             parameter("limit", limit)
             parameter("offset", offset)
         }.body()
-    } catch (e: Exception) { emptyList() }
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        emptyList()
+    }
 
     override suspend fun getCategoryVideoCount(path: String): Int = try {
         val response: List<Category> = client.get("$baseUrl/list?path=${path.encodeURLParameter()}").body()
         response.sumOf { it.movies?.size ?: 0 }
-    } catch (e: Exception) { 0 }
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        0
+    }
 
     override suspend fun searchVideos(query: String, category: String): List<Series> = try {
         val results: List<Category> = client.get("$baseUrl/search?q=${query.encodeURLParameter()}${if (category != "전체") "&category=${category.encodeURLParameter()}" else ""}").body()
         results.flatMap { it.movies ?: emptyList() }.groupBySeries()
-    } catch (e: Exception) { emptyList() }
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        emptyList()
+    }
 
     override suspend fun getLatestMovies(): List<Series> = try {
         val results: List<Category> = client.get("$baseUrl/movies").body()
         results.flatMap { it.movies ?: emptyList() }.groupBySeries()
     } catch (e: Exception) {
-        try { client.get("$baseUrl/air").body<List<Category>>().flatMap { it.movies ?: emptyList() }.groupBySeries() } catch(e: Exception) { emptyList() }
+        if (e is CancellationException) throw e
+        getAirDataInternal() 
     }
 
     override suspend fun getAnimations(): List<Series> = try {
         client.get("$baseUrl/animations").body<List<Category>>().flatMap { it.movies ?: emptyList() }.groupBySeries()
-    } catch (e: Exception) { emptyList() }
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        emptyList()
+    }
 
     override suspend fun getAnimationsAll(): List<Series> = try {
         val response = client.get("$baseUrl/animations_all")
@@ -48,36 +62,53 @@ class VideoRepositoryImpl : VideoRepository {
             categories.filter { !it.movies.isNullOrEmpty() }.map { cat ->
                 Series(
                     title = (cat.name ?: "Unknown").cleanTitle(false),
-                    episodes = (cat.movies ?: emptyList()).sortedBy { it.title },
-                    fullPath = cat.path ?: cat.movies?.firstOrNull()?.videoUrl 
+                    episodes = (cat.movies ?: emptyList()).sortedBy { it.title ?: "" },
+                    fullPath = cat.path ?: cat.name 
                 )
             }
         } else { emptyList() }
     } catch (e: Exception) {
-        println("VideoRepository CRITICAL ERROR: ${e.message}")
+        if (e is CancellationException) throw e
         emptyList()
     }
 
     override suspend fun getDramas(): List<Series> = try {
         client.get("$baseUrl/dramas").body<List<Category>>().flatMap { it.movies ?: emptyList() }.groupBySeries()
-    } catch (e: Exception) { emptyList() }
-    
-    override suspend fun getAnimationsAir(): List<Series> = try {
-        // 방송중(AIR) 카테고리에서 애니메이션 데이터를 가져옵니다.
-        client.get("$baseUrl/air").body<List<Category>>()
-            .flatMap { it.movies ?: emptyList() }
-            .groupBySeries()
-    } catch (e: Exception) { 
-        getAnimations() 
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        emptyList()
     }
+    
+    override suspend fun getAnimationsAir(): List<Series> = 
+        getAirDataInternal(filterKeyword = "라프텔")
 
-    override suspend fun getDramasAir(): List<Series> = try {
-        // 필요 시 방송중 데이터에서 드라마를 분리할 수 있으나 현재는 공통으로 사용
-        client.get("$baseUrl/air").body<List<Category>>()
-            .flatMap { it.movies ?: emptyList() }
-            .groupBySeries()
-    } catch (e: Exception) { 
-        getDramas() 
+    override suspend fun getDramasAir(): List<Series> = 
+        getAirDataInternal(filterKeyword = "드라마")
+
+    private suspend fun getAirDataInternal(filterKeyword: String? = null): List<Series> {
+        return try {
+            val response = client.get("$baseUrl/air")
+            if (response.status != HttpStatusCode.OK) return emptyList()
+            
+            val categories: List<Category> = response.body()
+            val normalizedKeyword = filterKeyword?.replace(" ", "")?.lowercase()
+            
+            categories
+                .filter { cat -> 
+                    if (normalizedKeyword == null) true
+                    else {
+                        val name = (cat.name ?: "").replace(" ", "").lowercase()
+                        val path = (cat.path ?: "").replace(" ", "").lowercase()
+                        name.contains(normalizedKeyword) || path.contains(normalizedKeyword)
+                    }
+                }
+                .flatMap { cat ->
+                    (cat.movies ?: emptyList()).groupBySeries(cat.path ?: cat.name)
+                }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            emptyList()
+        }
     }
 
     private fun List<Movie>.groupBySeries(basePath: String? = null): List<Series> = 

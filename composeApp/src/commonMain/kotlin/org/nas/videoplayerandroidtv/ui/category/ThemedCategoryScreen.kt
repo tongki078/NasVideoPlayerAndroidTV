@@ -79,47 +79,33 @@ fun ThemedCategoryScreen(
         themedSections = emptyList()
         
         try {
-            val allSeries = when {
-                isAniScreen -> repository.getAnimationsAll()
-                isAirScreen -> repository.getAnimationsAir() // VideoRepositoryImpl에서 /air 엔드포인트 호출하도록 수정됨
+            // [구조적 개선] Repository가 이미 카테고리/모드별로 정제된 데이터를 반환합니다.
+            val finalItems = when {
+                isAirScreen -> {
+                    if (selectedMode == 0) repository.getAnimationsAir()
+                    else repository.getDramasAir()
+                }
+                isAniScreen -> {
+                    val allAni = repository.getAnimationsAll()
+                    allAni.filter { series ->
+                        val path = (series.fullPath ?: "").lowercase()
+                        val isRaftel = path.contains("라프텔") || path.contains("raftel")
+                        if (selectedMode == 0) isRaftel else !isRaftel
+                    }
+                }
                 else -> emptyList()
             }
-
-            if (allSeries.isEmpty()) {
-                isInitialLoading = false
-                return@LaunchedEffect
-            }
-
-            // 필터링 로직
-            val filtered = if (isAirScreen) {
-                // 방송중 탭: '라프텔 애니메이션' 또는 '드라마' 필터링
-                val targetSubDir = modes[selectedMode]
-                allSeries.filter { series ->
-                    val path = (series.fullPath ?: "").lowercase()
-                    path.contains(targetSubDir.lowercase()) || path.contains(targetSubDir.replace(" ", "").lowercase())
-                }
-            } else if (isAniScreen) {
-                // 애니메이션 탭: '라프텔' 여부로 필터링
-                allSeries.filter { series ->
-                    val path = (series.fullPath ?: "").lowercase()
-                    val isRaftelKey = path.contains("라프텔") || path.contains("raftel") || path.contains("%eb%9d%bc%ed%94%84%ed%85%94")
-                    if (selectedMode == 0) isRaftelKey else !isRaftelKey
-                }
-            } else {
-                allSeries
-            }
-
-            val finalItems = if (filtered.isEmpty() && isAirScreen) allSeries else filtered
 
             if (finalItems.isEmpty()) {
                 isInitialLoading = false
                 return@LaunchedEffect
             }
 
-            // 장르별 분류 및 TMDB 메타데이터 로드
+            // 장르별 분류 로직은 동일하게 유지하되, 데이터 안정성 강화
             val genreGroups = mutableMapOf<String, MutableList<Series>>()
             coroutineScope {
                 finalItems.chunked(12).forEach { batch ->
+                    ensureActive()
                     batch.map { s -> async { fetchTmdbMetadata(s.title, isAnimation = isAniScreen || isAirScreen) to s } }
                         .awaitAll()
                         .forEach { (meta, s) ->
@@ -133,13 +119,15 @@ fun ThemedCategoryScreen(
                     }.sortedByDescending { it.second.size }
                     
                     isInitialLoading = false
-                    yield()
                 }
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             isInitialLoading = false
         } finally {
-            isInitialLoading = false
+            withContext(NonCancellable) {
+                isInitialLoading = false
+            }
         }
     }
 
@@ -164,10 +152,7 @@ fun ThemedCategoryScreen(
         Box(modifier = Modifier.fillMaxSize()) {
             if (!isInitialLoading && themedSections.isEmpty()) {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text(
-                        "영상을 불러올 수 없습니다.\n카테고리 설정을 확인 중입니다.",
-                        color = Color.Gray, textAlign = TextAlign.Center
-                    )
+                    Text("영상을 불러올 수 없습니다.", color = Color.Gray, textAlign = TextAlign.Center)
                 }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(bottom = 100.dp)) {
