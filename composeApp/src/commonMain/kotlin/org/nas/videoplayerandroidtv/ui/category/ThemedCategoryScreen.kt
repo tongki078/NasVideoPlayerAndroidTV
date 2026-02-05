@@ -23,24 +23,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.ktor.http.*
 import kotlinx.coroutines.*
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.common.MovieRow
 import org.nas.videoplayerandroidtv.*
 
-// 한글 초성 추출 함수 (특수문자 및 괄호 무시 로직 추가)
-private fun String.getConsonant(): String {
-    val cleaned = this.replace(Regex("""^[\(\[][^\]\)]+[\)\]]\s*"""), "").trim()
-    val firstChar = cleaned.firstOrNull() ?: return "#"
-    if (firstChar in '가'..'힣') {
-        val index = (firstChar - '가') / 588
-        val consonants = listOf("ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ")
-        return consonants.getOrElse(index) { "기타" }
-    }
-    return if (firstChar.isLetterOrDigit()) firstChar.uppercaseChar().toString() else "#"
+// 테마 분류용 장르 그룹 정의
+private object ThemeConfig {
+    val ACTION_FANTASY = listOf(16, 10759, 10765, 28, 12, 14)
+    val COMEDY_LIFE = listOf(35, 10762)
+    val MYSTERY_THRILLER = listOf(9648, 53, 27)
+    val DRAMA_ROMANCE = listOf(18, 10749)
+    val KIDS_FAMILY = listOf(10762, 10751)
 }
+
+// UI용 데이터 클래스 정의 (고유 ID 포함)
+private data class ThemeSection(val id: String, val title: String, val seriesList: List<Series>)
 
 @Composable
 fun ThemedCategoryScreen(
@@ -61,7 +60,7 @@ fun ThemedCategoryScreen(
         else -> emptyList()
     }
 
-    val themedSections = remember(selectedMode, categoryName) { mutableStateOf<List<Pair<String, List<Series>>>>(emptyList()) }
+    val themedSections = remember(selectedMode, categoryName) { mutableStateOf<List<ThemeSection>>(emptyList()) }
     var isInitialLoading by remember(selectedMode, categoryName) { mutableStateOf(true) }
 
     LaunchedEffect(selectedMode, categoryName) {
@@ -69,14 +68,10 @@ fun ThemedCategoryScreen(
         themedSections.value = emptyList()
         
         try {
-            // [획기적 개선] 제목만 있는 경량 데이터이므로 5,000개를 한 번에 가져와서 정렬 문제를 해결합니다.
             val allSeries = withContext(Dispatchers.Default) {
                 when {
                     isAirScreen -> if (selectedMode == 0) repository.getAnimationsAir() else repository.getDramasAir()
-                    isAniScreen -> {
-                        if (selectedMode == 0) repository.getAnimationsRaftel(5000, 0) 
-                        else repository.getAnimationsSeries(5000, 0)
-                    }
+                    isAniScreen -> if (selectedMode == 0) repository.getAnimationsRaftel(5000, 0) else repository.getAnimationsSeries(5000, 0)
                     else -> emptyList()
                 }
             }
@@ -86,35 +81,49 @@ fun ThemedCategoryScreen(
                 return@LaunchedEffect
             }
 
-            // 전체 데이터를 초성별로 즉시 그룹화
-            val fullGroupedList = withContext(Dispatchers.Default) {
-                allSeries.groupBy { it.title.getConsonant() }
-                    .map { (consonant, list) -> consonant to list.sortedBy { it.title }.take(100) }
-                    .sortedWith(compareBy<Pair<String, List<Series>>> { (key, _) -> 
-                        val first = key.firstOrNull() ?: ' '
-                        when {
-                            first in 'ㄱ'..'ㅎ' -> 1
-                            first.isDigit() -> 2
-                            first in 'A'..'Z' || first in 'a'..'z' -> 3
-                            else -> 4
-                        }
-                    }.thenBy { it.first })
+            val currentList = mutableListOf<ThemeSection>()
+
+            val actionList = mutableListOf<Series>()
+            val comedyList = mutableListOf<Series>()
+            val mysteryList = mutableListOf<Series>()
+            val dramaList = mutableListOf<Series>()
+            val kidsList = mutableListOf<Series>()
+            val specialList = mutableListOf<Series>()
+            val remainingList = mutableListOf<Series>()
+
+            allSeries.forEach { series ->
+                val metadata = tmdbCache[series.title] ?: tmdbCache["ani_${series.title}"]
+                val genreIds = metadata?.genreIds ?: emptyList()
+                
+                when {
+                    genreIds.any { it in ThemeConfig.ACTION_FANTASY } -> actionList.add(series)
+                    genreIds.any { it in ThemeConfig.COMEDY_LIFE } -> comedyList.add(series)
+                    genreIds.any { it in ThemeConfig.MYSTERY_THRILLER } -> mysteryList.add(series)
+                    genreIds.any { it in ThemeConfig.DRAMA_ROMANCE } -> dramaList.add(series)
+                    genreIds.any { it in ThemeConfig.KIDS_FAMILY } -> kidsList.add(series)
+                    series.episodes.size <= 1 -> specialList.add(series)
+                    else -> remainingList.add(series)
+                }
             }
 
-            // [안정성 유지] 첫 1개 섹션만 즉시 노출하고, 나머지는 0.8초 간격으로 추가하여 DB 크래시 방지
-            val currentList = mutableListOf<Pair<String, List<Series>>>()
-            if (fullGroupedList.isNotEmpty()) {
-                currentList.add(fullGroupedList[0])
+            if (actionList.isNotEmpty()) currentList.add(ThemeSection("action", "시간 순삭! 액션 & 판타지", actionList.shuffled().take(40)))
+            if (comedyList.isNotEmpty()) currentList.add(ThemeSection("comedy", "유쾌한 웃음! 코미디 & 일상", comedyList.shuffled().take(40)))
+            if (mysteryList.isNotEmpty()) currentList.add(ThemeSection("mystery", "손에 땀을 쥐는 스릴러 & 미스터리", mysteryList.shuffled().take(40)))
+            if (dramaList.isNotEmpty()) currentList.add(ThemeSection("drama", "설레는 로맨스 & 감동 드라마", dramaList.shuffled().take(40)))
+            if (kidsList.isNotEmpty()) currentList.add(ThemeSection("kids", "아이와 함께! 키즈 & 가족", kidsList.shuffled().take(40)))
+            if (specialList.isNotEmpty()) currentList.add(ThemeSection("special", "부담 없이 즐기는 극장판 & 단편", specialList.shuffled().take(40)))
+
+            val finalRemaining = (remainingList + (allSeries - currentList.flatMap { it.seriesList }.toSet())).distinctBy { it.title }.shuffled()
+            val remainingChunks = finalRemaining.chunked(50)
+
+            themedSections.value = currentList.toList()
+            isInitialLoading = false
+
+            remainingChunks.forEachIndexed { index, chunk ->
+                delay(800)
+                // [수정] 고유 ID는 내부적으로만 사용하고, 제목은 통일합니다.
+                currentList.add(ThemeSection("remaining_$index", "놓치면 아쉬운 더 많은 작품들", chunk))
                 themedSections.value = currentList.toList()
-                isInitialLoading = false
-            }
-            
-            if (fullGroupedList.size > 1) {
-                fullGroupedList.drop(1).forEach { section ->
-                    delay(800) 
-                    currentList.add(section)
-                    themedSections.value = currentList.toList()
-                }
             }
 
         } catch (e: Exception) {
@@ -152,8 +161,9 @@ fun ThemedCategoryScreen(
                     state = lazyListState, 
                     contentPadding = PaddingValues(bottom = 100.dp)
                 ) {
-                    items(themedSections.value, key = { it.first }) { (title, seriesList) ->
-                        MovieRow(title = title, seriesList = seriesList, onSeriesClick = onSeriesClick)
+                    // [수정] 고유 ID를 key로 사용합니다.
+                    items(themedSections.value, key = { it.id }) { section ->
+                        MovieRow(title = section.title, seriesList = section.seriesList, onSeriesClick = onSeriesClick)
                     }
                 }
             }
