@@ -22,16 +22,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.yield
+import kotlinx.coroutines.*
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.common.MovieRow
 import org.nas.videoplayerandroidtv.*
-import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
+
+// TMDB 장르 ID 매핑 (한국어)
+private val TMDB_GENRE_MAP = mapOf(
+    28 to "액션", 12 to "모험", 16 to "애니메이션", 35 to "코미디", 80 to "범죄",
+    99 to "다큐멘터리", 18 to "드라마", 10751 to "가족", 14 to "판타지", 36 to "역사",
+    27 to "공포", 10402 to "음악", 9648 to "미스터리", 10749 to "로맨스", 878 to "SF",
+    10770 to "TV 영화", 53 to "스릴러", 10752 to "전쟁", 37 to "서부",
+    10759 to "액션 & 어드벤처", 10762 to "키즈", 10763 to "뉴스", 10764 to "리얼리티",
+    10765 to "SF & 판타지", 10766 to "소프", 10767 to "토크", 10768 to "전쟁 & 정치"
+)
 
 @Composable
 fun ThemedCategoryScreen(
@@ -58,16 +64,14 @@ fun ThemedCategoryScreen(
         else -> emptyList()
     }
     
-    val selectedCategoryText = modes.getOrNull(selectedMode) ?: categoryName
-    
     // 상태 관리
     var themedSections by remember(selectedMode, categoryName) { mutableStateOf<List<Pair<String, List<Series>>>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
-    var isInitialLoading by remember(selectedMode, categoryName) { mutableStateOf(true) }
+    var isInitialLoading by remember(selectedMode, categoryName) { mutableStateOf(!isAirScreen) }
     var currentOffset by remember(selectedMode, categoryName) { mutableIntStateOf(0) }
     val pageSize = 8
 
-    // 데이터 로딩 함수 (문법 오류 수정: return 대신 if 문 사용)
+    // 데이터 로딩 함수 (기존 로직 유지)
     val loadNextPage: suspend () -> Unit = {
         if (!isLoading) {
             isLoading = true
@@ -92,7 +96,7 @@ fun ThemedCategoryScreen(
                 }
 
                 val themeFolders = repository.getCategoryList(currentRootPath, limit = pageSize, offset = currentOffset)
-                yield() // 취소 여부 확인
+                yield()
 
                 if (themeFolders.isNotEmpty()) {
                     val newSections = coroutineScope {
@@ -131,9 +135,9 @@ fun ThemedCategoryScreen(
                     
                     // TMDB 프리페칭
                     coroutineScope {
-                        newSections.flatMap { it.second.take(5) }.map { series ->
-                            async { fetchTmdbMetadata(series.title) }
-                        }.awaitAll()
+                        newSections.flatMap { it.second.take(3) }.forEach { series ->
+                            launch { fetchTmdbMetadata(series.title) }
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -145,37 +149,103 @@ fun ThemedCategoryScreen(
         }
     }
 
-    // 카테고리/모드 변경 시 초기화 및 첫 페이지 로드
+    // [방송중] 카테고리 실시간 점진적 로딩 로직 (모든 영상 로드 버전)
     LaunchedEffect(selectedMode, categoryName) {
-        themedSections = emptyList()
-        currentOffset = 0
-        isInitialLoading = true
-        
-        if (isAirScreen) {
-            isLoading = true
-            try {
-                val allSeries = if (selectedMode == 0) repository.getAnimations() else repository.getDramas()
-                if (allSeries.isNotEmpty()) {
-                    val shuffled = allSeries.shuffled()
-                    val chunkSize = (shuffled.size / 5).coerceAtLeast(1)
-                    themedSections = listOf(
-                        getRandomThemeName("인기", 0, false, selectedCategoryText) to shuffled.take(chunkSize),
-                        getRandomThemeName("최근 업데이트", 1, false, selectedCategoryText) to shuffled.drop(chunkSize).take(chunkSize),
-                        getRandomThemeName("오늘의 추천", 2, false, selectedCategoryText) to shuffled.drop(chunkSize * 2).take(chunkSize),
-                        getRandomThemeName("다시보기", 3, false, selectedCategoryText) to shuffled.drop(chunkSize * 3).take(chunkSize),
-                        getRandomThemeName("명작 컬렉션", 4, false, selectedCategoryText) to shuffled.drop(chunkSize * 4)
-                    ).filter { it.second.isNotEmpty() }
-                }
-            } finally {
-                isLoading = false
-                isInitialLoading = false
-            }
-        } else {
+        if (!isAirScreen) {
+            themedSections = emptyList()
+            currentOffset = 0
+            isInitialLoading = true
             loadNextPage()
-            // 화면이 덜 채워졌으면 한 번 더 로드
-            if (themedSections.size < 3) {
-                loadNextPage()
+            return@LaunchedEffect
+        }
+
+        themedSections = emptyList()
+        isLoading = true
+        // isInitialLoading은 이미 false (isAirScreen일 때)
+
+        try {
+            val isAnimationMode = selectedMode == 0
+            val allSeries = (if (isAnimationMode) repository.getAnimations() else repository.getDramas()).shuffled()
+            if (allSeries.isEmpty()) return@LaunchedEffect
+
+            // 분석 대상: 서버의 모든 영상 (제한 해제)
+            val targetSeries = allSeries
+            val genreGroups = mutableMapOf<String, MutableList<Series>>()
+            val noGenreList = mutableListOf<Series>()
+
+            // UI 갱신용 헬퍼 함수
+            fun updateUI() {
+                val finalSections = mutableListOf<Pair<String, List<Series>>>()
+                
+                // 1. 장르별 그룹 정렬 (콘텐츠 많은 순으로 상단 배치)
+                genreGroups.toList()
+                    .sortedByDescending { it.second.size }
+                    .forEach { (genre, list) ->
+                        finalSections.add("$genre 시리즈" to list.toList())
+                    }
+
+                // 2. 분류 대기 중이거나 장르가 없는 전체 영상 (하단 배치)
+                if (noGenreList.isNotEmpty()) {
+                    val label = if (isAnimationMode) "전체 애니메이션" else "전체 드라마"
+                    finalSections.add(label to noGenreList.toList())
+                }
+                
+                themedSections = finalSections
             }
+
+            // 1단계: 즉시 모든 데이터 표시 (기다림 없이 서버 리스트 전체 노출)
+            noGenreList.addAll(targetSeries)
+            updateUI()
+            yield()
+
+            // 2단계: 캐시된 데이터 즉시 분류 (메모리에 있는 정보 활용)
+            targetSeries.forEach { series ->
+                val cacheKey = if (isAnimationMode) "ani_${series.title}" else series.title
+                tmdbCache[cacheKey]?.let { cached ->
+                    val genres = cached.genreIds.mapNotNull { TMDB_GENRE_MAP[it] }
+                    if (genres.isNotEmpty()) {
+                        noGenreList.remove(series)
+                        genreGroups.getOrPut(genres.first()) { mutableListOf() }.add(series)
+                    }
+                }
+            }
+            updateUI()
+            yield()
+
+            // 3단계: 나머지 데이터 백그라운드 배치 처리 (10개씩 분석하며 실시간 이동)
+            val remaining = targetSeries.filter { series ->
+                val cacheKey = if (isAnimationMode) "ani_${series.title}" else series.title
+                tmdbCache[cacheKey] == null
+            }
+
+            remaining.chunked(10).forEach { batch ->
+                coroutineScope {
+                    batch.map { series ->
+                        async {
+                            try {
+                                fetchTmdbMetadata(series.title, isAnimation = isAnimationMode) to series
+                            } catch (e: Exception) {
+                                null to series
+                            }
+                        }
+                    }.awaitAll().forEach { (metadata, series) ->
+                        val genres = metadata?.genreIds?.mapNotNull { TMDB_GENRE_MAP[it] } ?: emptyList()
+                        if (genres.isNotEmpty()) {
+                            noGenreList.remove(series)
+                            genreGroups.getOrPut(genres.first()) { mutableListOf() }.add(series)
+                        }
+                        // 장르 없는 경우 이미 noGenreList에 있으므로 그대로 둠
+                    }
+                }
+                updateUI()
+                yield()
+            }
+
+        } catch (e: Exception) {
+            println("AirScreen loading error: ${e.message}")
+        } finally {
+            isLoading = false
+            isInitialLoading = false
         }
     }
 
@@ -199,7 +269,6 @@ fun ThemedCategoryScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFF0F0F0F))) {
-        // 상단 모드 탭
         if (modes.isNotEmpty()) {
             LazyRow(
                 modifier = Modifier
@@ -237,7 +306,8 @@ fun ThemedCategoryScreen(
                         )
                     }
                     
-                    if (isLoading || isInitialLoading) {
+                    // 방송중 카테고리가 아닐 때만 하단 로딩 스피너 표시
+                    if ((isLoading || isInitialLoading) && !isAirScreen) {
                         item {
                             Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(color = Color.Red, modifier = Modifier.size(32.dp))
