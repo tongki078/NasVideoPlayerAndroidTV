@@ -29,9 +29,8 @@ fun TmdbAsyncImage(
 ) {
     val cacheKey = remember(title, isAnimation) { if (isAnimation) "ani_$title" else title }
     
-    // 캐시에서 즉시 초기값 로드 (LaunchedEffect를 기다리지 않음)
-    var metadata by remember(cacheKey) { mutableStateOf(tmdbCache[cacheKey]) }
-    var isLoading by remember(cacheKey) { mutableStateOf(metadata == null) }
+    // [초고속 최적화] LaunchedEffect를 통한 개별 요청을 제거하고 캐시 데이터를 즉시 참조
+    val metadata = tmdbCache[cacheKey]
     
     val imageUrl = remember(metadata, isLarge) {
         metadata?.posterUrl?.replace(
@@ -40,61 +39,38 @@ fun TmdbAsyncImage(
         )
     }
 
-    LaunchedEffect(cacheKey) {
-        if (metadata == null) {
-            // 다시 한번 캐시 확인 (그 사이 채워졌을 수 있음)
-            val cached = tmdbCache[cacheKey]
-            if (cached != null) {
-                metadata = cached
-                isLoading = false
-            } else {
-                isLoading = true
-                val fetched = fetchTmdbMetadata(title, typeHint, isAnimation = isAnimation)
-                metadata = fetched
-                isLoading = false
-            }
-        } else {
-            isLoading = false
+    // 데이터가 없는 경우에만 백그라운드에서 조용히 요청 (HomeScreen의 프리페칭 보조)
+    if (metadata == null) {
+        LaunchedEffect(cacheKey) {
+            fetchTmdbMetadata(title, typeHint, isAnimation = isAnimation)
         }
     }
     
     Box(
-        modifier = modifier.background(if (metadata?.posterUrl == null && !isLoading) Color(0xFF1A1A1A) else Color.Transparent)
+        modifier = modifier.background(if (metadata?.posterUrl == null && metadata != null) Color(0xFF1A1A1A) else Color.Transparent)
     ) {
-        // 이미지가 있는 경우 표시
         if (imageUrl != null) {
             AsyncImage(
                 model = ImageRequest.Builder(LocalPlatformContext.current)
                     .data(imageUrl)
-                    .crossfade(400) // 부드러운 전환
+                    .crossfade(400)
                     .build(),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = contentScale,
-                onState = { state ->
-                    if (state is coil3.compose.AsyncImagePainter.State.Success) {
-                        isLoading = false
-                    }
-                }
+                contentScale = contentScale
             )
-        }
-        
-        // 로딩 중일 때 Shimmer 표시 (이미지 URL이 있을 때만)
-        if (isLoading && imageUrl != null) {
-            Box(Modifier.fillMaxSize().background(shimmerBrush(showShimmer = true)))
-        }
-        
-        // 에러 또는 결과 없음 (포스터가 아예 없는 경우)
-        if (!isLoading && metadata != null && metadata!!.posterUrl == null) {
-            Box(Modifier.fillMaxSize().padding(12.dp), Alignment.Center) {
-                Text(
-                    text = title.cleanTitle(includeYear = false), 
-                    color = Color.Gray, 
-                    fontSize = 12.sp,
-                    textAlign = TextAlign.Center, 
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis
-                )
+        } else {
+            // 로딩 중이거나 데이터가 없는 경우의 플레이스홀더
+            Box(Modifier.fillMaxSize().background(Color(0xFF1A1A1A)), Alignment.Center) {
+                if (metadata != null) {
+                    Text(
+                        text = title.cleanTitle(false),
+                        color = Color.DarkGray,
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
             }
         }
     }

@@ -137,14 +137,20 @@ fun App(driver: SqlDriver) {
         if (currentScreen == Screen.HOME && homeLatestSeries.isEmpty()) {
             isHomeLoading = true
             
-            // 병렬로 서버 데이터를 가져오고, 도착 즉시 로딩을 끕니다.
+            // [초고속 개선] 병렬 요청 후, 최신작 목록이 오는 즉시 화면을 먼저 엽니다.
             val latestDeferred = async { repository.getLatestMovies() }
             val animationsDeferred = async { repository.getAnimationsAir() }
             
-            homeLatestSeries = latestDeferred.await()
-            homeAnimations = animationsDeferred.await()
+            val latest = latestDeferred.await()
+            homeLatestSeries = latest
             
-            // 서버 목록이 준비되면 즉시 메인 화면 표시 (포스터를 기다리지 않음)
+            // 최신작만 도착해도 로딩을 해제하여 스켈레톤 UI가 실제 데이터로 빠르게 바뀌게 함
+            if (latest.isNotEmpty()) isHomeLoading = false
+            
+            val animations = animationsDeferred.await()
+            homeAnimations = animations
+            
+            // 모든 데이터 수신 완료 시 최종 로딩 해제
             isHomeLoading = false
         }
     }
