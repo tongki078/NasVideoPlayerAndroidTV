@@ -1,0 +1,17 @@
+CREATE TABLE tmdb_cache (
+    cacheKey TEXT NOT NULL PRIMARY KEY,
+    tmdbId INTEGER, -- 기본 Long으로 처리됨
+    mediaType TEXT,
+    posterUrl TEXT,
+    backdropUrl TEXT,
+    overview TEXT,
+    genreIds TEXT, -- JSON array of IDs
+    title TEXT
+);
+
+insertCache:
+INSERT OR REPLACE INTO tmdb_cache(cacheKey, tmdbId, mediaType, posterUrl, backdropUrl, overview, genreIds, title)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+selectCache:
+SELECT * FROM tmdb_cache WHERE cacheKey = ?;

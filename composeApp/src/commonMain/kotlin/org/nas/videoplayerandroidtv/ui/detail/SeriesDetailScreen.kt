@@ -43,33 +43,46 @@ private data class SeriesDetailState(
 // ==========================================================
 
 private fun List<Movie>.sortedByEpisode(): List<Movie> = this.sortedWith(
-    compareBy<Movie> { it.title?.extractSeason() ?: "" }
+    compareBy<Movie> { it.title?.extractSeason() ?: 1 }
         .thenBy { it.title?.extractEpisode()?.filter { char -> char.isDigit() }?.toIntOrNull() ?: 0 }
 )
 
 private suspend fun loadSeasons(series: Series, repository: VideoRepository): List<Season> {
-    val path = series.fullPath ?: return if (series.episodes.isNotEmpty()) {
-        listOf(Season("에피소드", series.episodes.sortedByEpisode()))
-    } else emptyList()
+    // [개선] 이미 가지고 있는 에피소드를 기본 시즌으로 먼저 구성합니다.
+    val defaultSeason = if (series.episodes.isNotEmpty()) {
+        Season("에피소드", series.episodes.sortedByEpisode())
+    } else null
+
+    val path = series.fullPath ?: return listOfNotNull(defaultSeason)
 
     return try {
         val content = repository.getCategoryList(path)
-        val hasDirectMovies = content.any { it.movies?.isNotEmpty() == true }
-
-        if (hasDirectMovies) {
-            listOf(Season("에피소드", content.flatMap { it.movies ?: emptyList() }.sortedByEpisode()))
+        // 하위 폴더가 있는지 확인
+        val subFolders = content.filter { it.movies.isNullOrEmpty() && !it.name.isNullOrBlank() }
+        
+        if (subFolders.isEmpty()) {
+            // 하위 폴더가 없으면 현재 폴더의 영화들을 가져오거나 기존 데이터를 유지
+            val directMovies = content.flatMap { it.movies ?: emptyList() }
+            if (directMovies.isNotEmpty()) {
+                listOf(Season("에피소드", directMovies.sortedByEpisode()))
+            } else {
+                listOfNotNull(defaultSeason)
+            }
         } else {
+            // 하위 폴더(시즌)가 있는 경우 각각 로드
             coroutineScope {
-                content.map { folder ->
+                val loadedSeasons = subFolders.map { folder ->
                     async {
                         val folderMovies = repository.getCategoryList("$path/${folder.name ?: ""}").flatMap { it.movies ?: emptyList() }
                         if (folderMovies.isNotEmpty()) Season(folder.name ?: "알 수 없음", folderMovies.sortedByEpisode()) else null
                     }
                 }.awaitAll().filterNotNull().sortedBy { it.name }
+                
+                if (loadedSeasons.isEmpty()) listOfNotNull(defaultSeason) else loadedSeasons
             }
         }
     } catch (_: Exception) {
-        emptyList()
+        listOfNotNull(defaultSeason)
     }
 }
 
@@ -82,7 +95,7 @@ private suspend fun loadMetadataAndCredits(title: String): Pair<TmdbMetadata?, L
 }
 
 // ==========================================================
-// 3. Main Screen (통합)
+// 3. Main Screen
 // ==========================================================
 @Composable
 fun SeriesDetailScreen(
@@ -100,6 +113,7 @@ fun SeriesDetailScreen(
     LaunchedEffect(series) {
         state = state.copy(isLoading = true)
         coroutineScope {
+            // [획기적 속도 개선] 병렬 실행
             val seasonsDeferred = async { loadSeasons(series, repository) }
             val metaDeferred = async { loadMetadataAndCredits(series.title) }
 
@@ -120,7 +134,7 @@ fun SeriesDetailScreen(
         topBar = { DetailTopBar(series.title, onBack) },
         containerColor = Color.Black
     ) { pv ->
-        if (state.isLoading) {
+        if (state.isLoading && state.seasons.isEmpty()) {
             Column(modifier = Modifier.fillMaxSize().padding(pv)) {
                 HeaderSkeleton()
                 Spacer(Modifier.height(16.dp))
@@ -180,8 +194,8 @@ private fun DetailContent(
     onPlay: (Movie, List<Movie>, Long) -> Unit,
     onPreviewPlay: (Movie) -> Unit
 ) {
-    val firstSeason = state.seasons.firstOrNull()
-    val firstEpisode = firstSeason?.episodes?.firstOrNull()
+    val currentSeason = state.seasons.getOrNull(state.selectedSeasonIndex)
+    val firstEpisode = currentSeason?.episodes?.firstOrNull()
 
     LaunchedEffect(firstEpisode) {
         if (firstEpisode != null) {
@@ -190,8 +204,8 @@ private fun DetailContent(
     }
 
     val playFirstEpisode = {
-        if (firstEpisode != null && firstSeason != null) {
-            onPlay(firstEpisode, firstSeason.episodes, initialPosition)
+        if (firstEpisode != null && currentSeason != null) {
+            onPlay(firstEpisode, currentSeason.episodes, initialPosition)
         }
     }
 
@@ -224,7 +238,7 @@ private fun DetailContent(
                 metadata = state.metadata,
                 onPlay = { movie -> onPlay(movie, currentEpisodes, 0L) }
             )
-        } else {
+        } else if (!state.isLoading) {
             Text("영상 정보를 찾을 수 없습니다.", color = Color.Gray, modifier = Modifier.padding(16.dp))
         }
         Spacer(Modifier.height(100.dp))
@@ -240,7 +254,7 @@ private fun SeasonSelector(seasons: List<Season>, selectedIndex: Int, onSeasonSe
     Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
             OutlinedTextField(
-                value = seasons[selectedIndex].name,
+                value = seasons.getOrNull(selectedIndex)?.name ?: "",
                 onValueChange = {},
                 readOnly = true,
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },

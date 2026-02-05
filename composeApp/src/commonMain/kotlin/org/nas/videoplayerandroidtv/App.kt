@@ -123,44 +123,39 @@ fun App(driver: SqlDriver) {
             val results = repository.searchVideos(query, category)
             searchResultSeries = results
             isSearchLoading = false
-            
-            scope.launch {
-                results.take(9).forEach { series -> 
-                    fetchTmdbMetadata(series.title, if (category != "전체") category.lowercase() else null, isAnimation = category == "애니메이션")
-                }
-            }
         } else {
             searchResultSeries = emptyList()
         }
     }
 
+    // [획기적 개선] 데이터 로딩을 병렬화하고 상호 의존성을 제거함
     LaunchedEffect(currentScreen) {
-        if (currentScreen == Screen.HOME && homeLatestSeries.isEmpty()) {
+        if (currentScreen == Screen.HOME && (homeLatestSeries.isEmpty() || homeAnimations.isEmpty())) {
             isHomeLoading = true
-            try {
-                // [병렬 최적화] 영화와 애니메이션을 동시에 요청합니다.
-                val latestDeferred = async { repository.getLatestMovies() }
-                val animationsDeferred = async { repository.getAnimationsAir() }
-                
-                val latest = latestDeferred.await()
-                val animations = animationsDeferred.await()
-                
-                homeLatestSeries = latest
-                homeAnimations = animations
-                isHomeLoading = false
-                
-                scope.launch {
-                    val latestJobs = latest.take(8).map { series ->
-                        async { fetchTmdbMetadata(series.title) }
-                    }
-                    val aniJobs = animations.take(8).map { series ->
-                        async { fetchTmdbMetadata(series.title, isAnimation = true) }
-                    }
-                    (latestJobs + aniJobs).awaitAll()
+            
+            // 각 섹션을 독립적으로 로드하여 하나라도 완료되면 화면 표시 시도
+            coroutineScope {
+                launch {
+                    try {
+                        val latest = repository.getLatestMovies()
+                        homeLatestSeries = latest
+                        // 최신 영화가 먼저 오면 바로 로딩바 종료 가능성 체크
+                        if (isHomeLoading) isHomeLoading = false
+                    } catch (e: Exception) { }
                 }
-            } catch (e: Exception) {
-                isHomeLoading = false
+                
+                launch {
+                    try {
+                        val animations = repository.getAnimationsAir()
+                        homeAnimations = animations
+                        // 애니메이션이 먼저 와도 로딩바 종료 가능성 체크
+                        if (isHomeLoading) isHomeLoading = false
+                    } catch (e: Exception) { }
+                }
             }
+            
+            // 모든 작업이 어떤 이유로든 끝났다면 확실히 로딩바 종료
+            isHomeLoading = false
         }
     }
 

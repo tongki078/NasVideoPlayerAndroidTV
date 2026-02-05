@@ -45,6 +45,7 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun getLatestMovies(): List<Series> = try {
         val results: List<Category> = client.get("$baseUrl/movies").body()
+        // 모든 카테고리의 영화를 먼저 합친 후 그룹화하여 중복 방지
         results.flatMap { it.movies ?: emptyList() }.groupBySeries()
     } catch (e: Exception) {
         if (e is CancellationException) throw e
@@ -52,7 +53,8 @@ class VideoRepositoryImpl : VideoRepository {
     }
 
     override suspend fun getAnimations(): List<Series> = try {
-        client.get("$baseUrl/animations").body<List<Category>>().flatMap { it.movies ?: emptyList() }.groupBySeries()
+        val results: List<Category> = client.get("$baseUrl/animations").body()
+        results.flatMap { it.movies ?: emptyList() }.groupBySeries()
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         emptyList()
@@ -62,13 +64,11 @@ class VideoRepositoryImpl : VideoRepository {
         val response = client.get("$baseUrl/animations_all")
         if (response.status == HttpStatusCode.OK) {
             val categories: List<Category> = response.body()
-            categories.filter { !it.movies.isNullOrEmpty() }.map { cat ->
-                Series(
-                    title = (cat.name ?: "Unknown").cleanTitle(false),
-                    episodes = (cat.movies ?: emptyList()).sortedBy { it.title ?: "" },
-                    fullPath = cat.path ?: cat.name 
-                )
-            }
+            // animations_all의 경우 각 카테고리가 이미 시리즈 단위일 가능성이 높으므로 제목 정제 후 통합 그룹화
+            categories.flatMap { cat -> 
+                val catPath = cat.path ?: cat.name
+                (cat.movies ?: emptyList()).map { it to catPath } 
+            }.groupBySeriesWithPaths()
         } else { emptyList() }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
@@ -76,7 +76,8 @@ class VideoRepositoryImpl : VideoRepository {
     }
 
     override suspend fun getDramas(): List<Series> = try {
-        client.get("$baseUrl/dramas").body<List<Category>>().flatMap { it.movies ?: emptyList() }.groupBySeries()
+        val results: List<Category> = client.get("$baseUrl/dramas").body()
+        results.flatMap { it.movies ?: emptyList() }.groupBySeries()
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         emptyList()
@@ -96,7 +97,8 @@ class VideoRepositoryImpl : VideoRepository {
             val categories: List<Category> = response.body()
             val normalizedKeyword = filterKeyword?.replace(" ", "")?.lowercase()
             
-            categories
+            // 1. 키워드 필터링 후 모든 영화와 해당 폴더 경로를 평탄화(Flatten)
+            val allMoviesWithPaths = categories
                 .filter { cat -> 
                     if (normalizedKeyword == null) true
                     else {
@@ -106,18 +108,30 @@ class VideoRepositoryImpl : VideoRepository {
                     }
                 }
                 .flatMap { cat ->
-                    (cat.movies ?: emptyList()).groupBySeries(cat.path ?: cat.name)
+                    val catPath = cat.path ?: cat.name
+                    (cat.movies ?: emptyList()).map { it to catPath }
                 }
+            
+            // 2. 통합 리스트에 대해 단 한 번의 그룹화 수행 (중복 원천 차단)
+            allMoviesWithPaths.groupBySeriesWithPaths()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
         }
     }
 
-    private fun List<Movie>.groupBySeries(basePath: String? = null): List<Series> = 
-        this.groupBy { movie -> 
+    // 기본 그룹화 함수 (경로 정보가 없는 경우)
+    private fun List<Movie>.groupBySeries(): List<Series> = 
+        this.map { it to null as String? }.groupBySeriesWithPaths()
+
+    // 경로 정보를 포함한 통합 그룹화 함수 (핵심 로직)
+    private fun List<Pair<Movie, String?>>.groupBySeriesWithPaths(): List<Series> = 
+        this.groupBy { (movie, _) -> 
             (movie.title ?: "").cleanTitle(false).replace(REGEX_GROUP_BY_SERIES, " ").trim()
-        }.map { (title, eps) -> 
-            Series(title = title, episodes = eps.sortedBy { it.title ?: "" }, fullPath = basePath)
+        }.map { (title, pairs) -> 
+            val episodes = pairs.map { it.first }.sortedBy { it.title ?: "" }
+            // 여러 폴더에 흩어져 있어도 하나의 시리즈로 묶고, 가장 빈도가 높거나 첫 번째 경로를 사용
+            val representativePath = pairs.firstNotNullOfOrNull { it.second }
+            Series(title = title, episodes = episodes, fullPath = representativePath)
         }.sortedByDescending { it.episodes.size }
 }
