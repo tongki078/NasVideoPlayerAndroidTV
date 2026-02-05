@@ -3,15 +3,18 @@ package org.nas.videoplayerandroidtv.domain.model
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class Category(val name: String, val movies: List<Movie> = emptyList())
+data class Category(
+    val name: String,
+    val movies: List<Movie> = emptyList(),
+    val path: String? = null // 서버에서 새로 추가된 경로 필드
+)
 
 @Serializable
 data class Movie(
     val id: String,
     val title: String,
-    val thumbnailUrl: String? = null,
     val videoUrl: String,
-    val duration: String? = null
+    val thumbnailUrl: String? = null
 )
 
 data class Series(
@@ -20,5 +23,3 @@ data class Series(
     val thumbnailUrl: String? = null,
     val fullPath: String? = null
 )
-
-enum class Screen { HOME, SEARCH, ON_AIR, ANIMATIONS, MOVIES, FOREIGN_TV, KOREAN_TV, LATEST }

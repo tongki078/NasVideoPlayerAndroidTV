@@ -39,20 +39,17 @@ private val TMDB_GENRE_MAP = mapOf(
     10765 to "SF & 판타지", 10766 to "소프", 10767 to "토크", 10768 to "전쟁 & 정치"
 )
 
-/**
- * 포스터 유무에 따른 정렬 (3단계 등급 시스템)
- */
 private fun List<Series>.sortByPoster(isAnimation: Boolean): List<Series> {
     return this.sortedWith(
         compareByDescending<Series> { series ->
             val cacheKey = if (isAnimation) "ani_${series.title}" else series.title
             val metadata = tmdbCache[cacheKey]
             when {
-                metadata?.posterUrl != null -> 3 // 1순위: 포스터 있음 (무조건 앞)
-                metadata == null -> 2           // 2순위: 아직 검색 전 (포스터가 있을 가능성 있음)
-                else -> 1                        // 3순위: 포스터 없음 확인됨 (무조건 맨 뒤)
+                metadata?.posterUrl != null -> 3
+                metadata == null -> 2
+                else -> 1
             }
-        }.thenByDescending { it.episodes.size } // 에피소드 많은 인기작 차선순위
+        }.thenByDescending { it.episodes.size }
     )
 }
 
@@ -87,7 +84,6 @@ fun ThemedCategoryScreen(
     var currentOffset by remember(selectedMode, categoryName) { mutableIntStateOf(0) }
     val pageSize = 12 
 
-    // 일반 카테고리 로딩: 병렬 처리 + 정밀한 선제적 분석
     val loadNextPage: suspend () -> Unit = {
         if (!isLoading) {
             isLoading = true
@@ -122,8 +118,6 @@ fun ThemedCategoryScreen(
                             
                             if (seriesList.isNotEmpty()) {
                                 val isAni = isAniScreen || isAirScreen || folderPath.contains("애니", ignoreCase = true)
-                                
-                                // [필수] 화면 노출 전 상위 40개 메타데이터 선제적 조회 (등급 판별을 위함)
                                 seriesList.take(40).chunked(8).forEach { batch ->
                                     batch.map { s -> async { fetchTmdbMetadata(s.title, isAnimation = isAni) } }.awaitAll()
                                 }
@@ -134,7 +128,6 @@ fun ThemedCategoryScreen(
                                 withContext(Dispatchers.Main) {
                                     if (themedSections.none { it.first == sectionTitle }) {
                                         val newList = (themedSections + (sectionTitle to sortedList)).distinctBy { it.first }
-                                        // 포스터가 확인된 섹션을 위로 정렬하여 섹션 단위 품질 보정
                                         themedSections = newList.sortedByDescending { section ->
                                             val firstS = section.second.firstOrNull() ?: return@sortedByDescending 0
                                             val key = if (isAni) "ani_${firstS.title}" else firstS.title
@@ -155,7 +148,6 @@ fun ThemedCategoryScreen(
         }
     }
 
-    // 방송중 로직
     LaunchedEffect(selectedMode, categoryName) {
         if (!isAirScreen) {
             themedSections = emptyList()
@@ -170,7 +162,7 @@ fun ThemedCategoryScreen(
 
         try {
             val isAnimationMode = selectedMode == 0
-            val allSeries = (if (isAnimationMode) repository.getAnimations() else repository.getDramas()).shuffled()
+            val allSeries = (if (isAnimationMode) repository.getAnimationsAir() else repository.getDramasAir()).shuffled()
             if (allSeries.isEmpty()) return@LaunchedEffect
 
             val genreGroups = mutableMapOf<String, MutableList<Series>>()
@@ -188,7 +180,6 @@ fun ThemedCategoryScreen(
                 themedSections = finalSections
             }
 
-            // 캐시 데이터 분류 (0.1초 내 노출)
             val (cachedWithPoster, others) = allSeries.partition { series ->
                 val cacheKey = if (isAnimationMode) "ani_${series.title}" else series.title
                 tmdbCache[cacheKey]?.posterUrl != null
@@ -207,7 +198,6 @@ fun ThemedCategoryScreen(
             isInitialLoading = false
             yield()
 
-            // 나머지 병렬 분석
             others.drop(20).chunked(12).forEach { batch ->
                 coroutineScope {
                     batch.map { async { fetchTmdbMetadata(it.title, isAnimation = isAnimationMode) to it } }.awaitAll()
@@ -227,15 +217,32 @@ fun ThemedCategoryScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFF0F0F0F))) {
+        // 탭 메뉴 레이아웃
         if (modes.isNotEmpty()) {
-            LazyRow(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 48.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(modes.size) { index -> CategoryTabItem(text = modes[index], isSelected = selectedMode == index, onClick = { onModeChange(index) }) }
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp, start = 48.dp, end = 48.dp), 
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(modes.size) { index -> 
+                    CategoryTabItem(text = modes[index], isSelected = selectedMode == index, onClick = { onModeChange(index) }) 
+                }
+            }
+        }
+
+        // [핵심 개선] 상단 가로형 프로그레스바 (로딩 중에만 표시)
+        Box(modifier = Modifier.fillMaxWidth().height(4.dp)) {
+            if (isLoading || isInitialLoading) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Red,
+                    trackColor = Color.Transparent
+                )
             }
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
             if (themedSections.isEmpty() && !isLoading && !isInitialLoading) {
-                Box(Modifier.fillMaxSize(), Alignment.Center) { Text("데이터 로딩 중...", color = Color.Gray) }
+                Box(Modifier.fillMaxSize(), Alignment.Center) { Text("표시할 영상이 없습니다.", color = Color.Gray) }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(bottom = 100.dp)) {
                     items(themedSections, key = { it.first }) { (title, seriesList) ->
@@ -259,11 +266,13 @@ private fun CategoryTabItem(text: String, isSelected: Boolean, onClick: () -> Un
 
 private fun List<Movie>.groupBySeries(basePath: String? = null): List<Series> = 
     this.groupBy { movie -> 
-        var t = movie.title.cleanTitle(includeYear = false)
-        t = t.replace(Regex("""^\s*[\(\[【](?:더빙|자막|무삭제|완결)[\)\]】]\s*"""), "")
-        t = t.replace(Regex("""(?i)[.\s_-]+(?:S\d+E\d+|S\d+|E\d+|EP\d+|\d+화|\d+회|시즌\d+|\d+기).*"""), "")
-        t = t.replace(Regex("""(?i)[.\s_-]+(?:\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|x26[45]|HEVC|AAC|DTS|KL|60fps).*"""), "")
-        t.trim().ifEmpty { movie.title }
+        var t = movie.title
+        t = Regex("""\s*[\(\[【][^)]*[\)\]】]\s*""").replace(t, " ")
+        t = Regex("""(?i)[.\s_-]+(?:S\d+E\d+|S\d+|E\d+|EP\d+|\d+화|\d+회|시즌\d+|\d+기).*""").replace(t, " ")
+        t = Regex("""(?i)[.\s_-]+(?:\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|x26[45]|HEVC|AAC|DTS|KL|60fps).*""").replace(t, " ")
+        t = Regex("""[._\-::!?【】『』「」"'#@*※]""").replace(t, " ")
+        t = t.replace(Regex("""\s+"""), " ").trim()
+        t.ifEmpty { movie.title }
     }.map { (title, eps) -> 
         Series(title = title, episodes = eps.sortedBy { it.title }, fullPath = basePath) 
     }.sortedByDescending { it.episodes.size }

@@ -62,6 +62,7 @@ fun App(driver: SqlDriver) {
 
     val scope = rememberCoroutineScope()
 
+    // Screen enum은 별도 파일(Screen.kt)로 분리되었습니다.
     var currentScreen by rememberSaveable { mutableStateOf(Screen.HOME) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var searchCategory by rememberSaveable { mutableStateOf("전체") }
@@ -80,15 +81,13 @@ fun App(driver: SqlDriver) {
     val homeLazyListState = rememberLazyListState()
     val themedCategoryLazyListState = rememberLazyListState()
 
-    var selectedAirMode by rememberSaveable { mutableStateOf(0) }
-    var selectedAniMode by rememberSaveable { mutableStateOf(0) }
-    var selectedMovieMode by rememberSaveable { mutableStateOf(0) }
-    var selectedForeignTvMode by rememberSaveable { mutableStateOf(0) }
-    var selectedKoreanTvMode by rememberSaveable { mutableStateOf(0) }
+    var selectedAirMode by rememberSaveable { mutableIntStateOf(0) }
+    var selectedAniMode by rememberSaveable { mutableIntStateOf(0) }
+    var selectedMovieMode by rememberSaveable { mutableIntStateOf(0) }
+    var selectedForeignTvMode by rememberSaveable { mutableIntStateOf(0) }
+    var selectedKoreanTvMode by rememberSaveable { mutableIntStateOf(0) }
 
-    // ==========================================
-    // BackHandler 수정 (PlatformUtils의 BackHandler 사용)
-    // ==========================================
+    // 뒤로가기 핸들러
     BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME) {
         when {
             selectedMovie != null -> {
@@ -140,7 +139,7 @@ fun App(driver: SqlDriver) {
             isHomeLoading = true
             try {
                 val latestDeferred = async { repository.getLatestMovies() }
-                val animationsDeferred = async { repository.getAnimations() }
+                val animationsDeferred = async { repository.getAnimationsAir() }
                 val latest = latestDeferred.await()
                 val animations = animationsDeferred.await()
                 coroutineScope {
@@ -275,13 +274,15 @@ fun App(driver: SqlDriver) {
                                 else -> Triple("", "", 0)
                             }
                             
-                            val onModeChange: (Int) -> Unit = when (currentScreen) {
-                                Screen.ON_AIR -> { mode -> selectedAirMode = mode }
-                                Screen.ANIMATIONS -> { mode -> selectedAniMode = mode }
-                                Screen.MOVIES -> { mode -> selectedMovieMode = mode }
-                                Screen.FOREIGN_TV -> { mode -> selectedForeignTvMode = mode }
-                                Screen.KOREAN_TV -> { mode -> selectedKoreanTvMode = mode }
-                                else -> { _ -> }
+                            val onModeChange: (Int) -> Unit = { mode ->
+                                when (currentScreen) {
+                                    Screen.ON_AIR -> selectedAirMode = mode
+                                    Screen.ANIMATIONS -> selectedAniMode = mode
+                                    Screen.MOVIES -> selectedMovieMode = mode
+                                    Screen.FOREIGN_TV -> selectedForeignTvMode = mode
+                                    Screen.KOREAN_TV -> selectedKoreanTvMode = mode
+                                    else -> {}
+                                }
                             }
 
                             if (categoryInfo.first.isNotEmpty()) {

@@ -21,7 +21,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.nas.videoplayerandroidtv.domain.model.Screen
+import org.nas.videoplayerandroidtv.Screen
 
 @Composable
 fun NetflixTopBar(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
