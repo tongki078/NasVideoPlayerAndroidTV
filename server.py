@@ -1,4 +1,4 @@
-import os, subprocess, hashlib, urllib.parse, unicodedata, threading, time, json, re, sys, traceback, shutil, requests
+import os, subprocess, hashlib, urllib.parse, unicodedata, threading, time, json, re, sys, traceback, shutil, requests, random
 from flask import Flask, jsonify, send_from_directory, request, Response, redirect, send_file
 from flask_cors import CORS
 
@@ -10,7 +10,7 @@ MY_IP = "192.168.0.2"
 DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "3.0" # 대규모 속도 개선을 위한 버전 업
+CACHE_VERSION = "3.1" # 홈 추천 시스템 추가
 
 # TMDB 설정 (서버가 직접 미리 분류하기 위함)
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk"
@@ -34,7 +34,7 @@ for p in ["/usr/local/bin/ffmpeg", "/var/packages/ffmpeg/target/bin/ffmpeg", "/u
 
 GLOBAL_CACHE = {
     "air": [], "movies": [], "foreigntv": [], "koreantv": [],
-    "animations_all": [], "search_index": [], "tmdb": {}, "version": CACHE_VERSION
+    "animations_all": [], "search_index": [], "tmdb": {}, "home_recommend": [], "version": CACHE_VERSION
 }
 
 def nfc(text): return unicodedata.normalize('NFC', text) if text else ""
@@ -134,9 +134,49 @@ def scan_recursive(base_path, route_prefix, rel_base=None):
 def paginate(data, limit, offset, lite=False):
     sliced = data[offset:offset + limit] if limit > 0 else data[offset:]
     if lite:
-        # Lite 모드에서도 서버측에서 확보한 장르와 포스터 정보를 내려줌 (앱 분류 속도 극대화)
         return [{"name": c.get('name',''), "path": c.get('path',''), "movies": [], "genreIds": c.get('genreIds', []), "posterPath": c.get('posterPath')} for c in sliced]
     return sliced
+
+# [추가] 홈 추천 데이터 빌드 로직
+def build_home_recommend():
+    print("🏠 홈 추천 데이터 생성 중...")
+    movies = GLOBAL_CACHE.get("movies", [])
+    animations = GLOBAL_CACHE.get("animations_all", [])
+
+    sections = []
+
+    # 1. 인기작 (랜덤 샘플링)
+    try:
+        popular_pool = random.sample(movies, min(len(movies), 15)) + random.sample(animations, min(len(animations), 15))
+        random.shuffle(popular_pool)
+        sections.append({"title": "지금 가장 핫한 인기작", "items": paginate(popular_pool, 15, 0, lite=True)})
+    except: pass
+
+    # 2. 최신 영화
+    latest_movies = [c for c in movies if c.get('path', '').startswith(nfc("최신"))]
+    if latest_movies:
+        sections.append({"title": "최신 영화", "items": paginate(latest_movies, 15, 0, lite=True)})
+
+    # 3. 인기 애니메이션
+    if animations:
+        sections.append({"title": "인기 애니메이션", "items": paginate(animations, 15, 0, lite=True)})
+
+    # 4. 장르별 분류
+    genre_configs = [
+        ("시간 순삭! 액션 & 판타지", [28, 12, 10759]),
+        ("유쾌한 웃음! 코미디 & 일상", [35, 10762]),
+        ("가슴 뭉클! 감동 드라마", [18, 10749])
+    ]
+
+    all_pool = movies + animations
+    for title, ids in genre_configs:
+        genre_items = [c for c in all_pool if any(gid in (c.get('genreIds') or []) for gid in ids)]
+        if genre_items:
+            selected = random.sample(genre_items, min(len(genre_items), 15))
+            sections.append({"title": title, "items": paginate(selected, 15, 0, lite=True)})
+
+    GLOBAL_CACHE["home_recommend"] = sections
+    print(f"✅ 홈 추천 데이터 생성 완료 ({len(sections)} 섹션)")
 
 def scan_task(key, directory, prefix):
     global GLOBAL_CACHE
@@ -155,6 +195,10 @@ def perform_full_scan():
         t = threading.Thread(target=scan_task, args=(k, d, p))
         t.start(); threads.append(t)
     for t in threads: t.join()
+
+    # [수정] 스캔 완료 후 홈 추천 빌드
+    build_home_recommend()
+
     new_idx = []
     for k in ["air", "movies", "foreigntv", "koreantv", "animations_all"]:
         for cat in GLOBAL_CACHE.get(k, []):
@@ -187,6 +231,10 @@ def update_index():
 threading.Thread(target=update_index, daemon=True).start()
 
 # --- [API 엔드포인트] ---
+
+@app.route('/home')
+def get_home():
+    return jsonify(GLOBAL_CACHE.get("home_recommend", []))
 
 @app.route('/air')
 def get_air():
@@ -251,7 +299,7 @@ def get_movies_with_route(route):
     limit, offset = int(request.args.get('limit', 0)), int(request.args.get('offset', 0))
     lite = request.args.get('lite', 'false').lower() == 'true'
     normalized_route = nfc(route)
-    data = [c for c in GLOBAL_CACHE.get("movies", []) if c.get('path', '').startswith(normalized_route)]
+    data = [c for c in data if c.get('path', '').startswith(normalized_route)]
     return jsonify(paginate(data, limit, offset, lite))
 
 @app.route('/video_serve')

@@ -62,7 +62,7 @@ fun ThemedCategoryScreen(
 
     val scope = rememberCoroutineScope()
     
-    // 테마별 리스트 상태 관리
+    // 개별 리스트 상태 관리
     var actionList by remember { mutableStateOf(listOf<Series>()) }
     var fantasyList by remember { mutableStateOf(listOf<Series>()) }
     var comedyList by remember { mutableStateOf(listOf<Series>()) }
@@ -89,10 +89,10 @@ fun ThemedCategoryScreen(
     var hasMoreData by remember(selectedMode, categoryName) { mutableStateOf(true) }
     val pageSize = 200
 
-    // [핵심 로직] 데이터를 조각내어 병렬 처리하고 즉시 화면에 뿌림
+    // [핵심 개선] 데이터를 20개씩 병렬 처리하여 즉시 UI에 반영
     suspend fun processAndDistribute(newSeries: List<Series>) = coroutineScope {
         newSeries.chunked(20).forEach { chunk ->
-            // 1. 서버 장르 정보가 부족한 아이템만 병렬로 보충
+            // 1. 서버 정보가 없는 경우에만 병렬로 TMDB 조회
             chunk.map { series ->
                 async(Dispatchers.Default) {
                     if (series.genreIds.isEmpty() && !tmdbCache.containsKey(series.title) && !tmdbCache.containsKey("ani_${series.title}")) {
@@ -102,7 +102,7 @@ fun ThemedCategoryScreen(
                 }
             }.awaitAll()
 
-            // 2. 조각 로딩이 끝날 때마다 즉시 UI 배분 (기다림 없음)
+            // 2. 20개가 완료될 때마다 즉시 분류 및 UI 업데이트 (사용자가 기다리지 않음)
             withContext(Dispatchers.Main) {
                 val tAction = mutableListOf<Series>()
                 val tFantasy = mutableListOf<Series>()
@@ -135,9 +135,9 @@ fun ThemedCategoryScreen(
                 if (tFamily.isNotEmpty()) familyList = (familyList + tFamily).distinctBy { it.title }
                 if (tEtc.isNotEmpty()) etcList = (etcList + tEtc).distinctBy { it.title }
                 
-                isInitialLoading = false
+                isInitialLoading = false // 첫 조각만 처리되어도 로딩바 제거하여 빠른 응답성 제공
             }
-            yield() // 스크롤 시 부드러운 성능 유지
+            yield() // 스크롤 부드러움을 위해 양보
         }
     }
 

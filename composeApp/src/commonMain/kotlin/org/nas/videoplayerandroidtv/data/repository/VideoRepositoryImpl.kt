@@ -16,6 +16,13 @@ class VideoRepositoryImpl : VideoRepository {
     private val client = NasApiClient.client
     private val baseUrl = NasApiClient.BASE_URL
 
+    override suspend fun getHomeRecommendations(): List<HomeSection> = try {
+        client.get("$baseUrl/home").body()
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        emptyList()
+    }
+
     override suspend fun getCategoryList(path: String, limit: Int, offset: Int): List<Category> = try {
         val categories: List<Category> = client.get("$baseUrl/list") {
             parameter("path", path)
@@ -60,7 +67,6 @@ class VideoRepositoryImpl : VideoRepository {
 
     private suspend fun getMoviesFlat(route: String, limit: Int, offset: Int): List<Series> = withContext(Dispatchers.Default) {
         try {
-            // [개선] lite=true를 보내서 파일 상세 정보를 제외하고 장르/포스터 정보만 가져옴
             val response: List<Category> = client.get("$baseUrl/movies") {
                 parameter("route", route)
                 parameter("limit", limit)
@@ -73,10 +79,10 @@ class VideoRepositoryImpl : VideoRepository {
                 .map { cat ->
                     Series(
                         title = cat.name ?: "Unknown",
-                        episodes = emptyList(), // 메인 리스트에선 비워둠
+                        episodes = emptyList(),
                         fullPath = "영화/${cat.path}",
-                        genreIds = cat.genreIds ?: emptyList(), // 서버측 장르 정보 활용
-                        posterPath = cat.posterPath // 서버측 포스터 경로 활용
+                        genreIds = cat.genreIds ?: emptyList(),
+                        posterPath = cat.posterPath
                     )
                 }
                 .distinctBy { it.title }
