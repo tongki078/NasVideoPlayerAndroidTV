@@ -64,14 +64,12 @@ fun ThemedCategoryScreen(
         else -> emptyList()
     }
     
-    // 상태 관리
     var themedSections by remember(selectedMode, categoryName) { mutableStateOf<List<Pair<String, List<Series>>>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var isInitialLoading by remember(selectedMode, categoryName) { mutableStateOf(!isAirScreen) }
     var currentOffset by remember(selectedMode, categoryName) { mutableIntStateOf(0) }
     val pageSize = 8
 
-    // 데이터 로딩 함수 (기존 로직 유지)
     val loadNextPage: suspend () -> Unit = {
         if (!isLoading) {
             isLoading = true
@@ -133,7 +131,6 @@ fun ThemedCategoryScreen(
                     themedSections = themedSections + newSections
                     currentOffset += pageSize
                     
-                    // TMDB 프리페칭
                     coroutineScope {
                         newSections.flatMap { it.second.take(3) }.forEach { series ->
                             launch { fetchTmdbMetadata(series.title) }
@@ -149,7 +146,6 @@ fun ThemedCategoryScreen(
         }
     }
 
-    // [방송중] 카테고리 실시간 점진적 로딩 로직 (모든 영상 로드 버전)
     LaunchedEffect(selectedMode, categoryName) {
         if (!isAirScreen) {
             themedSections = emptyList()
@@ -161,72 +157,75 @@ fun ThemedCategoryScreen(
 
         themedSections = emptyList()
         isLoading = true
-        // isInitialLoading은 이미 false (isAirScreen일 때)
 
         try {
             val isAnimationMode = selectedMode == 0
             val allSeries = (if (isAnimationMode) repository.getAnimations() else repository.getDramas()).shuffled()
             if (allSeries.isEmpty()) return@LaunchedEffect
 
-            // 분석 대상: 서버의 모든 영상 (제한 해제)
             val targetSeries = allSeries
             val genreGroups = mutableMapOf<String, MutableList<Series>>()
             val noGenreList = mutableListOf<Series>()
 
-            // UI 갱신용 헬퍼 함수
+            // 포스터 유무에 따른 정렬 로직 포함된 UI 갱신 함수
             fun updateUI() {
                 val finalSections = mutableListOf<Pair<String, List<Series>>>()
                 
-                // 1. 장르별 그룹 정렬 (콘텐츠 많은 순으로 상단 배치)
+                // 장르별 섹션
                 genreGroups.toList()
                     .sortedByDescending { it.second.size }
                     .forEach { (genre, list) ->
-                        finalSections.add("$genre 시리즈" to list.toList())
+                        // 포스터 있는 것을 앞으로 정렬
+                        val sortedList = list.sortedByDescending { series ->
+                            val cacheKey = if (isAnimationMode) "ani_${series.title}" else series.title
+                            tmdbCache[cacheKey]?.posterUrl != null
+                        }
+                        finalSections.add("$genre 시리즈" to sortedList)
                     }
 
-                // 2. 분류 대기 중이거나 장르가 없는 전체 영상 (하단 배치)
+                // 전체/추천 섹션
                 if (noGenreList.isNotEmpty()) {
                     val label = if (isAnimationMode) "전체 애니메이션" else "전체 드라마"
-                    finalSections.add(label to noGenreList.toList())
+                    val sortedNoGenre = noGenreList.sortedByDescending { series ->
+                        val cacheKey = if (isAnimationMode) "ani_${series.title}" else series.title
+                        tmdbCache[cacheKey]?.posterUrl != null
+                    }
+                    finalSections.add(label to sortedNoGenre)
                 }
                 
                 themedSections = finalSections
             }
 
-            // 1단계: 즉시 모든 데이터 표시 (기다림 없이 서버 리스트 전체 노출)
-            noGenreList.addAll(targetSeries)
-            updateUI()
-            yield()
-
-            // 2단계: 캐시된 데이터 즉시 분류 (메모리에 있는 정보 활용)
+            // 1단계: 캐시 데이터 기반 즉시 분류 (가장 빠름)
             targetSeries.forEach { series ->
                 val cacheKey = if (isAnimationMode) "ani_${series.title}" else series.title
                 tmdbCache[cacheKey]?.let { cached ->
                     val genres = cached.genreIds.mapNotNull { TMDB_GENRE_MAP[it] }
                     if (genres.isNotEmpty()) {
-                        noGenreList.remove(series)
                         genreGroups.getOrPut(genres.first()) { mutableListOf() }.add(series)
+                    } else {
+                        noGenreList.add(series)
                     }
+                } ?: run {
+                    noGenreList.add(series)
                 }
             }
             updateUI()
             yield()
 
-            // 3단계: 나머지 데이터 백그라운드 배치 처리 (10개씩 분석하며 실시간 이동)
+            // 2단계: 백그라운드 분석 (포스터 없는 영상들 타겟팅)
             val remaining = targetSeries.filter { series ->
                 val cacheKey = if (isAnimationMode) "ani_${series.title}" else series.title
                 tmdbCache[cacheKey] == null
             }
 
-            remaining.chunked(10).forEach { batch ->
+            // 첫 20개는 빠르게 처리 (10개씩 2번)
+            remaining.take(20).chunked(10).forEach { batch ->
                 coroutineScope {
                     batch.map { series ->
                         async {
-                            try {
-                                fetchTmdbMetadata(series.title, isAnimation = isAnimationMode) to series
-                            } catch (e: Exception) {
-                                null to series
-                            }
+                            try { fetchTmdbMetadata(series.title, isAnimation = isAnimationMode) to series }
+                            catch (e: Exception) { null to series }
                         }
                     }.awaitAll().forEach { (metadata, series) ->
                         val genres = metadata?.genreIds?.mapNotNull { TMDB_GENRE_MAP[it] } ?: emptyList()
@@ -234,10 +233,30 @@ fun ThemedCategoryScreen(
                             noGenreList.remove(series)
                             genreGroups.getOrPut(genres.first()) { mutableListOf() }.add(series)
                         }
-                        // 장르 없는 경우 이미 noGenreList에 있으므로 그대로 둠
                     }
                 }
                 updateUI()
+                yield()
+            }
+
+            // 나머지는 여유 있게 처리 (배치 사이즈 증가 및 yield 조절로 메인 스레드 확보)
+            remaining.drop(20).chunked(15).forEach { batch ->
+                coroutineScope {
+                    batch.map { series ->
+                        async {
+                            try { fetchTmdbMetadata(series.title, isAnimation = isAnimationMode) to series }
+                            catch (e: Exception) { null to series }
+                        }
+                    }.awaitAll().forEach { (metadata, series) ->
+                        val genres = metadata?.genreIds?.mapNotNull { TMDB_GENRE_MAP[it] } ?: emptyList()
+                        if (genres.isNotEmpty()) {
+                            noGenreList.remove(series)
+                            genreGroups.getOrPut(genres.first()) { mutableListOf() }.add(series)
+                        }
+                    }
+                }
+                updateUI()
+                delay(100) // TV 성능을 위해 약간의 휴식
                 yield()
             }
 
@@ -249,7 +268,6 @@ fun ThemedCategoryScreen(
         }
     }
 
-    // 무한 스크롤 감지
     val isAtBottom = remember {
         derivedStateOf {
             val layoutInfo = lazyListState.layoutInfo
@@ -271,42 +289,24 @@ fun ThemedCategoryScreen(
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFF0F0F0F))) {
         if (modes.isNotEmpty()) {
             LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 16.dp, horizontal = 48.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 48.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 items(modes.size) { index ->
-                    CategoryTabItem(
-                        text = modes[index],
-                        isSelected = selectedMode == index,
-                        onClick = { onModeChange(index) }
-                    )
+                    CategoryTabItem(text = modes[index], isSelected = selectedMode == index, onClick = { onModeChange(index) })
                 }
             }
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
             if (themedSections.isEmpty() && !isLoading && !isInitialLoading) {
-                Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text("표시할 영상이 없습니다.", color = Color.Gray)
-                }
+                Box(Modifier.fillMaxSize(), Alignment.Center) { Text("표시할 영상이 없습니다.", color = Color.Gray) }
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(), 
-                    state = lazyListState,
-                    contentPadding = PaddingValues(bottom = 100.dp)
-                ) {
+                LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(bottom = 100.dp)) {
                     items(themedSections) { (title, seriesList) ->
-                        MovieRow(
-                            title = title,
-                            seriesList = seriesList,
-                            onSeriesClick = onSeriesClick
-                        )
+                        MovieRow(title = title, seriesList = seriesList, onSeriesClick = onSeriesClick)
                     }
-                    
-                    // 방송중 카테고리가 아닐 때만 하단 로딩 스피너 표시
                     if ((isLoading || isInitialLoading) && !isAirScreen) {
                         item {
                             Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -321,59 +321,20 @@ fun ThemedCategoryScreen(
 }
 
 @Composable
-private fun CategoryTabItem(
-    text: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
+private fun CategoryTabItem(text: String, isSelected: Boolean, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
-    
-    val backgroundColor by animateColorAsState(
-        when {
-            isFocused -> Color.White
-            isSelected -> Color.Red
-            else -> Color.Gray.copy(alpha = 0.2f)
-        }
-    )
-    
-    val textColor by animateColorAsState(
-        when {
-            isFocused -> Color.Black
-            isSelected -> Color.White
-            else -> Color.Gray
-        }
-    )
+    val backgroundColor by animateColorAsState(when { isFocused -> Color.White; isSelected -> Color.Red; else -> Color.Gray.copy(alpha = 0.2f) })
+    val textColor by animateColorAsState(when { isFocused -> Color.Black; isSelected -> Color.White; else -> Color.Gray })
 
     Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(24.dp))
-            .background(backgroundColor)
-            .onFocusChanged { isFocused = it.isFocused }
-            .focusable()
-            .clickable { onClick() }
-            .padding(horizontal = 20.dp, vertical = 8.dp)
-            .scale(if (isFocused) 1.1f else 1.0f),
+        modifier = Modifier.clip(RoundedCornerShape(24.dp)).background(backgroundColor).onFocusChanged { isFocused = it.isFocused }.focusable().clickable { onClick() }.padding(horizontal = 20.dp, vertical = 8.dp).scale(if (isFocused) 1.1f else 1.0f),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = text,
-            color = textColor,
-            fontSize = 16.sp,
-            fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
-        )
+        Text(text = text, color = textColor, fontSize = 16.sp, fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium)
     }
 }
 
 private fun List<Movie>.groupBySeries(basePath: String? = null): List<Series> = 
-    this.groupBy { it.title.cleanTitle(includeYear = false) }
-        .map { (title, eps) -> 
-            Series(
-                title = title, 
-                episodes = eps.sortedWith(
-                    compareBy<Movie> { it.title.extractSeason() }
-                        .thenBy { it.title.extractEpisode()?.filter { char -> char.isDigit() }?.toIntOrNull() ?: 0 }
-                ),
-                fullPath = basePath
-            ) 
-        }
-        .sortedBy { it.title }
+    this.groupBy { it.title.cleanTitle(includeYear = false) }.map { (title, eps) -> 
+            Series(title = title, episodes = eps.sortedWith(compareBy<Movie> { it.title.extractSeason() }.thenBy { it.title.extractEpisode()?.filter { it.isDigit() }?.toIntOrNull() ?: 0 }), fullPath = basePath) 
+    }.sortedBy { it.title }
