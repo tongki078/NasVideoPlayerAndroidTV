@@ -11,6 +11,7 @@ import kotlinx.coroutines.*
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
+import org.nas.videoplayerandroidtv.data.TmdbCacheDataSource
 
 // TMDB 관련 상수
 const val TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk"
@@ -98,6 +99,9 @@ data class TmdbRole(val character: String, @SerialName("episode_count") val epis
 internal val tmdbCache = mutableMapOf<String, TmdbMetadata>()
 private val tmdbInFlightRequests = mutableMapOf<String, Deferred<TmdbMetadata>>()
 
+// [추가] DB 캐시 접근을 위한 전역 변수 (App.kt에서 초기화됨)
+internal var persistentCache: TmdbCacheDataSource? = null
+
 // 미리 컴파일된 정규식 상수로 성능 최적화
 private val REGEX_EXT = Regex("""\.[a-zA-Z0-9]{2,4}$""")
 private val REGEX_HANGUL_ALPHA = Regex("""([가-힣])([a-zA-Z0-9])""")
@@ -165,10 +169,16 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimati
     if (TMDB_API_KEY.isBlank()) return TmdbMetadata()
     val cacheKey = if (isAnimation) "ani_$title" else title
     
-    // 1. 이미 완료된 캐시가 있는지 확인
+    // 1단계: 메모리 캐시 확인 (0.0001초)
     tmdbCache[cacheKey]?.let { return it }
 
-    // 2. 현재 진행 중인 동일한 요청이 있는지 확인 (중복 요청 방지)
+    // 2단계: 로컬 DB 영구 캐시 확인 (0.01초)
+    persistentCache?.getCache(cacheKey)?.let {
+        synchronized(tmdbCache) { tmdbCache[cacheKey] = it }
+        return it
+    }
+
+    // 3단계: 중복 요청 방지하며 네트워크 검색 (1~3초)
     val deferred = synchronized(tmdbInFlightRequests) {
         tmdbInFlightRequests.getOrPut(cacheKey) {
             GlobalScope.async(Dispatchers.Default) {
@@ -176,7 +186,10 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimati
                 val metadata = performSearchSimple(cleanTitle, typeHint, isAnimation)
                 val result = metadata ?: TmdbMetadata()
                 
+                // 결과 저장
                 synchronized(tmdbCache) { tmdbCache[cacheKey] = result }
+                persistentCache?.saveCache(cacheKey, result)
+
                 synchronized(tmdbInFlightRequests) { tmdbInFlightRequests.remove(cacheKey) }
                 result
             }

@@ -50,6 +50,11 @@ fun App(driver: SqlDriver) {
     val searchHistoryDataSource = remember { SearchHistoryDataSource(db) }
     val watchHistoryDataSource = remember { WatchHistoryDataSource(db) }
     
+    val tmdbCacheDataSource = remember { TmdbCacheDataSource(db) }
+    LaunchedEffect(Unit) {
+        persistentCache = tmdbCacheDataSource
+    }
+    
     val recentQueriesState = searchHistoryDataSource.getRecentQueries()
         .map { list -> list.map { it.toData() } }
         .collectAsState(initial = emptyList())
@@ -128,33 +133,18 @@ fun App(driver: SqlDriver) {
         }
     }
 
-    // [획기적 개선] 데이터 로딩을 병렬화하고 상호 의존성을 제거함
     LaunchedEffect(currentScreen) {
-        if (currentScreen == Screen.HOME && (homeLatestSeries.isEmpty() || homeAnimations.isEmpty())) {
+        if (currentScreen == Screen.HOME && homeLatestSeries.isEmpty()) {
             isHomeLoading = true
             
-            // 각 섹션을 독립적으로 로드하여 하나라도 완료되면 화면 표시 시도
-            coroutineScope {
-                launch {
-                    try {
-                        val latest = repository.getLatestMovies()
-                        homeLatestSeries = latest
-                        // 최신 영화가 먼저 오면 바로 로딩바 종료 가능성 체크
-                        if (isHomeLoading) isHomeLoading = false
-                    } catch (e: Exception) { }
-                }
-                
-                launch {
-                    try {
-                        val animations = repository.getAnimationsAir()
-                        homeAnimations = animations
-                        // 애니메이션이 먼저 와도 로딩바 종료 가능성 체크
-                        if (isHomeLoading) isHomeLoading = false
-                    } catch (e: Exception) { }
-                }
-            }
+            // 병렬로 서버 데이터를 가져오고, 도착 즉시 로딩을 끕니다.
+            val latestDeferred = async { repository.getLatestMovies() }
+            val animationsDeferred = async { repository.getAnimationsAir() }
             
-            // 모든 작업이 어떤 이유로든 끝났다면 확실히 로딩바 종료
+            homeLatestSeries = latestDeferred.await()
+            homeAnimations = animationsDeferred.await()
+            
+            // 서버 목록이 준비되면 즉시 메인 화면 표시 (포스터를 기다리지 않음)
             isHomeLoading = false
         }
     }

@@ -30,26 +30,16 @@ import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.common.MovieRow
 import org.nas.videoplayerandroidtv.*
 
-private val TMDB_GENRE_MAP = mapOf(
-    16 to "애니메이션", 28 to "액션", 12 to "모험", 35 to "코미디", 80 to "범죄",
-    99 to "다큐멘터리", 18 to "드라마", 10751 to "가족", 14 to "판타지", 36 to "역사",
-    27 to "공포", 10402 to "음악", 9648 to "미스터리", 10749 to "로맨스", 878 to "SF",
-    10770 to "TV 영화", 53 to "스릴러", 10752 to "전쟁", 37 to "서부",
-    10759 to "액션 & 어드벤처", 10762 to "키즈", 10765 to "SF & 판타지"
-)
-
-private fun List<Series>.sortByPoster(isAnimation: Boolean): List<Series> {
-    return this.sortedWith(
-        compareByDescending<Series> { series ->
-            val cacheKey = if (isAnimation) "ani_${series.title}" else series.title
-            val metadata = tmdbCache[cacheKey]
-            when {
-                metadata?.posterUrl != null -> 3
-                metadata == null -> 2
-                else -> 1
-            }
-        }.thenByDescending { it.episodes.size }
-    )
+// 한글 초성 추출 함수 (특수문자 및 괄호 무시 로직 추가)
+private fun String.getConsonant(): String {
+    val cleaned = this.replace(Regex("""^[\(\[][^\]\)]+[\)\]]\s*"""), "").trim()
+    val firstChar = cleaned.firstOrNull() ?: return "#"
+    if (firstChar in '가'..'힣') {
+        val index = (firstChar - '가') / 588
+        val consonants = listOf("ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ")
+        return consonants.getOrElse(index) { "기타" }
+    }
+    return if (firstChar.isLetterOrDigit()) firstChar.uppercaseChar().toString() else "#"
 }
 
 @Composable
@@ -71,63 +61,65 @@ fun ThemedCategoryScreen(
         else -> emptyList()
     }
 
-    var themedSections by remember(selectedMode, categoryName) { mutableStateOf<List<Pair<String, List<Series>>>>(emptyList()) }
+    val themedSections = remember(selectedMode, categoryName) { mutableStateOf<List<Pair<String, List<Series>>>>(emptyList()) }
     var isInitialLoading by remember(selectedMode, categoryName) { mutableStateOf(true) }
 
     LaunchedEffect(selectedMode, categoryName) {
         isInitialLoading = true
-        themedSections = emptyList()
+        themedSections.value = emptyList()
         
         try {
-            // [구조적 개선] Repository가 이미 카테고리/모드별로 정제된 데이터를 반환합니다.
-            val finalItems = when {
-                isAirScreen -> {
-                    if (selectedMode == 0) repository.getAnimationsAir()
-                    else repository.getDramasAir()
-                }
-                isAniScreen -> {
-                    val allAni = repository.getAnimationsAll()
-                    allAni.filter { series ->
-                        val path = (series.fullPath ?: "").lowercase()
-                        val isRaftel = path.contains("라프텔") || path.contains("raftel")
-                        if (selectedMode == 0) isRaftel else !isRaftel
+            // [획기적 개선] 제목만 있는 경량 데이터이므로 5,000개를 한 번에 가져와서 정렬 문제를 해결합니다.
+            val allSeries = withContext(Dispatchers.Default) {
+                when {
+                    isAirScreen -> if (selectedMode == 0) repository.getAnimationsAir() else repository.getDramasAir()
+                    isAniScreen -> {
+                        if (selectedMode == 0) repository.getAnimationsRaftel(5000, 0) 
+                        else repository.getAnimationsSeries(5000, 0)
                     }
+                    else -> emptyList()
                 }
-                else -> emptyList()
             }
 
-            if (finalItems.isEmpty()) {
+            if (allSeries.isEmpty()) {
                 isInitialLoading = false
                 return@LaunchedEffect
             }
 
-            // 장르별 분류 로직은 동일하게 유지하되, 데이터 안정성 강화
-            val genreGroups = mutableMapOf<String, MutableList<Series>>()
-            coroutineScope {
-                finalItems.chunked(12).forEach { batch ->
-                    ensureActive()
-                    batch.map { s -> async { fetchTmdbMetadata(s.title, isAnimation = isAniScreen || isAirScreen) to s } }
-                        .awaitAll()
-                        .forEach { (meta, s) ->
-                            val genres = meta?.genreIds?.mapNotNull { TMDB_GENRE_MAP[it] } ?: emptyList()
-                            val groupName = genres.firstOrNull() ?: "추천"
-                            genreGroups.getOrPut(groupName) { mutableListOf() }.add(s)
+            // 전체 데이터를 초성별로 즉시 그룹화
+            val fullGroupedList = withContext(Dispatchers.Default) {
+                allSeries.groupBy { it.title.getConsonant() }
+                    .map { (consonant, list) -> consonant to list.sortedBy { it.title }.take(100) }
+                    .sortedWith(compareBy<Pair<String, List<Series>>> { (key, _) -> 
+                        val first = key.firstOrNull() ?: ' '
+                        when {
+                            first in 'ㄱ'..'ㅎ' -> 1
+                            first.isDigit() -> 2
+                            first in 'A'..'Z' || first in 'a'..'z' -> 3
+                            else -> 4
                         }
-                    
-                    themedSections = genreGroups.map { (genre, list) -> 
-                        "$genre ${if (isAirScreen && selectedMode == 1) "드라마" else "애니메이션"}" to list.sortByPoster(true) 
-                    }.sortedByDescending { it.second.size }
-                    
-                    isInitialLoading = false
+                    }.thenBy { it.first })
+            }
+
+            // [안정성 유지] 첫 1개 섹션만 즉시 노출하고, 나머지는 0.8초 간격으로 추가하여 DB 크래시 방지
+            val currentList = mutableListOf<Pair<String, List<Series>>>()
+            if (fullGroupedList.isNotEmpty()) {
+                currentList.add(fullGroupedList[0])
+                themedSections.value = currentList.toList()
+                isInitialLoading = false
+            }
+            
+            if (fullGroupedList.size > 1) {
+                fullGroupedList.drop(1).forEach { section ->
+                    delay(800) 
+                    currentList.add(section)
+                    themedSections.value = currentList.toList()
                 }
             }
+
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             isInitialLoading = false
-        } finally {
-            withContext(NonCancellable) {
-                isInitialLoading = false
-            }
         }
     }
 
@@ -150,13 +142,17 @@ fun ThemedCategoryScreen(
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
-            if (!isInitialLoading && themedSections.isEmpty()) {
+            if (!isInitialLoading && themedSections.value.isEmpty()) {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text("영상을 불러올 수 없습니다.", color = Color.Gray, textAlign = TextAlign.Center)
+                    Text("영상을 불러올 수 없습니다.", color = Color.Gray)
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(bottom = 100.dp)) {
-                    items(themedSections, key = { it.first }) { (title, seriesList) ->
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(), 
+                    state = lazyListState, 
+                    contentPadding = PaddingValues(bottom = 100.dp)
+                ) {
+                    items(themedSections.value, key = { it.first }) { (title, seriesList) ->
                         MovieRow(title = title, seriesList = seriesList, onSeriesClick = onSeriesClick)
                     }
                 }
