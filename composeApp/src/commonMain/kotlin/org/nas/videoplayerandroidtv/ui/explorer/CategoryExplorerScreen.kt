@@ -54,13 +54,12 @@ fun CategoryExplorerScreen(
         )
 
         if (isLoading) {
-            // 로딩 아이콘 제거 및 스켈레톤 그리드 표시
             ExplorerSkeletonGrid()
         } else {
-            val hasMovies = items.any { it.movies.isNotEmpty() }
+            val hasMovies = items.any { it.movies?.isNotEmpty() == true }
             
             if (hasMovies) {
-                val seriesList = items.flatMap { it.movies }.groupBySeries()
+                val seriesList = items.flatMap { it.movies ?: emptyList() }.groupBySeries()
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
                     modifier = Modifier.fillMaxSize(),
@@ -78,10 +77,10 @@ fun CategoryExplorerScreen(
                 LazyColumn {
                     items(items) { item ->
                         ListItem(
-                            headlineContent = { Text(item.name, color = Color.White) },
+                            headlineContent = { Text(item.name ?: "", color = Color.White) },
                             leadingContent = { Icon(Icons.AutoMirrored.Filled.List, null, tint = Color.Gray) },
                             trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Color.Gray) },
-                            modifier = Modifier.clickable { pathStack = pathStack + item.name },
+                            modifier = Modifier.clickable { pathStack = pathStack + (item.name ?: "") },
                             colors = ListItemDefaults.colors(containerColor = Color.Transparent)
                         )
                     }
@@ -112,6 +111,6 @@ private fun ExplorerSkeletonGrid() {
 }
 
 private fun List<org.nas.videoplayerandroidtv.domain.model.Movie>.groupBySeries(): List<Series> = 
-    this.groupBy { it.title.replace(Regex("(?i)[.\\s_](?:S\\d+E\\d+|S\\d+|E\\d+|\\d+\\s*(?:화|회|기)|Season\\s*\\d+|Part\\s*\\d+).*"), "").trim() }
-        .map { (title, eps) -> Series(title, eps.sortedBy { it.title }) }
+    this.groupBy { (it.title ?: "").replace(Regex("(?i)[.\\s_](?:S\\d+E\\d+|S\\d+|E\\d+|\\d+\\s*(?:화|회|기)|Season\\s*\\d+|Part\\s*\\d+).*"), "").trim() }
+        .map { (title, eps) -> Series(title, eps.sortedBy { it.title ?: "" }) }
         .sortedBy { it.title }

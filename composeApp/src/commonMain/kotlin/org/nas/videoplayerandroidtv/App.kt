@@ -62,7 +62,6 @@ fun App(driver: SqlDriver) {
 
     val scope = rememberCoroutineScope()
 
-    // Screen enum은 별도 파일(Screen.kt)로 분리되었습니다.
     var currentScreen by rememberSaveable { mutableStateOf(Screen.HOME) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var searchCategory by rememberSaveable { mutableStateOf("전체") }
@@ -87,7 +86,6 @@ fun App(driver: SqlDriver) {
     var selectedForeignTvMode by rememberSaveable { mutableIntStateOf(0) }
     var selectedKoreanTvMode by rememberSaveable { mutableIntStateOf(0) }
 
-    // 뒤로가기 핸들러
     BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME) {
         when {
             selectedMovie != null -> {
@@ -104,12 +102,14 @@ fun App(driver: SqlDriver) {
 
     val saveWatchHistory: (Movie) -> Unit = { movie ->
         scope.launch(Dispatchers.Default) {
-            val isAni = movie.videoUrl.contains("애니메이션") || movie.title.contains("애니메이션")
+            val videoUrl = movie.videoUrl ?: ""
+            val title = movie.title ?: ""
+            val isAni = videoUrl.contains("애니메이션") || title.contains("애니메이션")
             watchHistoryDataSource.insertWatchHistory(
-                id = movie.id,
-                title = movie.title,
-                videoUrl = movie.videoUrl,
-                thumbnailUrl = movie.thumbnailUrl,
+                id = movie.id ?: "",
+                title = title,
+                videoUrl = videoUrl,
+                thumbnailUrl = movie.thumbnailUrl ?: "",
                 timestamp = currentTimeMillis(),
                 screenType = if (isAni) "animation" else "movie",
                 pathStackJson = ""
@@ -153,6 +153,8 @@ fun App(driver: SqlDriver) {
                 }
                 homeLatestSeries = latest
                 homeAnimations = animations
+            } catch (e: Exception) {
+                // Handle error
             } finally {
                 isHomeLoading = false
             }
@@ -244,7 +246,9 @@ fun App(driver: SqlDriver) {
                                     lazyListState = homeLazyListState,
                                     onSeriesClick = { selectedSeries = it }, 
                                     onPlayClick = { movie ->
-                                        val parentSeries = (homeLatestSeries + homeAnimations).find { it.episodes.contains(movie) }
+                                        val parentSeries = (homeLatestSeries + homeAnimations).find { series -> 
+                                            series.episodes.any { it.id == movie.id }
+                                        }
                                         selectedMovie = movie
                                         moviePlaylist = parentSeries?.episodes ?: listOf(movie)
                                         lastPlaybackPosition = 0L

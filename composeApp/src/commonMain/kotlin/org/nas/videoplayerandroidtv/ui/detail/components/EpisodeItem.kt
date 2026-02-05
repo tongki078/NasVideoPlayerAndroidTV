@@ -44,8 +44,9 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
 
     LaunchedEffect(movie, seriesMeta) {
         if (seriesMeta?.tmdbId != null && seriesMeta.mediaType == "tv") {
-            val season = movie.title.extractSeason()
-            val episodeNum = movie.title.extractEpisode()?.filter { it.isDigit() }?.toIntOrNull() ?: 1
+            // extractSeason()은 Int를 반환하므로 기본값을 Int로 지정합니다.
+            val season = movie.title?.extractSeason() ?: 1
+            val episodeNum = movie.title?.extractEpisode()?.filter { it.isDigit() }?.toIntOrNull() ?: 1
             episodeDetails = fetchTmdbEpisodeDetails(seriesMeta.tmdbId, season, episodeNum)
         }
     }
@@ -83,7 +84,7 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
             if (imageUrl.isNotEmpty()) {
                 AsyncImage(
                     model = imageUrl,
-                    contentDescription = movie.title,
+                    contentDescription = movie.title ?: "",
                     onState = { state -> isLoading = state is AsyncImagePainter.State.Loading },
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
@@ -94,7 +95,7 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
         Spacer(Modifier.width(20.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                text = movie.title.prettyTitle(), 
+                text = (movie.title ?: "").prettyTitle(),
                 color = if (isFocused) Color.Yellow else Color.White, 
                 fontSize = 16.sp, 
                 fontWeight = FontWeight.Bold, 

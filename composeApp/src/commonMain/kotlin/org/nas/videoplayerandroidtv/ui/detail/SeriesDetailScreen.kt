@@ -43,8 +43,8 @@ private data class SeriesDetailState(
 // ==========================================================
 
 private fun List<Movie>.sortedByEpisode(): List<Movie> = this.sortedWith(
-    compareBy<Movie> { it.title.extractSeason() }
-        .thenBy { it.title.extractEpisode()?.filter { char -> char.isDigit() }?.toIntOrNull() ?: 0 }
+    compareBy<Movie> { it.title?.extractSeason() ?: "" }
+        .thenBy { it.title?.extractEpisode()?.filter { char -> char.isDigit() }?.toIntOrNull() ?: 0 }
 )
 
 private suspend fun loadSeasons(series: Series, repository: VideoRepository): List<Season> {
@@ -54,16 +54,16 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
 
     return try {
         val content = repository.getCategoryList(path)
-        val hasDirectMovies = content.any { it.movies.isNotEmpty() }
+        val hasDirectMovies = content.any { it.movies?.isNotEmpty() == true }
 
         if (hasDirectMovies) {
-            listOf(Season("에피소드", content.flatMap { it.movies }.sortedByEpisode()))
+            listOf(Season("에피소드", content.flatMap { it.movies ?: emptyList() }.sortedByEpisode()))
         } else {
             coroutineScope {
                 content.map { folder ->
                     async {
-                        val folderMovies = repository.getCategoryList("$path/${folder.name}").flatMap { it.movies }
-                        if (folderMovies.isNotEmpty()) Season(folder.name, folderMovies.sortedByEpisode()) else null
+                        val folderMovies = repository.getCategoryList("$path/${folder.name ?: ""}").flatMap { it.movies ?: emptyList() }
+                        if (folderMovies.isNotEmpty()) Season(folder.name ?: "알 수 없음", folderMovies.sortedByEpisode()) else null
                     }
                 }.awaitAll().filterNotNull().sortedBy { it.name }
             }

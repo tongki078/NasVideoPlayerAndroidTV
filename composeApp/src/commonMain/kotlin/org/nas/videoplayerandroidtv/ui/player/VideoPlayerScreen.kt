@@ -38,7 +38,6 @@ fun VideoPlayerScreen(
         } else null
     }
 
-    // 컨트롤러 자동 숨김 타이머
     LaunchedEffect(isControllerVisible) {
         if (isControllerVisible) {
             delay(5000)
@@ -51,16 +50,13 @@ fun VideoPlayerScreen(
             .fillMaxSize()
             .background(Color.Black)
             .onKeyEvent { keyEvent ->
-                // 리모컨 버튼 입력 처리
                 if (keyEvent.type == KeyEventType.KeyDown) {
                     when (keyEvent.nativeKeyEvent.keyCode) {
-                        // 확인 버튼 (Center DPAD / Enter)
                         android.view.KeyEvent.KEYCODE_DPAD_CENTER,
                         android.view.KeyEvent.KEYCODE_ENTER -> {
                             isControllerVisible = !isControllerVisible
                             true
                         }
-                        // 뒤로가기 버튼
                         android.view.KeyEvent.KEYCODE_BACK -> {
                             if (isControllerVisible) {
                                 isControllerVisible = false
@@ -70,13 +66,12 @@ fun VideoPlayerScreen(
                                 true
                             }
                         }
-                        // 방향키 입력 시 컨트롤러 표시
                         android.view.KeyEvent.KEYCODE_DPAD_UP,
                         android.view.KeyEvent.KEYCODE_DPAD_DOWN,
                         android.view.KeyEvent.KEYCODE_DPAD_LEFT,
                         android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
                             isControllerVisible = true
-                            false // 시스템이 기본 포커스 이동을 처리하도록 false 반환
+                            false 
                         }
                         else -> false
                     }
@@ -84,7 +79,7 @@ fun VideoPlayerScreen(
             }
     ) {
         VideoPlayer(
-            url = currentMovie.videoUrl,
+            url = currentMovie.videoUrl ?: "",
             modifier = Modifier.fillMaxSize(),
             initialPosition = initialPosition,
             onPositionUpdate = onPositionUpdate,
@@ -102,7 +97,6 @@ fun VideoPlayerScreen(
             exit = fadeOut()
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // 상단 좌측: 닫기 버튼 (TV 포커스 가능하도록 개선)
                 var isCloseFocused by remember { mutableStateOf(false) }
                 IconButton(
                     onClick = onBack,
@@ -120,7 +114,6 @@ fun VideoPlayerScreen(
                     )
                 }
 
-                // 하단 우측: 다음 회차 보기 버튼 (TV 포커스 가능하도록 개선)
                 if (nextMovie != null) {
                     var isNextFocused by remember { mutableStateOf(false) }
                     Button(

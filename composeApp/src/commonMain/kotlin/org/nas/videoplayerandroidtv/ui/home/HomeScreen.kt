@@ -49,7 +49,6 @@ fun HomeScreen(
     onPlayClick: (Movie) -> Unit,
     onHistoryClick: (WatchHistory) -> Unit = {}
 ) {
-    // TV Standard Safe Area Padding
     val horizontalPadding = 48.dp
 
     if (isLoading) {
@@ -154,18 +153,17 @@ private fun HeroSection(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(320.dp) // Reduced from 420.dp to show more lists below
+            .height(320.dp)
             .background(Color.Black)
     ) {
         TmdbAsyncImage(
-            title = movie.title,
+            title = movie.title ?: "",
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
             isLarge = true,
             isAnimation = isAnimation
         )
         
-        // Cinematic gradient overlay
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -186,7 +184,7 @@ private fun HeroSection(
                 .fillMaxWidth(0.6f)
         ) {
             Text(
-                text = movie.title.cleanTitle(),
+                text = (movie.title ?: "").cleanTitle(),
                 color = Color.White,
                 style = MaterialTheme.typography.headlineMedium.copy(
                     fontWeight = FontWeight.Black,
@@ -196,7 +194,6 @@ private fun HeroSection(
             Spacer(Modifier.height(16.dp))
             
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Play Button
                 Button(
                     onClick = { onPlay(movie) },
                     colors = ButtonDefaults.buttonColors(
@@ -225,7 +222,6 @@ private fun HeroSection(
                 
                 Spacer(Modifier.width(16.dp))
                 
-                // Info Button
                 Button(
                     onClick = onClick,
                     shape = RoundedCornerShape(8.dp),
@@ -250,7 +246,7 @@ private fun HeroSection(
 private fun SectionTitle(title: String, horizontalPadding: androidx.compose.ui.unit.Dp) {
     Text(
         text = title,
-        modifier = Modifier.padding(start = horizontalPadding, top = 20.dp, bottom = 8.dp), // Reduced padding
+        modifier = Modifier.padding(start = horizontalPadding, top = 20.dp, bottom = 8.dp),
         color = Color(0xFFE0E0E0),
         fontWeight = FontWeight.Bold,
         fontSize = 18.sp,
@@ -265,7 +261,7 @@ private fun MovieCard(title: String, typeHint: String? = null, isAnimation: Bool
 
     Column(
         modifier = Modifier
-            .width(110.dp) // Reduced from 140.dp to fit more rows on screen
+            .width(110.dp)
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable(onClick = onClick),
@@ -274,7 +270,7 @@ private fun MovieCard(title: String, typeHint: String? = null, isAnimation: Bool
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(0.68f) // Standard movie poster ratio
+                .aspectRatio(0.68f)
                 .scale(scale),
             shape = RoundedCornerShape(6.dp),
             color = Color.DarkGray,
