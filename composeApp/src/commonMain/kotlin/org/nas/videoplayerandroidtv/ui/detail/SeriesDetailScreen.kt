@@ -38,7 +38,7 @@ import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
 import org.nas.videoplayerandroidtv.ui.player.VideoPlayer
 
 // ==========================================================
-// 1. Data Models (데이터 구조)
+// 1. Data Models
 // ==========================================================
 private data class Season(val name: String, val episodes: List<Movie>)
 
@@ -51,7 +51,7 @@ private data class SeriesDetailState(
 )
 
 // ==========================================================
-// 2. Business Logic (비즈니스 로직 세분화)
+// 2. Business Logic
 // ==========================================================
 
 private fun List<Movie>.sortedByEpisode(): List<Movie> = this.sortedWith(
@@ -94,7 +94,7 @@ private suspend fun loadMetadataAndCredits(title: String): Pair<TmdbMetadata?, L
 }
 
 // ==========================================================
-// 3. Main Composable (메인 화면)
+// 3. Main Composable
 // ==========================================================
 @Composable
 fun SeriesDetailScreen(
@@ -157,7 +157,7 @@ fun SeriesDetailScreen(
 }
 
 // ==========================================================
-// 4. UI Components (UI 단위 조각)
+// 4. UI Components
 // ==========================================================
 
 @Composable
@@ -301,7 +301,6 @@ private fun SeriesDetailHeader(
     var isPlayerFocused by remember { mutableStateOf(false) }
 
     Column {
-        // 상단 플레이어 영역 (포커스 가능하게 개선)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -336,7 +335,6 @@ private fun SeriesDetailHeader(
         
         Spacer(Modifier.height(16.dp))
 
-        // 정보 영역
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Column(Modifier.weight(1f)) {
                 Text(series.title.cleanTitle(), color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
@@ -369,9 +367,7 @@ private fun SeriesDetailHeader(
         if (credits.isNotEmpty()) {
             Text("출연진", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), fontSize = 18.sp)
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp)) {
-                items(credits) { cast ->
-                    CastItem(cast)
-                }
+                items(credits) { cast -> CastItem(cast) }
             }
         }
     }
@@ -488,7 +484,7 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
 }
 
 // ==========================================================
-// 5. Skeleton UI Components (스켈레톤 UI)
+// 5. Skeleton UI Components
 // ==========================================================
 @Composable
 private fun ShimmeringBox(modifier: Modifier) {
