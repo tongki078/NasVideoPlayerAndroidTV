@@ -1,5 +1,6 @@
 package org.nas.videoplayerandroidtv
 
+import androidx.compose.runtime.mutableStateMapOf
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.*
@@ -24,7 +25,7 @@ const val TMDB_BACKDROP_SIZE = "w780"
 
 private val tmdbClient = HttpClient {
     install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
-    install(HttpTimeout) { requestTimeoutMillis = 10000; connectTimeoutMillis = 5000; socketTimeoutMillis = 10000 }
+    install(HttpTimeout) { requestTimeoutMillis = 8000; connectTimeoutMillis = 4000; socketTimeoutMillis = 8000 }
     defaultRequest { 
         header("User-Agent", "Ktor-Client")
         header("Accept", "application/json")
@@ -95,14 +96,13 @@ data class TmdbCast(
 @Serializable
 data class TmdbRole(val character: String, @SerialName("episode_count") val episodeCount: Int)
 
-// 전역 캐시 및 중복 요청 방지용 맵
-internal val tmdbCache = mutableMapOf<String, TmdbMetadata>()
+// 전역 캐시
+internal val tmdbCache = mutableStateMapOf<String, TmdbMetadata>()
 private val tmdbInFlightRequests = mutableMapOf<String, Deferred<TmdbMetadata>>()
 
-// [추가] DB 캐시 접근을 위한 전역 변수 (App.kt에서 초기화됨)
 internal var persistentCache: TmdbCacheDataSource? = null
 
-// 미리 컴파일된 정규식 상수로 성능 최적화
+// 정규식 생략 (동일)
 private val REGEX_EXT = Regex("""\.[a-zA-Z0-9]{2,4}$""")
 private val REGEX_HANGUL_ALPHA = Regex("""([가-힣])([a-zA-Z0-9])""")
 private val REGEX_ALPHA_HANGUL = Regex("""([a-zA-Z0-9])([가-힣])""")
@@ -124,11 +124,9 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     cleaned = REGEX_START_NUM.replace(cleaned, "")
     cleaned = REGEX_START_PREFIX.replace(cleaned, "")
     cleaned = REGEX_BRACKET_NUM.replace(cleaned, "")
-    
     val yearMatch = REGEX_YEAR.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     if (yearMatch != null) cleaned = cleaned.replace(yearMatch.value, " ")
-    
     cleaned = REGEX_BRACKETS.replace(cleaned, " ")
     if (!keepAfterHyphen) {
         cleaned = if (preserveSubtitle) REGEX_SUBTITLE_SUFFIX.replace(cleaned, "")
@@ -137,7 +135,6 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     cleaned = REGEX_TAGS.replace(cleaned, " ")
     cleaned = REGEX_SPECIAL_CHARS.replace(cleaned, " ")
     cleaned = REGEX_SPACES.replace(cleaned, " ").trim()
-    
     if (includeYear && yearStr != null) cleaned = "$cleaned ($yearStr)"
     return if (cleaned.isBlank()) this else cleaned
 }
@@ -169,25 +166,32 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimati
     if (TMDB_API_KEY.isBlank()) return TmdbMetadata()
     val cacheKey = if (isAnimation) "ani_$title" else title
     
-    // 1단계: 메모리 캐시 확인 (0.0001초)
+    // 1. 메모리 캐시 확인
     tmdbCache[cacheKey]?.let { return it }
 
-    // 2단계: 로컬 DB 영구 캐시 확인 (0.01초)
+    // 2. 영구 캐시 확인
     persistentCache?.getCache(cacheKey)?.let {
-        synchronized(tmdbCache) { tmdbCache[cacheKey] = it }
+        tmdbCache[cacheKey] = it
         return it
     }
 
-    // 3단계: 중복 요청 방지하며 네트워크 검색 (1~3초)
+    // 3. 네트워크 검색 (타임아웃 강화)
     val deferred = synchronized(tmdbInFlightRequests) {
         tmdbInFlightRequests.getOrPut(cacheKey) {
+            @OptIn(DelicateCoroutinesApi::class)
             GlobalScope.async(Dispatchers.Default) {
-                val cleanTitle = title.cleanTitle(includeYear = false, preserveSubtitle = true)
-                val metadata = performSearchSimple(cleanTitle, typeHint, isAnimation)
-                val result = metadata ?: TmdbMetadata()
+                val result = try {
+                    withTimeout(5000) { // 강제 5초 타임아웃
+                        val cleanTitle = title.cleanTitle(includeYear = false, preserveSubtitle = true)
+                        performSearchSimple(cleanTitle, typeHint, isAnimation) ?: TmdbMetadata()
+                    }
+                } catch (e: Exception) {
+                    TmdbMetadata() // 실패 시 빈 객체 반환하여 무한 로딩 방지
+                }
                 
-                // 결과 저장
-                synchronized(tmdbCache) { tmdbCache[cacheKey] = result }
+                withContext(Dispatchers.Main) {
+                    tmdbCache[cacheKey] = result
+                }
                 persistentCache?.saveCache(cacheKey, result)
 
                 synchronized(tmdbInFlightRequests) { tmdbInFlightRequests.remove(cacheKey) }
@@ -203,11 +207,8 @@ private suspend fun performSearchSimple(query: String, typeHint: String?, isAnim
     if (query.isBlank()) return null
     val (metadata, _) = searchTmdbCore(query, "ko-KR", typeHint ?: "multi", null, isAnimation)
     if (metadata != null && metadata.posterUrl != null) return metadata
-    if (metadata == null || metadata.posterUrl == null) {
-        val (globalMetadata, _) = searchTmdbCore(query, null, typeHint ?: "multi", null, isAnimation)
-        if (globalMetadata != null) return globalMetadata
-    }
-    return metadata
+    val (globalMetadata, _) = searchTmdbCore(query, null, typeHint ?: "multi", null, isAnimation)
+    return globalMetadata ?: metadata
 }
 
 private suspend fun searchTmdbCore(query: String, language: String?, endpoint: String, year: String? = null, isAnimation: Boolean = false): Pair<TmdbMetadata?, Exception?> {

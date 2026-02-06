@@ -1,11 +1,12 @@
 import os, subprocess, hashlib, urllib.parse, unicodedata, threading, time, json, re, sys, traceback, shutil, requests, random, mimetypes
 from flask import Flask, jsonify, send_from_directory, request, Response, redirect, send_file
 from flask_cors import CORS
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 CORS(app)
 
-# MIME 타입 추가 등록 (NAS 환경 및 안드로이드 TV 대응)
+# MIME 타입 추가 등록 (NAS 환경 대응)
 if not mimetypes.types_map.get('.mkv'): mimetypes.add_type('video/x-matroska', '.mkv')
 if not mimetypes.types_map.get('.ts'): mimetypes.add_type('video/mp2t', '.ts')
 if not mimetypes.types_map.get('.tp'): mimetypes.add_type('video/mp2t', '.tp')
@@ -93,20 +94,21 @@ def get_real_path(path):
 def get_tmdb_info_server(title):
     if title in GLOBAL_CACHE["tmdb"]: return GLOBAL_CACHE["tmdb"][title]
     ct = clean_title_complex(title)
-    if not ct: return {"genreIds": [], "posterPath": None}
+    if not ct: return {"genreIds": [], "posterPath": None, "failed": True}
     try:
         headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
-        resp = requests.get(f"{TMDB_BASE_URL}/search/multi", params={"query": ct, "language": "ko-KR"}, headers=headers, timeout=5)
+        resp = requests.get(f"{TMDB_BASE_URL}/search/multi", params={"query": ct, "language": "ko-KR"}, headers=headers, timeout=3)
         data = resp.json()
+        info = {"genreIds": [], "posterPath": None}
         if data.get('results'):
             res = [r for r in data['results'] if r.get('media_type') != 'person']
             if res:
                 best = res[0]
-                info = {"genreIds": best.get('genre_ids', []), "posterPath": best.get('poster_path'), "tmdbId": best.get('id')}
-                GLOBAL_CACHE["tmdb"][title] = info
-                return info
-    except: pass
-    return {"genreIds": [], "posterPath": None}
+                info = {"genreIds": best.get('genre_ids', []), "posterPath": best.get('poster_path'), "tmdbId": best.get('id'), "failed": False}
+        if not info.get("posterPath"): info["failed"] = True
+        GLOBAL_CACHE["tmdb"][title] = info
+        return info
+    except: return {"genreIds": [], "posterPath": None, "failed": False}
 
 def attach_tmdb_info(cat):
     name = cat.get('name')
@@ -116,19 +118,32 @@ def attach_tmdb_info(cat):
     return cat
 
 def fetch_metadata_async():
-    print("[METADATA] 시작...", flush=True)
+    print("[METADATA] TMDB 병렬 업데이트 시작...", flush=True)
+    tasks = []
     for k in ["foreigntv", "koreantv", "air", "animations_all", "movies"]:
-        items = GLOBAL_CACHE.get(k, [])
-        for cat in items:
-            info = get_tmdb_info_server(cat['name'])
-            cat['genreIds'], cat['posterPath'] = info.get("genreIds", []), info.get("posterPath")
-    build_home_recommend(); save_cache()
-    print("[METADATA] 완료.", flush=True)
+        for cat in GLOBAL_CACHE.get(k, []):
+            cached = GLOBAL_CACHE["tmdb"].get(cat['name'])
+            if not cat.get('posterPath') and (not cached or not cached.get('failed')):
+                tasks.append(cat)
+    if not tasks:
+        print("[METADATA] 업데이트할 항목이 없습니다.", flush=True)
+        return
+    updated_count = 0
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        results = list(executor.map(lambda c: (c, get_tmdb_info_server(c['name'])), tasks))
+        for cat, info in results:
+            if info.get('posterPath'):
+                cat['genreIds'], cat['posterPath'] = info.get('genreIds', []), info.get('posterPath')
+                updated_count += 1
+    if updated_count > 0: build_home_recommend(); save_cache()
+    print(f"[METADATA] 업데이트 완료. ({len(tasks)}개 중 {updated_count}개 갱신)", flush=True)
 
 def build_home_recommend():
     pool = GLOBAL_CACHE.get("movies", []) + GLOBAL_CACHE.get("animations_all", [])
     if pool:
-        popular = random.sample(pool, min(len(pool), 20))
+        with_poster = [c for c in pool if c.get('posterPath')]
+        sample_pool = with_poster if len(with_poster) >= 20 else pool
+        popular = random.sample(sample_pool, min(len(sample_pool), 20))
         GLOBAL_CACHE["home_recommend"] = [{"title": "지금 가장 핫한 인기작", "items": process_data(popular, True)}]
 
 # --- [스캔 로직] ---
@@ -147,48 +162,26 @@ def scan_recursive(bp, prefix, rb=None):
     cats = []
     exts = ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
     p, rel_base = get_real_path(bp), get_real_path(rb) if rb else get_real_path(bp)
-
-    print(f"[SCAN] >>> 스캔 진입: {p}", flush=True)
-    if not os.path.exists(p):
-        print(f"[SCAN] 경로 없음: {p}", flush=True)
-        return cats
-
+    if not os.path.exists(p): return cats
     all_f = []
-    found_in_scan = 0
     for root, dirs, files in os.walk(p):
         dirs[:] = [d for d in dirs if not is_excluded(os.path.join(root, d))]
         if is_excluded(root): continue
         for f in files:
-            if f.lower().endswith(exts):
-                all_f.append(os.path.join(root, f))
-                found_in_scan += 1
-                if found_in_scan % 1000 == 0:
-                    print(f"[SCAN] 파일 찾는 중... 현재 {found_in_scan}개 발견", flush=True)
-
-    print(f"[SCAN] 총 {len(all_f)}개 파일 처리 시작...", flush=True)
+            if f.lower().endswith(exts): all_f.append(os.path.join(root, f))
     all_f.sort()
-
     curr, movies = "", []
-    count = 0
-    total = len(all_f)
-
     for fp in all_f:
-        count += 1
         dp = os.path.dirname(fp)
         if dp != curr:
             if movies:
                 rel_path = nfc(os.path.relpath(curr, rel_base))
-                cat = {"name": nfc(os.path.basename(curr)), "movies": movies, "path": rel_path}
-                cats.append(attach_tmdb_info(cat))
+                cats.append(attach_tmdb_info({"name": nfc(os.path.basename(curr)), "movies": movies, "path": rel_path}))
             curr, movies = dp, []
         movies.append(get_movie_info(fp, rel_base, prefix))
-
     if movies:
         rel_path = nfc(os.path.relpath(curr, rel_base))
-        cat = {"name": nfc(os.path.basename(curr)), "movies": movies, "path": rel_path}
-        cats.append(attach_tmdb_info(cat))
-
-    print(f"[SCAN] <<< 스캔 종료: {p} ({len(cats)} 폴더)", flush=True)
+        cats.append(attach_tmdb_info({"name": nfc(os.path.basename(curr)), "movies": movies, "path": rel_path}))
     return cats
 
 def is_excluded(path):
@@ -201,23 +194,12 @@ def process_data(data, lite=False):
 
 def perform_full_scan():
     print(f"🔄 전체 인덱싱 시작 (버전 {CACHE_VERSION})", flush=True)
-    t = [
-        ("foreigntv", FOREIGN_TV_DIR, "ftv"),
-        ("koreantv", KOREAN_TV_DIR, "ktv"),
-        ("air", AIR_DIR, "air"),
-        ("animations_all", ANI_DIR, "anim_all"),
-        ("movies", MOVIES_ROOT_DIR, "movie")
-    ]
+    t = [("foreigntv", FOREIGN_TV_DIR, "ftv"), ("koreantv", KOREAN_TV_DIR, "ktv"), ("air", AIR_DIR, "air"), ("animations_all", ANI_DIR, "anim_all"), ("movies", MOVIES_ROOT_DIR, "movie")]
     for k, p, pr in t:
-        print(f"[{k}] 스캔 시작...", flush=True)
         try:
-            res = scan_recursive(p, pr)
-            GLOBAL_CACHE[k] = res
+            GLOBAL_CACHE[k] = scan_recursive(p, pr)
             save_cache()
-        except:
-            print(f"[{k}] 오류 발생:\n{traceback.format_exc()}", flush=True)
-
-    print("✅ 모든 스캔 완료. 메타데이터 업데이트 스레드 구동.", flush=True)
+        except: print(f"[{k}] 오류: {traceback.format_exc()}", flush=True)
     build_home_recommend(); save_cache(); threading.Thread(target=fetch_metadata_async, daemon=True).start()
 
 def load_cache():
@@ -227,12 +209,9 @@ def load_cache():
                 d = json.load(f)
                 if d.get("version") == CACHE_VERSION:
                     GLOBAL_CACHE.update(d)
-                    print(f"✅ [CACHE] JSON 캐시 파일을 성공적으로 로드했습니다. (버전: {CACHE_VERSION})", flush=True)
+                    print(f"✅ [CACHE] JSON 캐시 로드 완료.", flush=True)
                     return True
-                else:
-                    print(f"⚠️ [CACHE] 캐시 버전 불일치 (파일: {d.get('version')}, 현재: {CACHE_VERSION})", flush=True)
-        except Exception as e:
-            print(f"❌ [CACHE] 로드 중 오류: {e}", flush=True)
+        except: pass
     return False
 
 def save_cache():
@@ -241,38 +220,13 @@ def save_cache():
     except: pass
 
 def init_server():
-    print(f"🚀 서버 초기화 (v{CACHE_VERSION})", flush=True)
     loaded = load_cache()
-
-    # 탭 필터링 등에 필요한 메타데이터 업데이트 스레드 실행
     threading.Thread(target=fetch_metadata_async, daemon=True).start()
-
-    # 인덱싱 이어가기 로직
     def background_resume():
-        targets = [
-            ("foreigntv", FOREIGN_TV_DIR, "ftv"),
-            ("koreantv", KOREAN_TV_DIR, "ktv"),
-            ("air", AIR_DIR, "air"),
-            ("animations_all", ANI_DIR, "anim_all"),
-            ("movies", MOVIES_ROOT_DIR, "movie")
-        ]
-
-        # 버전이 다르거나 로드 실패했다면 전체 스캔
-        if not loaded:
-            perform_full_scan()
-            return
-
-        # 버전은 같지만 데이터가 비어있는 카테고리만 골라서 스캔 (Resume)
+        if not loaded: perform_full_scan(); return
+        targets = [("foreigntv", FOREIGN_TV_DIR, "ftv"), ("koreantv", KOREAN_TV_DIR, "ktv"), ("air", AIR_DIR, "air"), ("animations_all", ANI_DIR, "anim_all"), ("movies", MOVIES_ROOT_DIR, "movie")]
         for k, p, pr in targets:
-            if not GLOBAL_CACHE.get(k):
-                print(f"[{k}] 누락된 인덱싱 발견. 스캔 시작...", flush=True)
-                try:
-                    res = scan_recursive(p, pr)
-                    GLOBAL_CACHE[k] = res
-                    save_cache()
-                except: pass
-        print("✅ 모든 누락된 인덱싱 작업 완료.", flush=True)
-
+            if not GLOBAL_CACHE.get(k): GLOBAL_CACHE[k] = scan_recursive(p, pr); save_cache()
     threading.Thread(target=background_resume, daemon=True).start()
 
 threading.Thread(target=init_server, daemon=True).start()
@@ -291,18 +245,14 @@ def get_movies_latest(): return jsonify(process_data(GLOBAL_CACHE.get("movies", 
 @app.route('/animations_all')
 def get_animations_all(): return jsonify(process_data(GLOBAL_CACHE.get("animations_all", []), request.args.get('lite') == 'true'))
 
-def filter_by_path(pool_key, keyword):
+def filter_by_path(pool, keyword):
     target = nfc(keyword).replace(" ", "").lower()
-    pool = GLOBAL_CACHE.get(pool_key, [])
-    return [
-        c for c in pool
-        if nfc(c.get('path', '')).replace(" ", "").lower().startswith(target)
-    ]
+    return [c for c in pool if nfc(c.get('path', '')).replace(" ", "").lower().startswith(target)]
 
 @app.route('/foreigntv')
 def get_foreigntv(): return jsonify(process_data(GLOBAL_CACHE.get("foreigntv", []), request.args.get('lite') == 'true'))
 @app.route('/ftv_us')
-def get_ftv_us(): return jsonify(process_data(filter_by_path("foreigntv", "미국 드라마"), request.args.get('lite') == 'true'))
+def get_ftv_us(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("foreigntv", []), "미국 드라마"), request.args.get('lite') == 'true'))
 @app.route('/koreantv')
 def get_koreantv(): return jsonify(process_data(GLOBAL_CACHE.get("koreantv", []), request.args.get('lite') == 'true'))
 
@@ -315,62 +265,70 @@ def search_videos():
         if q in cat['name'].lower(): res.append(cat)
         else:
             fm = [m for m in cat.get('movies', []) if q in m['title'].lower()]
-            if fm:
-                nc = cat.copy(); nc['movies'] = fm; res.append(nc)
-    return jsonify(res)
-
-@app.route('/list')
-def get_list():
-    try:
-        p = nfc(request.args.get('path', ''))
-        if not p: return jsonify([])
-        parts = p.split('/', 1)
-        rn, sub = parts[0], parts[1] if len(parts) > 1 else ""
-        rmap = {"방송중": AIR_DIR, "애니메이션": ANI_DIR, "영화": MOVIES_ROOT_DIR, "외국TV": FOREIGN_TV_DIR, "국내TV": KOREAN_TV_DIR}
-        pm = {"방송중": "air", "애니메이션": "anim_all", "영화": "movie", "외국TV": "ftv", "국내TV": "ktv"}
-        base = get_real_path(rmap.get(rn, ""))
-        target = get_real_path(os.path.join(base, sub.lstrip('/')))
-        if not os.path.exists(target): return jsonify([])
-        if os.path.isdir(target):
-            subs = [nfc(n) for n in sorted(os.listdir(target)) if os.path.isdir(os.path.join(target, n)) and not is_excluded(os.path.join(target, n))]
-            if subs: return jsonify([attach_tmdb_info({"name": d, "path": nfc(os.path.relpath(os.path.join(target, d), base)), "movies": []}) for d in subs])
-            return jsonify(scan_recursive(target, pm.get(rn, "movie"), rb=base))
-    except: pass
-    return jsonify([])
-
-@app.route('/video_serve')
-def serve_video():
-    try:
-        t, p = request.args.get('type'), request.args.get('path')
-        if not p: return "Path missing", 400
-        bmap = {"movie": MOVIES_ROOT_DIR, "ftv": FOREIGN_TV_DIR, "ktv": KOREAN_TV_DIR, "anim_all": ANI_DIR, "air": AIR_DIR}
-        base_dir = bmap.get(t, AIR_DIR)
-        fp = get_real_path(os.path.join(base_dir, p.lstrip('/')))
-
-        mime_type, _ = mimetypes.guess_type(fp)
-        if not mime_type:
-            if fp.lower().endswith('.mkv'): mime_type = 'video/x-matroska'
-            elif fp.lower().endswith(('.ts', '.tp')): mime_type = 'video/mp2t'
-            else: mime_type = 'video/mp4'
-
-        print(f"🎬 [VIDEO] 재생 시도: {fp} ({mime_type})", flush=True)
-        return send_file(fp, mimetype=mime_type, conditional=True)
-    except Exception as e:
-        print(f"❌ [VIDEO] 에러 발생: {e}", flush=True)
-        traceback.print_exc()
-        return "Internal Server Error", 500
+            if fm: nc = cat.copy(); nc['movies'] = fm; res.append(nc)
+    return jsonify(process_data(res, request.args.get('lite') == 'true'))
 
 @app.route('/thumb_serve')
 def thumb_serve():
-    try:
-        t, tid, p = request.args.get('type'), request.args.get('id'), request.args.get('path')
-        tp = os.path.join(DATA_DIR, tid)
-        if os.path.exists(tp): return send_from_directory(DATA_DIR, tid)
-        bmap = {"movie": MOVIES_ROOT_DIR, "ftv": FOREIGN_TV_DIR, "ktv": KOREAN_TV_DIR, "anim_all": ANI_DIR, "air": AIR_DIR}
-        fp = get_real_path(os.path.join(bmap.get(t, AIR_DIR), p.lstrip('/')))
-        subprocess.run([FFMPEG_PATH, '-ss', '00:03:00', '-i', fp, '-vframes', '1', '-q:v', '5', tp, '-y'], timeout=15)
-        return send_from_directory(DATA_DIR, tid)
-    except: return "Not Found", 404
+    path = request.args.get('path')
+    prefix = request.args.get('type')
+    tid = request.args.get('id')
+    if not path or not prefix or not tid: return "Missing params", 400
+
+    base = {"ftv": FOREIGN_TV_DIR, "ktv": KOREAN_TV_DIR, "air": AIR_DIR, "anim_all": ANI_DIR, "movie": MOVIES_ROOT_DIR}.get(prefix)
+    if not base: return "Invalid type", 400
+
+    video_path = get_real_path(os.path.join(base, path))
+    if not os.path.isdir(video_path):
+        exts = ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
+        valid_files = [f for f in os.listdir(os.path.dirname(video_path)) if f.lower().endswith(exts)]
+        if valid_files: video_path = os.path.join(os.path.dirname(video_path), sorted(valid_files)[0])
+    else:
+        exts = ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
+        valid_files = [f for f in os.listdir(video_path) if f.lower().endswith(exts)]
+        if valid_files: video_path = os.path.join(video_path, sorted(valid_files)[0])
+
+    thumb_path = os.path.join(DATA_DIR, tid)
+    if not os.path.exists(thumb_path):
+        try:
+            subprocess.run([FFMPEG_PATH, "-y", "-ss", "00:05:00", "-i", video_path, "-vframes", "1", "-q:v", "2", thumb_path], timeout=15)
+            if not os.path.exists(thumb_path):
+                subprocess.run([FFMPEG_PATH, "-y", "-ss", "00:00:10", "-i", video_path, "-vframes", "1", "-q:v", "2", thumb_path], timeout=15)
+        except: pass
+
+    if os.path.exists(thumb_path): return send_file(thumb_path, mimetype='image/jpeg')
+    return "Not Found", 404
+
+@app.route('/video_serve')
+def video_serve():
+    path = request.args.get('path')
+    prefix = request.args.get('type')
+    if not path or not prefix: return "Missing params", 400
+    base = {"ftv": FOREIGN_TV_DIR, "ktv": KOREAN_TV_DIR, "air": AIR_DIR, "anim_all": ANI_DIR, "movie": MOVIES_ROOT_DIR}.get(prefix)
+    full_path = get_real_path(os.path.join(base, path))
+    if os.path.exists(full_path):
+        range_header = request.headers.get('Range', None)
+        if not range_header: return send_file(full_path, conditional=True)
+
+        size = os.path.getsize(full_path)
+        byte1, byte2 = 0, None
+        m = re.search(r'(\d+)-(\d*)', range_header)
+        if m:
+            byte1 = int(m.group(1))
+            if m.group(2): byte2 = int(m.group(2))
+
+        if byte2 is None: byte2 = size - 1
+        length = byte2 - byte1 + 1
+
+        with open(full_path, 'rb') as f:
+            f.seek(byte1)
+            data = f.read(length)
+
+        rv = Response(data, 206, mimetype=mimetypes.guess_type(full_path)[0] or 'video/mp4', content_type=mimetypes.guess_type(full_path)[0] or 'video/mp4', direct_passthrough=True)
+        rv.headers.add('Content-Range', f'bytes {byte1}-{byte2}/{size}')
+        rv.headers.add('Accept-Ranges', 'bytes')
+        return rv
+    return "Not Found", 404
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, threaded=True)

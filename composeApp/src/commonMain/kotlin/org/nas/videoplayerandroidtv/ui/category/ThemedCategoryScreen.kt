@@ -21,8 +21,9 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.*
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
-import org.nas.videoplayerandroidtv.ui.common.MovieRow
+import org.nas.videoplayerandroidtv.ui.common.MovieCard
 import org.nas.videoplayerandroidtv.*
+import org.nas.videoplayerandroidtv.ui.common.MovieRow
 
 private object ThemeConfig {
     val ACTION_ADVENTURE = listOf(28, 12, 10759, 10765)

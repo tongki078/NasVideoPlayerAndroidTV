@@ -15,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
@@ -168,13 +169,21 @@ private fun HeroSection(
 private fun MovieCard(title: String, posterPath: String? = null, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.1f else 1f, label = "scale")
-    Column(modifier = Modifier.width(130.dp).onFocusChanged { isFocused = it.isFocused }.focusable().clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
-        Surface(modifier = Modifier.fillMaxWidth().aspectRatio(0.68f).scale(scale), shape = RoundedCornerShape(8.dp), color = Color.DarkGray, border = if (isFocused) BorderStroke(2.dp, Color.White) else null) {
-            TmdbAsyncImage(title, Modifier.fillMaxSize(), posterPath = posterPath)
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(text = title.cleanTitle(), color = if (isFocused) Color.White else Color(0xFFAAAAAA), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp).scale(if (isFocused) 1.05f else 1f))
-    }
+    
+    TmdbAsyncImage(
+        title = title,
+        posterPath = posterPath,
+        modifier = Modifier
+            .width(130.dp)
+            .aspectRatio(0.68f)
+            .scale(scale)
+            .onFocusChanged { isFocused = it.isFocused }
+            .clip(RoundedCornerShape(8.dp))
+            .then(if (isFocused) Modifier.background(Color.White).padding(2.dp) else Modifier)
+            .focusable()
+            .clickable(onClick = onClick),
+        contentScale = ContentScale.Crop
+    )
 }
 
 @Composable
