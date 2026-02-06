@@ -21,9 +21,8 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.*
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
-import org.nas.videoplayerandroidtv.ui.common.MovieCard
-import org.nas.videoplayerandroidtv.*
 import org.nas.videoplayerandroidtv.ui.common.MovieRow
+import org.nas.videoplayerandroidtv.*
 
 private object ThemeConfig {
     val ACTION_ADVENTURE = listOf(28, 12, 10759, 10765)
@@ -91,13 +90,13 @@ fun ThemedCategoryScreen(
                 }
             }
             
-            // [속도 최적화] 실시간 TMDB 조회를 제거하고 서버 데이터로 즉시 분류
             val sections = withContext(Dispatchers.Default) {
                 val tA = mutableListOf<Series>(); val tF = mutableListOf<Series>()
                 val tC = mutableListOf<Series>(); val tT = mutableListOf<Series>()
                 val tR = mutableListOf<Series>(); val tM = mutableListOf<Series>()
                 val tE = mutableListOf<Series>()
 
+                // 중요: 원본 Series 객체의 모든 정보(fullPath 포함)를 그대로 보존하면서 분류
                 result.forEach { s ->
                     val gIds = s.genreIds
                     when {
@@ -112,17 +111,18 @@ fun ThemedCategoryScreen(
                 }
                 
                 mutableListOf<ThemeSection>().apply {
-                    if (tA.isNotEmpty()) add(ThemeSection("action", "박진감 넘치는 액션 & 어드벤처", tA.distinctBy { it.title }))
-                    if (tF.isNotEmpty()) add(ThemeSection("fantasy", "상상 그 이상! 판타지 & SF", tF.distinctBy { it.title }))
-                    if (tC.isNotEmpty()) add(ThemeSection("comedy", "유쾌한 즐거움! 코미디 & 라이프", tC.distinctBy { it.title }))
-                    if (tT.isNotEmpty()) add(ThemeSection("thriller", "숨막히는 미스터리 & 스릴러", tT.distinctBy { it.title }))
-                    if (tR.isNotEmpty()) add(ThemeSection("romance", "달콤하고 절절한 로맨스 & 드라마", tR.distinctBy { it.title }))
-                    if (tM.isNotEmpty()) add(ThemeSection("family", "온 가족이 함께! 패밀리 & 애니", tM.distinctBy { it.title }))
+                    val distinct = { list: List<Series> -> list.distinctBy { it.fullPath ?: it.title } }
+                    if (tA.isNotEmpty()) add(ThemeSection("action", "박진감 넘치는 액션 & 어드벤처", distinct(tA)))
+                    if (tF.isNotEmpty()) add(ThemeSection("fantasy", "상상 그 이상! 판타지 & SF", distinct(tF)))
+                    if (tC.isNotEmpty()) add(ThemeSection("comedy", "유쾌한 즐거움! 코미디 & 라이프", distinct(tC)))
+                    if (tT.isNotEmpty()) add(ThemeSection("thriller", "숨막히는 미스터리 & 스릴러", distinct(tT)))
+                    if (tR.isNotEmpty()) add(ThemeSection("romance", "달콤하고 절절한 로맨스 & 드라마", distinct(tR)))
+                    if (tM.isNotEmpty()) add(ThemeSection("family", "온 가족이 함께! 패밀리 & 애니", distinct(tM)))
                     
                     if (isEmpty() && result.isNotEmpty()) {
-                        add(ThemeSection("all", "추천 작품", result.distinctBy { it.title }))
+                        add(ThemeSection("all", "추천 작품", distinct(result)))
                     } else if (tE.isNotEmpty()) {
-                        add(ThemeSection("etc", "놓치면 아쉬운 더 많은 작품들", tE.distinctBy { it.title }))
+                        add(ThemeSection("etc", "놓치면 아쉬운 더 많은 작품들", distinct(tE)))
                     }
                 }
             }

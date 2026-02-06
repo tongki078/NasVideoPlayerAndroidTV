@@ -59,38 +59,33 @@ fun TmdbAsyncImage(
 
     val painterState by painter.state.collectAsState()
     val isSuccess = painterState is AsyncImagePainter.State.Success
+    val isError = painterState is AsyncImagePainter.State.Error
+    val isEmpty = painterState is AsyncImagePainter.State.Empty
 
     LaunchedEffect(isSuccess) {
         if (isSuccess) onSuccess()
     }
 
-    // 최상위 컨테이너는 배경색 없이 클리핑만 수행
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(Color.Transparent)
+            .background(Color(0xFF222222))
     ) {
         if (isSuccess) {
-            // [성공] 회색 배경 없이 오직 이미지만 그림 (배경을 Black으로 채워 틈새 방지)
             Image(
                 painter = painter,
                 contentDescription = title,
                 modifier = Modifier.fillMaxSize().background(Color.Black),
                 contentScale = contentScale
             )
-        } else {
-            // [로딩/실패] 회색 배경과 텍스트 노출
-            // 이 블록은 이미지가 성공하는 즉시 렌더링 트리에서 사라짐
+        } else if (isError || (isEmpty && finalImageUrl == null)) {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xFF222222))
-                    .padding(8.dp),
+                modifier = Modifier.fillMaxSize().padding(8.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = title.cleanTitle(false),
-                    color = Color.White.copy(alpha = 0.4f),
+                    color = Color.White.copy(alpha = 0.5f),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Normal,
                     textAlign = TextAlign.Center,
