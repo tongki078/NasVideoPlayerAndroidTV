@@ -25,11 +25,11 @@ import org.nas.videoplayerandroidtv.ui.common.MovieRow
 import org.nas.videoplayerandroidtv.*
 
 private object ThemeConfig {
-    val ACTION_ADVENTURE = listOf(28, 12, 10759)
-    val FANTASY_SCI_FI = listOf(14, 878, 10765)
-    val COMEDY_LIFE = listOf(35, 10762)
+    val ACTION_ADVENTURE = listOf(28, 12, 10759, 10765)
+    val FANTASY_SCI_FI = listOf(14, 878)
+    val COMEDY_LIFE = listOf(35, 10762, 10763, 10767)
     val MYSTERY_THRILLER = listOf(9648, 53, 27, 80)
-    val DRAMA_ROMANCE = listOf(18, 10749)
+    val DRAMA_ROMANCE = listOf(18, 10749, 10766, 10764)
     val FAMILY_ANIMATION = listOf(10751, 16)
 }
 
@@ -60,39 +60,14 @@ fun ThemedCategoryScreen(
         else -> emptyList()
     }
 
-    val scope = rememberCoroutineScope()
-    
-    var actionList by remember { mutableStateOf(listOf<Series>()) }
-    var fantasyList by remember { mutableStateOf(listOf<Series>()) }
-    var comedyList by remember { mutableStateOf(listOf<Series>()) }
-    var thrillerList by remember { mutableStateOf(listOf<Series>()) }
-    var romanceList by remember { mutableStateOf(listOf<Series>()) }
-    var familyList by remember { mutableStateOf(listOf<Series>()) }
-    var etcList by remember { mutableStateOf(listOf<Series>()) }
-
-    val themedSections = remember(actionList, fantasyList, comedyList, thrillerList, romanceList, familyList, etcList) {
-        listOf(
-            ThemeSection("action", "박진감 넘치는 액션 & 어드벤처", actionList),
-            ThemeSection("fantasy", "상상 그 이상! 판타지 & SF", fantasyList),
-            ThemeSection("comedy", "유쾌한 즐거움! 코미디 & 키즈", comedyList),
-            ThemeSection("thriller", "숨막히는 미스터리 & 스릴러", thrillerList),
-            ThemeSection("romance", "달콤하고 절절한 로맨스 & 드라마", romanceList),
-            ThemeSection("family", "온 가족이 함께! 패밀리 & 애니", familyList),
-            ThemeSection("etc", "놓치면 아쉬운 더 많은 작품들", etcList)
-        ).filter { it.seriesList.isNotEmpty() }
-    }
-
+    var themedSections by remember { mutableStateOf(emptyList<ThemeSection>()) }
     var isLoading by remember(selectedMode, categoryName) { mutableStateOf(true) }
 
     LaunchedEffect(selectedMode, categoryName) {
         isLoading = true
-        // 상태 초기화 (문법 오류 수정)
-        actionList = emptyList(); fantasyList = emptyList(); comedyList = emptyList()
-        thrillerList = emptyList(); romanceList = emptyList(); familyList = emptyList(); etcList = emptyList()
-        
         try {
-            val limit = 500 
             val result = withContext(Dispatchers.Default) {
+                val limit = 1000
                 when {
                     isMovieScreen -> when (selectedMode) {
                         0 -> repository.getMoviesByTitle(limit, 0)
@@ -115,43 +90,42 @@ fun ThemedCategoryScreen(
                 }
             }
             
-            if (result.isNotEmpty()) {
-                result.chunked(50).forEach { chunk ->
-                    chunk.forEach { s -> 
-                        if (s.genreIds.isEmpty() && !tmdbCache.containsKey(s.title)) {
-                            scope.launch { fetchTmdbMetadata(s.title) }
-                        }
-                    }
-                    
-                    withContext(Dispatchers.Main) {
-                        val tA = mutableListOf<Series>(); val tF = mutableListOf<Series>()
-                        val tC = mutableListOf<Series>(); val tT = mutableListOf<Series>()
-                        val tR = mutableListOf<Series>(); val tM = mutableListOf<Series>()
-                        val tE = mutableListOf<Series>()
+            // [속도 최적화] 실시간 TMDB 조회를 제거하고 서버 데이터로 즉시 분류
+            val sections = withContext(Dispatchers.Default) {
+                val tA = mutableListOf<Series>(); val tF = mutableListOf<Series>()
+                val tC = mutableListOf<Series>(); val tT = mutableListOf<Series>()
+                val tR = mutableListOf<Series>(); val tM = mutableListOf<Series>()
+                val tE = mutableListOf<Series>()
 
-                        chunk.forEach { s ->
-                            val gIds = if (s.genreIds.isNotEmpty()) s.genreIds else tmdbCache[s.title]?.genreIds ?: emptyList()
-                            when {
-                                gIds.any { it in ThemeConfig.ACTION_ADVENTURE } -> tA.add(s)
-                                gIds.any { it in ThemeConfig.FANTASY_SCI_FI } -> tF.add(s)
-                                gIds.any { it in ThemeConfig.COMEDY_LIFE } -> tC.add(s)
-                                gIds.any { it in ThemeConfig.MYSTERY_THRILLER } -> tT.add(s)
-                                gIds.any { it in ThemeConfig.DRAMA_ROMANCE } -> tR.add(s)
-                                gIds.any { it in ThemeConfig.FAMILY_ANIMATION } -> tM.add(s)
-                                else -> tE.add(s)
-                            }
-                        }
-                        
-                        if (tA.isNotEmpty()) actionList = (actionList + tA).distinctBy { it.title }
-                        if (tF.isNotEmpty()) fantasyList = (fantasyList + tF).distinctBy { it.title }
-                        if (tC.isNotEmpty()) comedyList = (comedyList + tC).distinctBy { it.title }
-                        if (tT.isNotEmpty()) thrillerList = (thrillerList + tT).distinctBy { it.title }
-                        if (tR.isNotEmpty()) romanceList = (romanceList + tR).distinctBy { it.title }
-                        if (tM.isNotEmpty()) familyList = (familyList + tM).distinctBy { it.title }
-                        if (tE.isNotEmpty()) etcList = (etcList + tE).distinctBy { it.title }
+                result.forEach { s ->
+                    val gIds = s.genreIds
+                    when {
+                        gIds.any { it in ThemeConfig.ACTION_ADVENTURE } -> tA.add(s)
+                        gIds.any { it in ThemeConfig.FANTASY_SCI_FI } -> tF.add(s)
+                        gIds.any { it in ThemeConfig.COMEDY_LIFE } -> tC.add(s)
+                        gIds.any { it in ThemeConfig.MYSTERY_THRILLER } -> tT.add(s)
+                        gIds.any { it in ThemeConfig.DRAMA_ROMANCE } -> tR.add(s)
+                        gIds.any { it in ThemeConfig.FAMILY_ANIMATION } -> tM.add(s)
+                        else -> tE.add(s)
+                    }
+                }
+                
+                mutableListOf<ThemeSection>().apply {
+                    if (tA.isNotEmpty()) add(ThemeSection("action", "박진감 넘치는 액션 & 어드벤처", tA.distinctBy { it.title }))
+                    if (tF.isNotEmpty()) add(ThemeSection("fantasy", "상상 그 이상! 판타지 & SF", tF.distinctBy { it.title }))
+                    if (tC.isNotEmpty()) add(ThemeSection("comedy", "유쾌한 즐거움! 코미디 & 라이프", tC.distinctBy { it.title }))
+                    if (tT.isNotEmpty()) add(ThemeSection("thriller", "숨막히는 미스터리 & 스릴러", tT.distinctBy { it.title }))
+                    if (tR.isNotEmpty()) add(ThemeSection("romance", "달콤하고 절절한 로맨스 & 드라마", tR.distinctBy { it.title }))
+                    if (tM.isNotEmpty()) add(ThemeSection("family", "온 가족이 함께! 패밀리 & 애니", tM.distinctBy { it.title }))
+                    
+                    if (isEmpty() && result.isNotEmpty()) {
+                        add(ThemeSection("all", "추천 작품", result.distinctBy { it.title }))
+                    } else if (tE.isNotEmpty()) {
+                        add(ThemeSection("etc", "놓치면 아쉬운 더 많은 작품들", tE.distinctBy { it.title }))
                     }
                 }
             }
+            themedSections = sections
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
@@ -171,20 +145,25 @@ fun ThemedCategoryScreen(
             }
         }
 
+        if (isLoading) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp), color = Color.Red, trackColor = Color.Transparent)
+        } else {
+            Spacer(Modifier.height(2.dp))
+        }
+
         Box(modifier = Modifier.fillMaxSize()) {
-            if (isLoading && themedSections.isEmpty()) {
-                Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator(color = Color.Red) }
-            } else if (!isLoading && themedSections.isEmpty()) {
-                Box(Modifier.fillMaxSize(), Alignment.Center) { Text("영상을 불러올 수 없습니다.", color = Color.Gray) }
+            if (!isLoading && themedSections.isEmpty()) {
+                Box(Modifier.fillMaxSize(), Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("표시할 영상이 없습니다.", color = Color.Gray)
+                        Spacer(Modifier.height(8.dp))
+                        Text("서버에서 인덱싱이 완료될 때까지 잠시만 기다려 주세요.", color = Color.Gray.copy(alpha = 0.6f), fontSize = 12.sp)
+                    }
+                }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(bottom = 100.dp)) {
+                LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(bottom = 60.dp)) {
                     items(themedSections, key = { it.id }) { section ->
                         MovieRow(title = section.title, seriesList = section.seriesList, onSeriesClick = onSeriesClick)
-                    }
-                    item {
-                        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 60.dp), contentAlignment = Alignment.Center) {
-                            Text("모든 영상을 다 불러왔습니다.", color = Color.Gray.copy(alpha = 0.5f), fontSize = 14.sp)
-                        }
                     }
                 }
             }

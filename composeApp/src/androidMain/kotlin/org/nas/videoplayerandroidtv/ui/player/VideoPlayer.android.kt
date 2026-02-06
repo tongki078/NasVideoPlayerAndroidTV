@@ -6,18 +6,22 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.AspectRatioFrameLayout
 import android.util.Log
 import android.view.View
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
@@ -46,11 +50,20 @@ actual fun VideoPlayer(
 
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(context).setDataSourceFactory(httpDataSourceFactory))
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                true 
+            )
+            .setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT)
             .build().apply {
                 playWhenReady = true
+                volume = 1.0f
                 addListener(object : Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
-                        Log.e("VideoPlayer", "재생 에러: ${error.errorCodeName} - ${error.message}")
+                        Log.e("VideoPlayer", "❌ 재생 에러: ${error.errorCodeName} (${error.errorCode})")
                     }
 
                     override fun onPlaybackStateChanged(playbackState: Int) {
@@ -58,21 +71,28 @@ actual fun VideoPlayer(
                             currentOnVideoEnded?.invoke()
                         }
                     }
+
+                    override fun onTracksChanged(tracks: Tracks) {
+                        for (group in tracks.groups) {
+                            if (group.type == C.TRACK_TYPE_AUDIO) {
+                                for (i in 0 until group.length) {
+                                    val format = group.getTrackFormat(i)
+                                    if (group.isTrackSelected(i)) {
+                                        Log.d("VideoPlayer", "✅ 선택된 오디오 코덱: ${format.sampleMimeType}")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 })
             }
     }
 
-    // 라이프사이클 관찰 (홈 이동 시 재생 중단 해결)
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_PAUSE -> {
-                    exoPlayer.pause()
-                }
-                Lifecycle.Event.ON_RESUME -> {
-                    // 필요 시 다시 자동 재생 (playWhenReady가 true면 자동 재생됨)
-                    // exoPlayer.play() 
-                }
+                Lifecycle.Event.ON_PAUSE -> exoPlayer.pause()
+                Lifecycle.Event.ON_RESUME -> exoPlayer.play()
                 else -> {}
             }
         }
@@ -95,6 +115,7 @@ actual fun VideoPlayer(
 
     LaunchedEffect(url) {
         if (url.isBlank()) return@LaunchedEffect
+        Log.d("VideoPlayer", "🎬 재생 시작: $url")
         val mediaItem = MediaItem.Builder().setUri(url).build()
         exoPlayer.setMediaItem(mediaItem)
         if (initialPosition > 0) exoPlayer.seekTo(initialPosition)
@@ -108,6 +129,7 @@ actual fun VideoPlayer(
                 PlayerView(ctx).apply {
                     player = exoPlayer
                     useController = true
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
                         currentOnVisibilityChanged?.invoke(visibility == View.VISIBLE)
                     })

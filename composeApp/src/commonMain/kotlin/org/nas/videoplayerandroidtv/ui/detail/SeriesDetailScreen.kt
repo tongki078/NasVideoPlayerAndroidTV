@@ -48,7 +48,7 @@ private fun List<Movie>.sortedByEpisode(): List<Movie> = this.sortedWith(
 )
 
 private suspend fun loadSeasons(series: Series, repository: VideoRepository): List<Season> {
-    // [개선] 이미 가지고 있는 에피소드를 기본 시즌으로 먼저 구성합니다.
+    // 1. 이미 가지고 있는 에피소드가 있다면 기본으로 사용
     val defaultSeason = if (series.episodes.isNotEmpty()) {
         Season("에피소드", series.episodes.sortedByEpisode())
     } else null
@@ -56,30 +56,33 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
     val path = series.fullPath ?: return listOfNotNull(defaultSeason)
 
     return try {
+        // [수정] 상세 페이지 로딩 시, 해당 경로의 하위 내용을 다시 긁어와서 최신화 및 에피소드 확보
         val content = repository.getCategoryList(path)
-        // 하위 폴더가 있는지 확인
-        val subFolders = content.filter { it.movies.isNullOrEmpty() && !it.name.isNullOrBlank() }
         
-        if (subFolders.isEmpty()) {
-            // 하위 폴더가 없으면 현재 폴더의 영화들을 가져오거나 기존 데이터를 유지
-            val directMovies = content.flatMap { it.movies ?: emptyList() }
-            if (directMovies.isNotEmpty()) {
-                listOf(Season("에피소드", directMovies.sortedByEpisode()))
-            } else {
-                listOfNotNull(defaultSeason)
-            }
-        } else {
+        // 폴더(시즌)와 영상(에피소드)을 구분
+        val subFolders = content.filter { it.movies.isNullOrEmpty() && !it.name.isNullOrBlank() }
+        val directMovies = content.flatMap { it.movies ?: emptyList() }
+        
+        when {
             // 하위 폴더(시즌)가 있는 경우 각각 로드
-            coroutineScope {
-                val loadedSeasons = subFolders.map { folder ->
-                    async {
-                        val folderMovies = repository.getCategoryList("$path/${folder.name ?: ""}").flatMap { it.movies ?: emptyList() }
-                        if (folderMovies.isNotEmpty()) Season(folder.name ?: "알 수 없음", folderMovies.sortedByEpisode()) else null
-                    }
-                }.awaitAll().filterNotNull().sortedBy { it.name }
-                
-                if (loadedSeasons.isEmpty()) listOfNotNull(defaultSeason) else loadedSeasons
+            subFolders.isNotEmpty() -> {
+                coroutineScope {
+                    val loadedSeasons = subFolders.map { folder ->
+                        async {
+                            val folderMovies = repository.getCategoryList("$path/${folder.name ?: ""}").flatMap { it.movies ?: emptyList() }
+                            if (folderMovies.isNotEmpty()) Season(folder.name ?: "알 수 없음", folderMovies.sortedByEpisode()) else null
+                        }
+                    }.awaitAll().filterNotNull().sortedBy { it.name }
+                    
+                    if (loadedSeasons.isEmpty()) listOfNotNull(defaultSeason) else loadedSeasons
+                }
             }
+            // 현재 폴더에 영상이 직접 있는 경우
+            directMovies.isNotEmpty() -> {
+                listOf(Season("에피소드", directMovies.sortedByEpisode()))
+            }
+            // 아무것도 없으면 기존 데이터 유지
+            else -> listOfNotNull(defaultSeason)
         }
     } catch (_: Exception) {
         listOfNotNull(defaultSeason)
@@ -113,7 +116,7 @@ fun SeriesDetailScreen(
     LaunchedEffect(series) {
         state = state.copy(isLoading = true)
         coroutineScope {
-            // [획기적 속도 개선] 병렬 실행
+            // 병렬 실행으로 속도 향상
             val seasonsDeferred = async { loadSeasons(series, repository) }
             val metaDeferred = async { loadMetadataAndCredits(series.title) }
 
@@ -197,6 +200,7 @@ private fun DetailContent(
     val currentSeason = state.seasons.getOrNull(state.selectedSeasonIndex)
     val firstEpisode = currentSeason?.episodes?.firstOrNull()
 
+    // [수정] 에피소드가 확보되면 즉시 상단 프리뷰 재생을 시도
     LaunchedEffect(firstEpisode) {
         if (firstEpisode != null) {
             onPreviewPlay(firstEpisode)
@@ -233,13 +237,16 @@ private fun DetailContent(
             }
 
             val currentEpisodes = state.seasons[state.selectedSeasonIndex].episodes
+            // [수정] 회차 리스트 렌더링 확인
             EpisodeList(
                 episodes = currentEpisodes,
                 metadata = state.metadata,
                 onPlay = { movie -> onPlay(movie, currentEpisodes, 0L) }
             )
         } else if (!state.isLoading) {
-            Text("영상 정보를 찾을 수 없습니다.", color = Color.Gray, modifier = Modifier.padding(16.dp))
+            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                Text("영상 회차 정보를 불러올 수 없습니다.", color = Color.Gray)
+            }
         }
         Spacer(Modifier.height(100.dp))
     }
