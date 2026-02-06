@@ -9,7 +9,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
@@ -25,34 +24,37 @@ fun TmdbAsyncImage(
     contentScale: ContentScale = ContentScale.Crop, 
     typeHint: String? = null, 
     isLarge: Boolean = false,
-    isAnimation: Boolean = false
+    isAnimation: Boolean = false,
+    posterPath: String? = null // 서버에서 받은 직접 경로 추가
 ) {
     val cacheKey = remember(title, isAnimation) { if (isAnimation) "ani_$title" else title }
     
-    // [초고속 최적화] LaunchedEffect를 통한 개별 요청을 제거하고 캐시 데이터를 즉시 참조
+    // 1. 서버에서 받은 posterPath를 우선 사용
+    // 2. 없으면 tmdbCache 확인
     val metadata = tmdbCache[cacheKey]
     
-    val imageUrl = remember(metadata, isLarge) {
-        metadata?.posterUrl?.replace(
-            TMDB_POSTER_SIZE_MEDIUM, 
-            if (isLarge) TMDB_POSTER_SIZE_LARGE else TMDB_POSTER_SIZE_SMALL
-        )
+    val finalImageUrl = remember(metadata, posterPath, isLarge) {
+        val path = posterPath ?: metadata?.posterUrl?.substringAfterLast("/")
+        if (path != null) {
+            val size = if (isLarge) TMDB_POSTER_SIZE_LARGE else TMDB_POSTER_SIZE_MEDIUM
+            "$TMDB_IMAGE_BASE$size/$path"
+        } else null
     }
 
-    // 데이터가 없는 경우에만 백그라운드에서 조용히 요청 (HomeScreen의 프리페칭 보조)
-    if (metadata == null) {
+    // 서버 경로도 없고 캐시도 없는 경우에만 요청
+    if (posterPath == null && metadata == null) {
         LaunchedEffect(cacheKey) {
             fetchTmdbMetadata(title, typeHint, isAnimation = isAnimation)
         }
     }
     
     Box(
-        modifier = modifier.background(if (metadata?.posterUrl == null && metadata != null) Color(0xFF1A1A1A) else Color.Transparent)
+        modifier = modifier.background(if (finalImageUrl == null) Color(0xFF1A1A1A) else Color.Transparent)
     ) {
-        if (imageUrl != null) {
+        if (finalImageUrl != null) {
             AsyncImage(
                 model = ImageRequest.Builder(LocalPlatformContext.current)
-                    .data(imageUrl)
+                    .data(finalImageUrl)
                     .crossfade(400)
                     .build(),
                 contentDescription = null,
@@ -60,17 +62,14 @@ fun TmdbAsyncImage(
                 contentScale = contentScale
             )
         } else {
-            // 로딩 중이거나 데이터가 없는 경우의 플레이스홀더
             Box(Modifier.fillMaxSize().background(Color(0xFF1A1A1A)), Alignment.Center) {
-                if (metadata != null) {
-                    Text(
-                        text = title.cleanTitle(false),
-                        color = Color.DarkGray,
-                        fontSize = 11.sp,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(8.dp)
-                    )
-                }
+                Text(
+                    text = title.cleanTitle(false),
+                    color = Color.DarkGray,
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(8.dp)
+                )
             }
         }
     }

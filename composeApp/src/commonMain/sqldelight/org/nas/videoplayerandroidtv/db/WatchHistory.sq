@@ -5,15 +5,16 @@ CREATE TABLE watch_history (
     thumbnailUrl TEXT,
     timestamp INTEGER NOT NULL,
     screenType TEXT NOT NULL,
-    pathStackJson TEXT NOT NULL
+    pathStackJson TEXT NOT NULL,
+    posterPath TEXT  -- 추가: 서버에서 받은 TMDB 포스터 경로 저장
 );
 
 selectAll:
 SELECT * FROM watch_history ORDER BY timestamp DESC;
 
 insertHistory:
-INSERT OR REPLACE INTO watch_history(id, title, videoUrl, thumbnailUrl, timestamp, screenType, pathStackJson)
-VALUES (?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO watch_history(id, title, videoUrl, thumbnailUrl, timestamp, screenType, pathStackJson, posterPath)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 deleteHistory:
 DELETE FROM watch_history WHERE id = ?;

@@ -60,11 +60,37 @@ class VideoRepositoryImpl : VideoRepository {
         }
     }
 
-    // 영화 전용 폴더 API 호출로 수정
-    override suspend fun getLatestMovies(limit: Int, offset: Int): List<Series> = getGenericData("/movies_latest", limit, offset)
+    override suspend fun getLatestMovies(limit: Int, offset: Int): List<Series> = getMoviesFlat("최신", limit, offset)
     override suspend fun getPopularMovies(limit: Int, offset: Int): List<Series> = getLatestMovies(limit, offset)
-    override suspend fun getUhdMovies(limit: Int, offset: Int): List<Series> = getGenericData("/movies_uhd", limit, offset)
-    override suspend fun getMoviesByTitle(limit: Int, offset: Int): List<Series> = getGenericData("/movies_title", limit, offset)
+    override suspend fun getUhdMovies(limit: Int, offset: Int): List<Series> = getMoviesFlat("UHD", limit, offset)
+    override suspend fun getMoviesByTitle(limit: Int, offset: Int): List<Series> = getMoviesFlat("제목", limit, offset)
+
+    private suspend fun getMoviesFlat(route: String, limit: Int, offset: Int): List<Series> = withContext(Dispatchers.Default) {
+        try {
+            val response: List<Category> = client.get("$baseUrl/movies") {
+                parameter("route", route)
+                parameter("limit", limit)
+                parameter("offset", offset)
+                parameter("lite", "true")
+            }.body()
+            
+            response
+                .distinctBy { it.name ?: it.path }
+                .map { cat ->
+                    Series(
+                        title = cat.name ?: "Unknown",
+                        episodes = emptyList(),
+                        fullPath = "영화/${cat.path}",
+                        genreIds = cat.genreIds ?: emptyList(),
+                        posterPath = cat.posterPath
+                    )
+                }
+                .distinctBy { it.title }
+                .sortedBy { it.title }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
 
     override suspend fun getAnimations(): List<Series> = withContext(Dispatchers.Default) {
         try {
@@ -127,7 +153,7 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getLatestForeignTV(): List<Series> = getAirDataInternal("외국TV")
     override suspend fun getPopularForeignTV(): List<Series> = getLatestForeignTV()
 
-    // 외국 TV 세부 카테고리
+    // 외국 TV 세부 카테고리 구현
     override suspend fun getFtvUs(limit: Int, offset: Int): List<Series> = getGenericData("/ftv_us", limit, offset)
     override suspend fun getFtvCn(limit: Int, offset: Int): List<Series> = getGenericData("/ftv_cn", limit, offset)
     override suspend fun getFtvJp(limit: Int, offset: Int): List<Series> = getGenericData("/ftv_jp", limit, offset)
@@ -137,7 +163,7 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getLatestKoreanTV(): List<Series> = getAirDataInternal("국내TV")
     override suspend fun getPopularKoreanTV(): List<Series> = getLatestKoreanTV()
 
-    // 국내 TV 세부 카테고리
+    // 국내 TV 세부 카테고리 구현
     override suspend fun getKtvDrama(limit: Int, offset: Int): List<Series> = getGenericData("/ktv_drama", limit, offset)
     override suspend fun getKtvSitcom(limit: Int, offset: Int): List<Series> = getGenericData("/ktv_sitcom", limit, offset)
     override suspend fun getKtvVariety(limit: Int, offset: Int): List<Series> = getGenericData("/ktv_variety", limit, offset)
@@ -146,23 +172,20 @@ class VideoRepositoryImpl : VideoRepository {
 
     private suspend fun getGenericData(endpoint: String, limit: Int, offset: Int): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val response = client.get("$baseUrl$endpoint") {
+            val categories: List<Category> = client.get("$baseUrl$endpoint") {
                 parameter("limit", limit)
                 parameter("offset", offset)
                 parameter("lite", "true")
+            }.body()
+            categories.map { cat ->
+                Series(
+                    title = cat.name ?: "Unknown",
+                    episodes = emptyList(),
+                    fullPath = cat.path,
+                    genreIds = cat.genreIds ?: emptyList(),
+                    posterPath = cat.posterPath
+                )
             }
-            if (response.status == HttpStatusCode.OK) {
-                val categories: List<Category> = response.body()
-                categories.map { cat ->
-                    Series(
-                        title = cat.name ?: "Unknown",
-                        episodes = emptyList(),
-                        fullPath = cat.path,
-                        genreIds = cat.genreIds ?: emptyList(),
-                        posterPath = cat.posterPath
-                    )
-                }
-            } else emptyList()
         } catch (e: Exception) {
             emptyList()
         }

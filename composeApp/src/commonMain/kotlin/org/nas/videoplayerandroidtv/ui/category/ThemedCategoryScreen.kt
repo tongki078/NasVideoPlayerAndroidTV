@@ -55,14 +55,13 @@ fun ThemedCategoryScreen(
         isAirScreen -> listOf("라프텔 애니메이션", "드라마")
         isAniScreen -> listOf("라프텔", "시리즈")
         isMovieScreen -> listOf("제목", "UHD", "최신")
-        isForeignTVScreen -> listOf("최신", "인기")
-        isKoreanTVScreen -> listOf("최신", "인기")
+        isForeignTVScreen -> listOf("미국 드라마", "중국 드라마", "일본 드라마", "기타국가 드라마", "다큐")
+        isKoreanTVScreen -> listOf("드라마", "시트콤", "예능", "교양", "다큐멘터리")
         else -> emptyList()
     }
 
     val scope = rememberCoroutineScope()
     
-    // 개별 리스트 상태 관리
     var actionList by remember { mutableStateOf(listOf<Series>()) }
     var fantasyList by remember { mutableStateOf(listOf<Series>()) }
     var comedyList by remember { mutableStateOf(listOf<Series>()) }
@@ -83,122 +82,80 @@ fun ThemedCategoryScreen(
         ).filter { it.seriesList.isNotEmpty() }
     }
 
-    var isInitialLoading by remember(selectedMode, categoryName) { mutableStateOf(true) }
-    var isPagingLoading by remember { mutableStateOf(false) }
-    var currentOffset by remember(selectedMode, categoryName) { mutableStateOf(0) }
-    var hasMoreData by remember(selectedMode, categoryName) { mutableStateOf(true) }
-    val pageSize = 200
+    var isLoading by remember(selectedMode, categoryName) { mutableStateOf(true) }
 
-    // [핵심 개선] 데이터를 20개씩 병렬 처리하여 즉시 UI에 반영
-    suspend fun processAndDistribute(newSeries: List<Series>) = coroutineScope {
-        newSeries.chunked(20).forEach { chunk ->
-            // 1. 서버 정보가 없는 경우에만 병렬로 TMDB 조회
-            chunk.map { series ->
-                async(Dispatchers.Default) {
-                    if (series.genreIds.isEmpty() && !tmdbCache.containsKey(series.title) && !tmdbCache.containsKey("ani_${series.title}")) {
-                        fetchTmdbMetadata(series.title)
-                    }
-                    series
-                }
-            }.awaitAll()
-
-            // 2. 20개가 완료될 때마다 즉시 분류 및 UI 업데이트 (사용자가 기다리지 않음)
-            withContext(Dispatchers.Main) {
-                val tAction = mutableListOf<Series>()
-                val tFantasy = mutableListOf<Series>()
-                val tComedy = mutableListOf<Series>()
-                val tThriller = mutableListOf<Series>()
-                val tRomance = mutableListOf<Series>()
-                val tFamily = mutableListOf<Series>()
-                val tEtc = mutableListOf<Series>()
-
-                chunk.forEach { series ->
-                    val genreIds = if (series.genreIds.isNotEmpty()) series.genreIds 
-                                   else (tmdbCache[series.title] ?: tmdbCache["ani_${series.title}"])?.genreIds ?: emptyList()
-
-                    when {
-                        genreIds.any { it in ThemeConfig.ACTION_ADVENTURE } -> tAction.add(series)
-                        genreIds.any { it in ThemeConfig.FANTASY_SCI_FI } -> tFantasy.add(series)
-                        genreIds.any { it in ThemeConfig.COMEDY_LIFE } -> tComedy.add(series)
-                        genreIds.any { it in ThemeConfig.MYSTERY_THRILLER } -> tThriller.add(series)
-                        genreIds.any { it in ThemeConfig.DRAMA_ROMANCE } -> tRomance.add(series)
-                        genreIds.any { it in ThemeConfig.FAMILY_ANIMATION } -> tFamily.add(series)
-                        else -> tEtc.add(series)
-                    }
-                }
-
-                if (tAction.isNotEmpty()) actionList = (actionList + tAction).distinctBy { it.title }
-                if (tFantasy.isNotEmpty()) fantasyList = (fantasyList + tFantasy).distinctBy { it.title }
-                if (tComedy.isNotEmpty()) comedyList = (comedyList + tComedy).distinctBy { it.title }
-                if (tThriller.isNotEmpty()) thrillerList = (thrillerList + tThriller).distinctBy { it.title }
-                if (tRomance.isNotEmpty()) romanceList = (romanceList + tRomance).distinctBy { it.title }
-                if (tFamily.isNotEmpty()) familyList = (familyList + tFamily).distinctBy { it.title }
-                if (tEtc.isNotEmpty()) etcList = (etcList + tEtc).distinctBy { it.title }
-                
-                isInitialLoading = false // 첫 조각만 처리되어도 로딩바 제거하여 빠른 응답성 제공
-            }
-            yield() // 스크롤 부드러움을 위해 양보
-        }
-    }
-
-    suspend fun loadMore() {
-        if (!hasMoreData || isPagingLoading) return
-        if (currentOffset == 0) isInitialLoading = true else isPagingLoading = true
-
+    LaunchedEffect(selectedMode, categoryName) {
+        isLoading = true
+        // 상태 초기화 (문법 오류 수정)
+        actionList = emptyList(); fantasyList = emptyList(); comedyList = emptyList()
+        thrillerList = emptyList(); romanceList = emptyList(); familyList = emptyList(); etcList = emptyList()
+        
         try {
+            val limit = 500 
             val result = withContext(Dispatchers.Default) {
                 when {
                     isMovieScreen -> when (selectedMode) {
-                        0 -> repository.getMoviesByTitle(pageSize, currentOffset)
-                        1 -> repository.getUhdMovies(pageSize, currentOffset)
-                        else -> repository.getLatestMovies(pageSize, currentOffset)
+                        0 -> repository.getMoviesByTitle(limit, 0)
+                        1 -> repository.getUhdMovies(limit, 0)
+                        else -> repository.getLatestMovies(limit, 0)
                     }
-                    isAniScreen -> if (selectedMode == 0) repository.getAnimationsRaftel(pageSize, currentOffset) else repository.getAnimationsSeries(pageSize, currentOffset)
+                    isAniScreen -> if (selectedMode == 0) repository.getAnimationsRaftel(limit, 0) else repository.getAnimationsSeries(limit, 0)
                     isAirScreen -> if (selectedMode == 0) repository.getAnimationsAir() else repository.getDramasAir()
-                    isForeignTVScreen -> if (selectedMode == 0) repository.getLatestForeignTV() else repository.getPopularForeignTV()
-                    isKoreanTVScreen -> if (selectedMode == 0) repository.getLatestKoreanTV() else repository.getPopularKoreanTV()
+                    isForeignTVScreen -> when (selectedMode) {
+                        0 -> repository.getFtvUs(limit, 0); 1 -> repository.getFtvCn(limit, 0)
+                        2 -> repository.getFtvJp(limit, 0); 3 -> repository.getFtvEtc(limit, 0)
+                        4 -> repository.getFtvDocu(limit, 0); else -> emptyList()
+                    }
+                    isKoreanTVScreen -> when (selectedMode) {
+                        0 -> repository.getKtvDrama(limit, 0); 1 -> repository.getKtvSitcom(limit, 0)
+                        2 -> repository.getKtvVariety(limit, 0); 3 -> repository.getKtvEdu(limit, 0)
+                        4 -> repository.getKtvDocu(limit, 0); else -> emptyList()
+                    }
                     else -> emptyList()
                 }
             }
+            
+            if (result.isNotEmpty()) {
+                result.chunked(50).forEach { chunk ->
+                    chunk.forEach { s -> 
+                        if (s.genreIds.isEmpty() && !tmdbCache.containsKey(s.title)) {
+                            scope.launch { fetchTmdbMetadata(s.title) }
+                        }
+                    }
+                    
+                    withContext(Dispatchers.Main) {
+                        val tA = mutableListOf<Series>(); val tF = mutableListOf<Series>()
+                        val tC = mutableListOf<Series>(); val tT = mutableListOf<Series>()
+                        val tR = mutableListOf<Series>(); val tM = mutableListOf<Series>()
+                        val tE = mutableListOf<Series>()
 
-            if (result.isEmpty()) {
-                hasMoreData = false
-                isInitialLoading = false
-            } else {
-                processAndDistribute(result)
-                currentOffset += pageSize
-                if (result.size < pageSize || isAirScreen) hasMoreData = false
+                        chunk.forEach { s ->
+                            val gIds = if (s.genreIds.isNotEmpty()) s.genreIds else tmdbCache[s.title]?.genreIds ?: emptyList()
+                            when {
+                                gIds.any { it in ThemeConfig.ACTION_ADVENTURE } -> tA.add(s)
+                                gIds.any { it in ThemeConfig.FANTASY_SCI_FI } -> tF.add(s)
+                                gIds.any { it in ThemeConfig.COMEDY_LIFE } -> tC.add(s)
+                                gIds.any { it in ThemeConfig.MYSTERY_THRILLER } -> tT.add(s)
+                                gIds.any { it in ThemeConfig.DRAMA_ROMANCE } -> tR.add(s)
+                                gIds.any { it in ThemeConfig.FAMILY_ANIMATION } -> tM.add(s)
+                                else -> tE.add(s)
+                            }
+                        }
+                        
+                        if (tA.isNotEmpty()) actionList = (actionList + tA).distinctBy { it.title }
+                        if (tF.isNotEmpty()) fantasyList = (fantasyList + tF).distinctBy { it.title }
+                        if (tC.isNotEmpty()) comedyList = (comedyList + tC).distinctBy { it.title }
+                        if (tT.isNotEmpty()) thrillerList = (thrillerList + tT).distinctBy { it.title }
+                        if (tR.isNotEmpty()) romanceList = (romanceList + tR).distinctBy { it.title }
+                        if (tM.isNotEmpty()) familyList = (familyList + tM).distinctBy { it.title }
+                        if (tE.isNotEmpty()) etcList = (etcList + tE).distinctBy { it.title }
+                    }
+                }
             }
         } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            isInitialLoading = false
+            e.printStackTrace()
         } finally {
-            isPagingLoading = false
-        }
-    }
-
-    LaunchedEffect(selectedMode, categoryName) {
-        actionList = emptyList()
-        fantasyList = emptyList()
-        comedyList = emptyList()
-        thrillerList = emptyList()
-        romanceList = emptyList()
-        familyList = emptyList()
-        etcList = emptyList()
-        currentOffset = 0
-        hasMoreData = true
-        loadMore()
-    }
-
-    val shouldLoadMore by remember {
-        derivedStateOf {
-            val lastVisibleItemIndex = lazyListState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            lastVisibleItemIndex >= themedSections.size - 1 && themedSections.isNotEmpty()
-        }
-    }
-    LaunchedEffect(shouldLoadMore) {
-        if (shouldLoadMore && hasMoreData && !isInitialLoading && !isPagingLoading) {
-            loadMore()
+            isLoading = false
         }
     }
 
@@ -214,34 +171,20 @@ fun ThemedCategoryScreen(
             }
         }
 
-        Box(modifier = Modifier.fillMaxWidth().height(2.dp)) {
-            if (isInitialLoading || isPagingLoading) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Color.Red, trackColor = Color.Transparent)
-            }
-        }
-
         Box(modifier = Modifier.fillMaxSize()) {
-            if (!isInitialLoading && themedSections.isEmpty()) {
-                Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text("영상을 불러올 수 없습니다.", color = Color.Gray)
-                }
+            if (isLoading && themedSections.isEmpty()) {
+                Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator(color = Color.Red) }
+            } else if (!isLoading && themedSections.isEmpty()) {
+                Box(Modifier.fillMaxSize(), Alignment.Center) { Text("영상을 불러올 수 없습니다.", color = Color.Gray) }
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    state = lazyListState,
-                    contentPadding = PaddingValues(bottom = 100.dp)
-                ) {
+                LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(bottom = 100.dp)) {
                     items(themedSections, key = { it.id }) { section ->
-                        MovieRow(
-                            title = section.title, 
-                            seriesList = section.seriesList, 
-                            onSeriesClick = onSeriesClick,
-                            onReachEnd = {
-                                if (hasMoreData && !isPagingLoading) {
-                                    scope.launch { loadMore() }
-                                }
-                            }
-                        )
+                        MovieRow(title = section.title, seriesList = section.seriesList, onSeriesClick = onSeriesClick)
+                    }
+                    item {
+                        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 60.dp), contentAlignment = Alignment.Center) {
+                            Text("모든 영상을 다 불러왔습니다.", color = Color.Gray.copy(alpha = 0.5f), fontSize = 14.sp)
+                        }
                     }
                 }
             }
@@ -255,14 +198,7 @@ private fun CategoryTabItem(text: String, isSelected: Boolean, onClick: () -> Un
     val backgroundColor by animateColorAsState(if (isFocused) Color.White else if (isSelected) Color.Red else Color.Gray.copy(alpha = 0.2f))
     val textColor by animateColorAsState(if (isFocused) Color.Black else if (isSelected) Color.White else Color.Gray)
     Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(24.dp))
-            .background(backgroundColor)
-            .onFocusChanged { isFocused = it.isFocused }
-            .focusable()
-            .clickable { onClick() }
-            .padding(horizontal = 20.dp, vertical = 8.dp)
-            .scale(if (isFocused) 1.1f else 1.0f),
+        modifier = Modifier.clip(RoundedCornerShape(24.dp)).background(backgroundColor).onFocusChanged { isFocused = it.isFocused }.focusable().clickable { onClick() }.padding(horizontal = 20.dp, vertical = 8.dp).scale(if (isFocused) 1.1f else 1.0f),
         contentAlignment = Alignment.Center
     ) {
         Text(text = text, color = textColor, fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium, fontSize = 15.sp)

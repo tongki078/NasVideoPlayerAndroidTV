@@ -47,6 +47,7 @@ fun App(driver: SqlDriver) {
     }
     
     val db = remember { AppDatabase(driver) }
+    // SearchHistoryDataSource.kt 파일에 정의된 클래스들 생성
     val searchHistoryDataSource = remember { SearchHistoryDataSource(db) }
     val watchHistoryDataSource = remember { WatchHistoryDataSource(db) }
     
@@ -55,13 +56,12 @@ fun App(driver: SqlDriver) {
         persistentCache = tmdbCacheDataSource
     }
     
+    // collectAsState 시 도메인 모델로 이미 변환되어 나오므로 map 불필요
     val recentQueriesState = searchHistoryDataSource.getRecentQueries()
-        .map { list -> list.map { it.toData() } }
         .collectAsState(initial = emptyList())
     val recentQueries by recentQueriesState
 
     val watchHistoryState = watchHistoryDataSource.getWatchHistory()
-        .map { list -> list.map { it.toData() } }
         .collectAsState(initial = emptyList())
     val watchHistory by watchHistoryState
 
@@ -78,8 +78,7 @@ fun App(driver: SqlDriver) {
     
     var lastPlaybackPosition by rememberSaveable { mutableStateOf(0L) }
 
-    var homeLatestSeries by remember { mutableStateOf<List<Series>>(emptyList()) }
-    var homeAnimations by remember { mutableStateOf<List<Series>>(emptyList()) }
+    var homeSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
     var isHomeLoading by remember { mutableStateOf(false) } 
     
     val homeLazyListState = rememberLazyListState()
@@ -93,19 +92,13 @@ fun App(driver: SqlDriver) {
 
     BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME) {
         when {
-            selectedMovie != null -> {
-                selectedMovie = null
-            }
-            selectedSeries != null -> {
-                selectedSeries = null
-            }
-            currentScreen != Screen.HOME -> {
-                currentScreen = Screen.HOME
-            }
+            selectedMovie != null -> { selectedMovie = null }
+            selectedSeries != null -> { selectedSeries = null }
+            currentScreen != Screen.HOME -> { currentScreen = Screen.HOME }
         }
     }
 
-    val saveWatchHistory: (Movie) -> Unit = { movie ->
+    val saveWatchHistory: (Movie, String?) -> Unit = { movie, posterPath ->
         scope.launch(Dispatchers.Default) {
             val videoUrl = movie.videoUrl ?: ""
             val title = movie.title ?: ""
@@ -117,7 +110,8 @@ fun App(driver: SqlDriver) {
                 thumbnailUrl = movie.thumbnailUrl ?: "",
                 timestamp = currentTimeMillis(),
                 screenType = if (isAni) "animation" else "movie",
-                pathStackJson = ""
+                pathStackJson = "",
+                posterPath = posterPath 
             )
         }
     }
@@ -134,24 +128,14 @@ fun App(driver: SqlDriver) {
     }
 
     LaunchedEffect(currentScreen) {
-        if (currentScreen == Screen.HOME && homeLatestSeries.isEmpty()) {
+        if (currentScreen == Screen.HOME && homeSections.isEmpty()) {
             isHomeLoading = true
-            
-            // [초고속 개선] 병렬 요청 후, 최신작 목록이 오는 즉시 화면을 먼저 엽니다.
-            val latestDeferred = async { repository.getLatestMovies() }
-            val animationsDeferred = async { repository.getAnimationsAir() }
-            
-            val latest = latestDeferred.await()
-            homeLatestSeries = latest
-            
-            // 최신작만 도착해도 로딩을 해제하여 스켈레톤 UI가 실제 데이터로 빠르게 바뀌게 함
-            if (latest.isNotEmpty()) isHomeLoading = false
-            
-            val animations = animationsDeferred.await()
-            homeAnimations = animations
-            
-            // 모든 데이터 수신 완료 시 최종 로딩 해제
-            isHomeLoading = false
+            try {
+                homeSections = repository.getHomeRecommendations()
+            } catch (_: Exception) {
+            } finally {
+                isHomeLoading = false
+            }
         }
     }
 
@@ -183,9 +167,7 @@ fun App(driver: SqlDriver) {
                                 movie = selectedMovie!!, 
                                 playlist = moviePlaylist,
                                 initialPosition = lastPlaybackPosition,
-                                onPositionUpdate = { 
-                                    lastPlaybackPosition = it
-                                },
+                                onPositionUpdate = { lastPlaybackPosition = it },
                                 onBack = { selectedMovie = null }
                             )
                         }
@@ -200,9 +182,9 @@ fun App(driver: SqlDriver) {
                                     selectedMovie = movie
                                     moviePlaylist = playlist
                                     lastPlaybackPosition = pos
-                                    saveWatchHistory(movie)
+                                    saveWatchHistory(movie, selectedSeries?.posterPath)
                                 },
-                                onPreviewPlay = { movie -> saveWatchHistory(movie) }
+                                onPreviewPlay = { movie -> saveWatchHistory(movie, selectedSeries?.posterPath) }
                             )
                         }
                         currentScreen == Screen.SEARCH -> {
@@ -231,36 +213,30 @@ fun App(driver: SqlDriver) {
                             )
                         }
                         currentScreen == Screen.HOME -> {
-                            key(watchHistory) {
-                                HomeScreen(
-                                    watchHistory = watchHistory, 
-                                    latestMovies = homeLatestSeries, 
-                                    animations = homeAnimations,
-                                    isLoading = isHomeLoading, 
-                                    lazyListState = homeLazyListState,
-                                    onSeriesClick = { selectedSeries = it }, 
-                                    onPlayClick = { movie ->
-                                        val parentSeries = (homeLatestSeries + homeAnimations).find { series -> 
-                                            series.episodes.any { it.id == movie.id }
-                                        }
-                                        selectedMovie = movie
-                                        moviePlaylist = parentSeries?.episodes ?: listOf(movie)
-                                        lastPlaybackPosition = 0L
-                                        saveWatchHistory(movie)
-                                    },
-                                    onHistoryClick = { history ->
-                                        selectedMovie = Movie(
-                                            id = history.id,
-                                            title = history.title,
-                                            videoUrl = history.videoUrl,
-                                            thumbnailUrl = history.thumbnailUrl
-                                        )
-                                        moviePlaylist = listOf(selectedMovie!!)
-                                        lastPlaybackPosition = 0L 
-                                        saveWatchHistory(selectedMovie!!)
-                                    }
-                                )
-                            }
+                            HomeScreen(
+                                watchHistory = watchHistory, 
+                                homeSections = homeSections,
+                                isLoading = isHomeLoading, 
+                                lazyListState = homeLazyListState,
+                                onSeriesClick = { selectedSeries = it }, 
+                                onPlayClick = { movie ->
+                                    selectedMovie = movie
+                                    moviePlaylist = listOf(movie)
+                                    lastPlaybackPosition = 0L
+                                    saveWatchHistory(movie, null)
+                                },
+                                onHistoryClick = { history ->
+                                    selectedMovie = Movie(
+                                        id = history.id,
+                                        title = history.title,
+                                        videoUrl = history.videoUrl,
+                                        thumbnailUrl = history.thumbnailUrl
+                                    )
+                                    moviePlaylist = listOf(selectedMovie!!)
+                                    lastPlaybackPosition = 0L 
+                                    saveWatchHistory(selectedMovie!!, history.posterPath)
+                                }
+                            )
                         }
                         else -> {
                             val categoryInfo = when (currentScreen) {
