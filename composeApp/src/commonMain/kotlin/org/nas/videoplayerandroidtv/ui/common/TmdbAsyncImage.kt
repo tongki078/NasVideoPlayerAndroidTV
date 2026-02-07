@@ -60,6 +60,7 @@ fun TmdbAsyncImage(
     val painterState by painter.state.collectAsState()
     val isSuccess = painterState is AsyncImagePainter.State.Success
     val isError = painterState is AsyncImagePainter.State.Error
+    val isLoading = painterState is AsyncImagePainter.State.Loading
     val isEmpty = painterState is AsyncImagePainter.State.Empty
 
     LaunchedEffect(isSuccess) {
@@ -78,19 +79,25 @@ fun TmdbAsyncImage(
                 modifier = Modifier.fillMaxSize().background(Color.Black),
                 contentScale = contentScale
             )
-        } else if (isError || (isEmpty && finalImageUrl == null)) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = title.cleanTitle(false),
-                    color = Color.White.copy(alpha = 0.5f),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Normal,
-                    textAlign = TextAlign.Center,
-                    maxLines = 3
-                )
+        } else {
+            // 포스터 이미지가 아예 없는 경우이거나, 이미지를 가져오려 했으나 실패한 경우에만 텍스트 노출
+            // 로딩 중일 때는 텍스트를 노출하지 않아 깜빡임을 방지함
+            val shouldShowText = (finalImageUrl == null && !isLoading) || isError
+            
+            if (shouldShowText) {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = title.cleanTitle(false),
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Normal,
+                        textAlign = TextAlign.Center,
+                        maxLines = 3
+                    )
+                }
             }
         }
     }

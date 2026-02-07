@@ -11,7 +11,9 @@ import org.nas.videoplayerandroidtv.cleanTitle
 import kotlinx.coroutines.*
 
 private val REGEX_GROUP_BY_SERIES = Regex("""(?i)[.\s_-]+(?:S\d+E\d+|S\d+|E\d+|EP\d+|\d+화|\d+회|시즌\s*\d+|Season\s*\d+|\d+기|\(\d+\)).*""")
-private val REGEX_INDEX_FOLDER = Regex("""^[0-9A-Z가-힣]$|^[0-9]-[0-9]$|^[A-Z]-[A-Z]$|^[가-힣]-[가-힣]$|^0-Z$""")
+// 0Z, (2017) 같은 폴더를 제목으로 인식하는 문제를 해결하기 위해 정규식 보강
+private val REGEX_INDEX_FOLDER = Regex("""^[0-9A-Z가-힣ㄱ-ㅎ]$|^[0-9]-[0-9]$|^[A-Z]-[A-Z]$|^[가-힣]-[가-힣]$|^0Z$|^0-Z$|^가-하$""")
+private val REGEX_YEAR_FOLDER = Regex("""^\(\d{4}\)$|^\d{4}$""") // (YYYY) 또는 YYYY 형식의 연도 폴더
 private val REGEX_SEASON_FOLDER = Regex("""(?i)Season\s*\d+|시즌\s*\d+|Part\s*\d+|파트\s*\d+|\d+기""")
 
 class VideoRepositoryImpl : VideoRepository {
@@ -248,15 +250,20 @@ class VideoRepositoryImpl : VideoRepository {
             var showTitle = ""
             var showPath = ""
             
-            val skipFolders = listOf("미국 드라마", "중국 드라마", "일본 드라마", "기타국가 드라마", "다큐", "드라마", "시트콤", "예능", "교양", "다큐멘터리")
+            val skipFolders = listOf(
+                "미국 드라마", "중국 드라마", "일본 드라마", "기타국가 드라마", "다큐", "드라마", "시트콤", "예능", "교양", "다큐멘터리",
+                "라프텔", "시리즈"
+            )
             
             var found = false
             val currentPathParts = mutableListOf<String>()
             for (part in parts) {
                 currentPathParts.add(part)
                 if (!found) {
-                    if (part in skipFolders || REGEX_INDEX_FOLDER.matches(part)) continue
-                    if (REGEX_SEASON_FOLDER.containsMatchIn(part)) continue
+                    // 연도 폴더, 인덱스 폴더, 시즌 폴더 등 메타데이터성 폴더를 모두 건너뛴다.
+                    if (part in skipFolders || REGEX_INDEX_FOLDER.matches(part) || REGEX_YEAR_FOLDER.matches(part) || REGEX_SEASON_FOLDER.containsMatchIn(part)) {
+                        continue
+                    }
                     
                     showTitle = part
                     showPath = currentPathParts.joinToString("/")
@@ -285,7 +292,9 @@ class VideoRepositoryImpl : VideoRepository {
                 genreIds = bestCat.genreIds ?: emptyList(),
                 posterPath = bestCat.posterPath
             )
-        }.sortedBy { it.title }
+        }
+        .filter { !REGEX_INDEX_FOLDER.matches(it.title) && !REGEX_YEAR_FOLDER.matches(it.title) }
+        .sortedBy { it.title }
     }
 
     private fun List<Movie>.groupBySeries(basePath: String? = null): List<Series> = 

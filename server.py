@@ -345,12 +345,11 @@ def filter_by_path(pool, keyword):
 
 @app.route('/anim_raftel')
 def get_anim_raftel():
-    data = [c for c in GLOBAL_CACHE.get("animations_all", []) if nfc("라프텔") in nfc(c.get('path', ''))]
-    return jsonify(process_data(data, request.args.get('lite') == 'true'))
+    return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "라프텔"), request.args.get('lite') == 'true'))
 @app.route('/anim_series')
 def get_anim_series():
-    data = [c for c in GLOBAL_CACHE.get("animations_all", []) if nfc("라프텔") not in nfc(c.get('path', ''))]
-    return jsonify(process_data(data, request.args.get('lite') == 'true'))
+    return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "시리즈"), request.args.get('lite') == 'true'))
+
 @app.route('/foreigntv')
 def get_foreigntv(): return jsonify(process_data(GLOBAL_CACHE.get("foreigntv", []), request.args.get('lite') == 'true'))
 @app.route('/ftv_us')
@@ -380,11 +379,17 @@ def get_animations_all(): return jsonify(process_data(GLOBAL_CACHE.get("animatio
 @app.route('/movies')
 def get_movies(): return jsonify(process_data(GLOBAL_CACHE.get("movies", []), request.args.get('lite') == 'true'))
 @app.route('/movies_latest')
-def get_movies_latest(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "최신"), request.args.get('lite') == 'true'))
+def get_movies_latest():
+    return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "최신"), request.args.get('lite') == 'true'))
+
 @app.route('/movies_uhd')
-def get_movies_uhd(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "UHD"), request.args.get('lite') == 'true'))
+def get_movies_uhd():
+    return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "UHD"), request.args.get('lite') == 'true'))
+
 @app.route('/movies_title')
-def get_movies_title(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "제목"), request.args.get('lite') == 'true'))
+def get_movies_title():
+    return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "제목"), request.args.get('lite') == 'true'))
+
 @app.route('/search')
 def search_videos():
     q = request.args.get('q', '').lower()
