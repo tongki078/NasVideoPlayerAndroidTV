@@ -14,7 +14,6 @@ import coil3.disk.DiskCache
 import coil3.compose.setSingletonImageLoaderFactory
 import okio.Path.Companion.toPath
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.map
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.data.repository.VideoRepositoryImpl
 import org.nas.videoplayerandroidtv.domain.model.*
@@ -47,7 +46,6 @@ fun App(driver: SqlDriver) {
     }
     
     val db = remember { AppDatabase(driver) }
-    // SearchHistoryDataSource.kt 파일에 정의된 클래스들 생성
     val searchHistoryDataSource = remember { SearchHistoryDataSource(db) }
     val watchHistoryDataSource = remember { WatchHistoryDataSource(db) }
     
@@ -56,7 +54,6 @@ fun App(driver: SqlDriver) {
         persistentCache = tmdbCacheDataSource
     }
     
-    // collectAsState 시 도메인 모델로 이미 변환되어 나오므로 map 불필요
     val recentQueriesState = searchHistoryDataSource.getRecentQueries()
         .collectAsState(initial = emptyList())
     val recentQueries by recentQueriesState
@@ -150,17 +147,16 @@ fun App(driver: SqlDriver) {
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Color.Red, background = Color.Black)) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Scaffold(
-                topBar = {
-                    if (selectedMovie == null) {
-                        NetflixTopBar(currentScreen) { 
-                            currentScreen = it
-                            selectedSeries = null 
-                        }
+            // Scaffold 대신 Column을 사용하여 상단 바와 본문을 물리적으로 연결 (포커스 탐색 개선)
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (selectedMovie == null) {
+                    NetflixTopBar(currentScreen) { 
+                        currentScreen = it
+                        selectedSeries = null 
                     }
                 }
-            ) { pv ->
-                Box(Modifier.padding(pv).fillMaxSize()) {
+                
+                Box(Modifier.weight(1f).fillMaxWidth()) {
                     when {
                         selectedMovie != null -> {
                             VideoPlayerScreen(

@@ -48,7 +48,7 @@ kotlin {
             implementation(libs.androidx.media3.hls)
             implementation(libs.sqldelight.android)
             
-            // TV UI dependencies
+            // TV UI dependencies stay in androidMain
             implementation(libs.androidx.tv.foundation)
             implementation(libs.androidx.tv.material)
         }
