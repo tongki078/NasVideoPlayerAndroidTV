@@ -99,7 +99,7 @@ fun HomeScreen(
                     LazyRow(
                         contentPadding = PaddingValues(horizontal = horizontalPadding),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        modifier = Modifier.height(200.dp)
+                        modifier = Modifier.height(210.dp)
                     ) {
                         items(watchHistory.take(20), key = { "h_${it.id}" }) { history ->
                             HistoryMovieCard(
@@ -121,7 +121,7 @@ fun HomeScreen(
                         LazyRow(
                             contentPadding = PaddingValues(horizontal = horizontalPadding),
                             horizontalArrangement = Arrangement.spacedBy(20.dp),
-                            modifier = Modifier.height(220.dp),
+                            modifier = Modifier.height(340.dp), 
                             verticalAlignment = Alignment.Top
                         ) {
                             items(section.items, key = { "${section.title}_${it.path}_${it.name}" }) { item ->
@@ -186,77 +186,88 @@ private fun HeroSection(
 @Composable
 private fun HomeMovieListItem(category: Category, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
+    
+    // 너비 애니메이션 재도입 (130dp -> 240dp)
+    val width by animateDpAsState(
+        targetValue = if (isFocused) 240.dp else 130.dp,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessLow),
+        label = "itemWidth"
+    )
+    
     val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.15f else 1f,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium),
-        label = "scale"
+        targetValue = if (isFocused) 1.1f else 1f,
+        label = "itemScale"
     )
 
     val title = category.name ?: "Unknown"
-    val cacheKey = remember(title) { title }
-    val metadata = tmdbCache[cacheKey]
+    val metadata = tmdbCache[title]
 
     Column(
         modifier = Modifier
-            .width(220.dp)
+            .width(width) // 물리적 너비 조절
             .zIndex(if (isFocused) 10f else 1f)
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable(onClick = onClick)
     ) {
+        // 이미지 영역: 높이 190dp 고정
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(124.dp)
+                .height(190.dp)
                 .graphicsLayer {
                     scaleX = scale
                     scaleY = scale
                 }
-                .shadow(elevation = if (isFocused) 15.dp else 0.dp, shape = RoundedCornerShape(4.dp))
-                .clip(RoundedCornerShape(4.dp))
+                .shadow(elevation = if (isFocused) 15.dp else 0.dp, shape = RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(8.dp))
                 .then(
-                    if (isFocused) Modifier.border(2.5.dp, Color.White, RoundedCornerShape(4.dp))
+                    if (isFocused) Modifier.border(2.5.dp, Color.White, RoundedCornerShape(8.dp))
                     else Modifier
                 )
         ) {
             TmdbAsyncImage(
                 title = title, 
                 posterPath = category.posterPath,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
             )
+            
+            if (isFocused) {
+                Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f)))))
+                Text(
+                    text = title.cleanTitle(),
+                    color = Color.White,
+                    modifier = Modifier.align(Alignment.BottomStart).padding(12.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
 
-        Box(modifier = Modifier.fillMaxWidth().height(80.dp)) {
-            if (isFocused) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 14.dp, start = 2.dp, end = 2.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        val genre = category.genreIds?.take(1)?.mapNotNull { genreMap[it] }?.firstOrNull() ?: "추천"
-                        Text(
-                            text = genre,
-                            color = Color(0xFF46D369),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-
-                    Text(
-                        text = metadata?.overview ?: "$title - 지금 바로 감상해보세요.",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 11.sp,
-                        maxLines = 2,
-                        lineHeight = 15.sp,
-                        overflow = TextOverflow.Ellipsis
-                    )
+        // 정보 영역 (포커스 시 하단 노출)
+        if (isFocused) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 14.dp, start = 4.dp, end = 4.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val genre = category.genreIds?.take(1)?.mapNotNull { genreMap[it] }?.firstOrNull() ?: "추천"
+                    Text(text = genre, color = Color(0xFF46D369), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(text = "98% 일치", color = Color(0xFF46D369), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = metadata?.overview ?: "지금 바로 감상해보세요.",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 11.sp,
+                    maxLines = 3,
+                    lineHeight = 16.sp,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }
@@ -271,8 +282,12 @@ private fun HistoryMovieCard(title: String, posterPath: String? = null, onClick:
         modifier = Modifier
             .width(130.dp)
             .aspectRatio(0.68f)
-            .scale(scale)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .onFocusChanged { isFocused = it.isFocused }
+            .shadow(elevation = if (isFocused) 10.dp else 0.dp, shape = RoundedCornerShape(8.dp))
             .clip(RoundedCornerShape(8.dp))
             .then(
                 if (isFocused) Modifier.border(2.dp, Color.White, RoundedCornerShape(8.dp))
@@ -291,7 +306,7 @@ private fun HistoryMovieCard(title: String, posterPath: String? = null, onClick:
 
 @Composable
 private fun SectionTitle(title: String, horizontalPadding: androidx.compose.ui.unit.Dp) {
-    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, top = 24.dp, bottom = 8.dp), color = Color(0xFFE0E0E0), fontWeight = FontWeight.Bold, fontSize = 20.sp, letterSpacing = 0.5.sp)
+    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, top = 24.dp, bottom = 12.dp), color = Color(0xFFE0E0E0), fontWeight = FontWeight.Bold, fontSize = 20.sp, letterSpacing = 0.5.sp)
 }
 
 @Composable

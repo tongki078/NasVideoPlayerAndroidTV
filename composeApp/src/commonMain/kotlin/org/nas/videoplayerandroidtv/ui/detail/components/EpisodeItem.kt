@@ -1,5 +1,6 @@
 package org.nas.videoplayerandroidtv.ui.detail.components
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -10,11 +11,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import org.nas.videoplayerandroidtv.*
@@ -41,10 +44,10 @@ fun EpisodeList(episodes: List<Movie>, metadata: TmdbMetadata?, onPlay: (Movie) 
 fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
     var episodeDetails by remember { mutableStateOf<TmdbEpisode?>(null) }
     var isFocused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (isFocused) 1.03f else 1f, label = "EpisodeItemScale")
 
     LaunchedEffect(movie, seriesMeta) {
         if (seriesMeta?.tmdbId != null && seriesMeta.mediaType == "tv") {
-            // extractSeason()은 Int를 반환하므로 기본값을 Int로 지정합니다.
             val season = movie.title?.extractSeason() ?: 1
             val episodeNum = movie.title?.extractEpisode()?.filter { it.isDigit() }?.toIntOrNull() ?: 1
             episodeDetails = fetchTmdbEpisodeDetails(seriesMeta.tmdbId, season, episodeNum)
@@ -54,13 +57,18 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp, horizontal = 8.dp)
+            .padding(vertical = 4.dp, horizontal = 8.dp)
+            .zIndex(if (isFocused) 10f else 1f)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable(onClick = onPlay)
             .background(if (isFocused) Color.White.copy(alpha = 0.15f) else Color.Transparent, RoundedCornerShape(8.dp))
             .border(
-                width = if (isFocused) 3.dp else 0.dp,
+                width = 2.dp,
                 color = if (isFocused) Color.White else Color.Transparent,
                 shape = RoundedCornerShape(8.dp)
             )

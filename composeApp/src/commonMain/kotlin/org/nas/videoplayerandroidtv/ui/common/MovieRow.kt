@@ -16,8 +16,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -62,7 +60,7 @@ fun MovieRow(
             state = lazyListState,
             contentPadding = PaddingValues(horizontal = 52.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
-            modifier = Modifier.height(220.dp), // 높이를 넉넉히 고정하여 하단 침범 방지
+            modifier = Modifier.height(230.dp), // 높이를 살짝 늘려 확대 공간 확보
             verticalAlignment = Alignment.Top
         ) {
             items(seriesList, key = { it.title + (it.fullPath ?: "") }) { series ->
@@ -75,21 +73,23 @@ fun MovieRow(
 @Composable
 private fun MovieListItem(series: Series, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
+    
+    // 포커스가 없을 때는 반드시 1.0f가 되도록 보장
     val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.15f else 1f,
+        targetValue = if (isFocused) 1.15f else 1.0f,
         animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium),
-        label = "scale"
+        label = "MovieListItemScale"
     )
 
     Column(
         modifier = Modifier
             .width(220.dp)
-            .zIndex(if (isFocused) 10f else 1f)
             .onFocusChanged { isFocused = it.isFocused }
+            .zIndex(if (isFocused) 10f else 1f)
             .focusable()
             .clickable(onClick = onClick)
     ) {
-        // 1. 영상 이미지 카드 (graphicsLayer를 사용하여 레이아웃 흔들림 방지)
+        // 영상 이미지 카드
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -98,7 +98,6 @@ private fun MovieListItem(series: Series, onClick: () -> Unit) {
                     scaleX = scale
                     scaleY = scale
                 }
-                .shadow(elevation = if (isFocused) 15.dp else 0.dp, shape = RoundedCornerShape(4.dp))
                 .clip(RoundedCornerShape(4.dp))
                 .then(
                     if (isFocused) Modifier.border(2.5.dp, Color.White, RoundedCornerShape(4.dp))
@@ -112,8 +111,8 @@ private fun MovieListItem(series: Series, onClick: () -> Unit) {
             )
         }
 
-        // 2. 하단 정보 영역 (고정된 공간을 할애하여 위아래 꿀렁임 방지)
-        Box(modifier = Modifier.fillMaxWidth().height(80.dp)) {
+        // 하단 정보 영역 (위아래 흔들림 방지를 위해 고정된 공간 사용)
+        Box(modifier = Modifier.fillMaxWidth().height(85.dp)) {
             if (isFocused) {
                 Column(
                     modifier = Modifier
