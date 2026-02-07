@@ -1,14 +1,13 @@
 package org.nas.videoplayerandroidtv.ui.detail
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
@@ -16,21 +15,27 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import org.nas.videoplayerandroidtv.*
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.Series
@@ -66,6 +71,7 @@ fun SeriesDetailScreen(
 ) {
     var state by remember { mutableStateOf(SeriesDetailState()) }
     var currentPlaybackTime by remember { mutableStateOf(initialPlaybackPosition) }
+    val overlayFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(series) {
         state = state.copy(isLoading = true)
@@ -86,7 +92,10 @@ fun SeriesDetailScreen(
         }
     }
 
-    // 뒤로가기 처리
+    LaunchedEffect(state.showEpisodeOverlay) {
+        // Focus request logic was moved inside EpisodeOverlay for safety to avoid IllegalStateException.
+    }
+
     BackHandler(enabled = state.showEpisodeOverlay || !state.isLoading) {
         if (state.showEpisodeOverlay) {
             state = state.copy(showEpisodeOverlay = false)
@@ -96,24 +105,27 @@ fun SeriesDetailScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // 1. 배경 포스터
-        val backgroundUrl = state.metadata?.backdropUrl ?: state.metadata?.posterUrl ?: series.posterPath?.let { "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_LARGE$it" }
-        if (backgroundUrl != null) {
-            AsyncImage(
-                model = backgroundUrl,
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize().alpha(0.5f),
-                contentScale = ContentScale.Crop
-            )
-            Box(
-                modifier = Modifier.fillMaxSize().background(
-                    Brush.horizontalGradient(
-                        colors = listOf(Color.Black, Color.Black.copy(alpha = 0.9f), Color.Black.copy(alpha = 0.4f), Color.Transparent),
-                        startX = 0f,
-                        endX = 1800f
+        val backgroundAlpha by animateFloatAsState(if (state.showEpisodeOverlay) 0f else 1f)
+        
+        Box(modifier = Modifier.fillMaxSize().graphicsLayer { alpha = backgroundAlpha }) {
+            val backgroundUrl = state.metadata?.backdropUrl ?: state.metadata?.posterUrl ?: series.posterPath?.let { "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_LARGE$it" }
+            if (backgroundUrl != null) {
+                AsyncImage(
+                    model = backgroundUrl,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize().alpha(0.5f),
+                    contentScale = ContentScale.Crop
+                )
+                Box(
+                    modifier = Modifier.fillMaxSize().background(
+                        Brush.horizontalGradient(
+                            colors = listOf(Color.Black, Color.Black.copy(alpha = 0.9f), Color.Black.copy(alpha = 0.4f), Color.Transparent),
+                            startX = 0f,
+                            endX = 1800f
+                        )
                     )
                 )
-            )
+            }
         }
 
         if (state.isLoading) {
@@ -121,15 +133,19 @@ fun SeriesDetailScreen(
                 CircularProgressIndicator(color = Color.Red)
             }
         } else {
-            Row(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = backgroundAlpha }
+                    .focusProperties { canFocus = !state.showEpisodeOverlay } 
+            ) {
                 Column(
                     modifier = Modifier
                         .fillMaxHeight()
                         .weight(1f)
-                        .padding(start = 60.dp, top = 60.dp, end = 40.dp) // 상단 여백 및 좌측 여백 축소
+                        .padding(start = 60.dp, top = 60.dp, end = 40.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
-                    // 제목 텍스트 크기 축소 (52sp -> 38sp)
                     Text(
                         text = series.title.cleanTitle(includeYear = false),
                         color = Color.White,
@@ -148,7 +164,7 @@ fun SeriesDetailScreen(
                         overflow = TextOverflow.Ellipsis
                     )
                     
-                    Spacer(Modifier.height(12.dp)) // 간격 축소
+                    Spacer(Modifier.height(12.dp))
                     
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         val year = series.year ?: ""
@@ -176,15 +192,14 @@ fun SeriesDetailScreen(
                         }
                     }
 
-                    Spacer(Modifier.height(16.dp)) // 간격 축소
+                    Spacer(Modifier.height(16.dp))
 
-                    // 줄거리 가독성 및 크기 최적화 (18sp -> 14sp)
                     Text(
                         text = state.metadata?.overview ?: "상세 정보를 불러오는 중입니다...",
                         color = Color.White.copy(alpha = 0.8f),
                         fontSize = 14.sp,
                         lineHeight = 22.sp,
-                        maxLines = 5, // 최대 라인 수 제한
+                        maxLines = 3, // 버튼 표시 공간 확보를 위해 5줄에서 3줄로 수정됨
                         overflow = TextOverflow.Ellipsis
                     )
 
@@ -200,45 +215,76 @@ fun SeriesDetailScreen(
                         )
                     }
 
-                    Spacer(Modifier.height(28.dp)) // 간격 축소
+                    Spacer(Modifier.height(28.dp))
 
+                    // 에피소드 정보 계산
+                    val allEpisodes = state.seasons.flatMap { it.episodes }
+                    val firstEpisodeFromDiscovery = allEpisodes.firstOrNull()
+
+                    // 동적 로딩에 실패한 경우, Series 객체에 포함된 기본 에피소드를 최종 재생 에피소드로 간주합니다.
+                    val fallbackEpisodes = series.episodes.sortedByEpisode()
+                    val playableEpisode = firstEpisodeFromDiscovery ?: fallbackEpisodes.firstOrNull()
+                    
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        val firstEpisode = state.seasons.getOrNull(0)?.episodes?.firstOrNull()
-                        
-                        TvButton(
-                            text = "영상 보기",
-                            icon = Icons.Default.PlayArrow,
-                            isPrimary = true,
-                            onClick = {
-                                if (firstEpisode != null) {
-                                    onPlay(firstEpisode, state.seasons[0].episodes, currentPlaybackTime)
+                        // 1. 영상 보기 버튼: 재생할 영상이 하나라도 있으면 무조건 노출
+                        if (playableEpisode != null) {
+                            TvButton(
+                                text = "영상 보기",
+                                icon = Icons.Default.PlayArrow,
+                                isPrimary = true,
+                                enabled = !state.showEpisodeOverlay,
+                                onClick = {
+                                    val episodeToPlay = playableEpisode
+                                    val initialPlaylist = if (firstEpisodeFromDiscovery != null) {
+                                        // 동적으로 발견된 에피소드가 있으면 해당 시즌 플레이리스트를 사용합니다.
+                                        state.seasons.find { it.episodes.contains(episodeToPlay) }?.episodes ?: allEpisodes
+                                    } else {
+                                        // 발견된 에피소드가 없으면 Series 객체의 에피소드 목록을 사용합니다.
+                                        fallbackEpisodes
+                                    }
+                                    onPlay(episodeToPlay, initialPlaylist, currentPlaybackTime)
                                 }
-                            }
-                        )
+                            )
+                        } else {
+                            Text(
+                                text = "재생 가능한 에피소드 파일이 없습니다.",
+                                color = Color.Gray,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(top = 10.dp)
+                            )
+                        }
 
-                        TvButton(
-                            text = "회차 정보",
-                            icon = Icons.AutoMirrored.Filled.List,
-                            isPrimary = false,
-                            onClick = { state = state.copy(showEpisodeOverlay = true) }
-                        )
+                        // 2. 회차 정보 버튼: 에피소드가 2개 이상인 시리즈물일 때만 노출
+                        // 회차 정보는 동적으로 발견된 시즌/에피소드 목록(allEpisodes)을 기반으로 판단합니다.
+                        if (allEpisodes.size > 1) { 
+                            TvButton(
+                                text = "회차 정보",
+                                icon = Icons.AutoMirrored.Filled.List,
+                                isPrimary = false,
+                                enabled = !state.showEpisodeOverlay,
+                                onClick = { state = state.copy(showEpisodeOverlay = true) }
+                            )
+                        }
                     }
                     
                     Spacer(Modifier.height(40.dp))
                 }
 
-                Box(modifier = Modifier.weight(1.2f)) // 우측 빈 공간 비중 조절
+                Box(modifier = Modifier.weight(1.2f))
             }
         }
 
         AnimatedVisibility(
             visible = state.showEpisodeOverlay,
             enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
-            exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it })
+            exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it }),
+            modifier = Modifier.zIndex(10f)
         ) {
             EpisodeOverlay(
                 seriesTitle = series.title,
                 state = state,
+                focusRequester = overlayFocusRequester,
                 onSeasonChange = { state = state.copy(selectedSeasonIndex = it) },
                 onEpisodeClick = { ep ->
                     onPositionUpdate(0L)
@@ -255,26 +301,32 @@ private fun TvButton(
     text: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     isPrimary: Boolean,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val backgroundColor = when {
+        !enabled -> if (isPrimary) Color.White.copy(alpha = 0.1f) else Color.Transparent
         isFocused -> Color.White
         isPrimary -> Color.White.copy(alpha = 0.2f)
         else -> Color.Transparent
     }
-    val contentColor = if (isFocused) Color.Black else Color.White
+    val contentColor = when {
+        !enabled -> Color.Gray
+        isFocused -> Color.Black
+        else -> Color.White
+    }
 
     Surface(
-        onClick = onClick,
+        onClick = if (enabled) onClick else ({}),
         color = backgroundColor,
         shape = RoundedCornerShape(8.dp),
-        border = if (!isFocused && !isPrimary) BorderStroke(1.dp, Color.Gray) else null,
+        border = if (enabled && !isFocused && !isPrimary) BorderStroke(1.dp, Color.Gray) else null,
         modifier = Modifier
             .onFocusChanged { isFocused = it.isFocused }
-            .width(160.dp) // 버튼 가로 소폭 축소
-            .height(48.dp) // 버튼 높이 소폭 축소
-            .focusable()
+            .width(160.dp)
+            .height(48.dp)
+            .focusable(enabled)
     ) {
         Row(
             modifier = Modifier.fillMaxSize(),
@@ -292,13 +344,14 @@ private fun TvButton(
 private fun EpisodeOverlay(
     seriesTitle: String,
     state: SeriesDetailState,
+    focusRequester: FocusRequester,
     onSeasonChange: (Int) -> Unit,
     onEpisodeClick: (Movie) -> Unit,
     onClose: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = Color.Black.copy(alpha = 0.95f)
+        color = Color.Black
     ) {
         Row(modifier = Modifier.fillMaxSize().padding(60.dp)) {
             Column(modifier = Modifier.weight(0.35f)) {
@@ -327,6 +380,15 @@ private fun EpisodeOverlay(
                     items(state.seasons.size) { index ->
                         val isSelected = index == state.selectedSeasonIndex
                         var isFocused by remember { mutableStateOf(false) }
+
+                        // FIX: Move focus request here. When index == 0 is composed, 
+                        // the focusRequester is correctly attached and ready to receive requests.
+                        if (index == 0) {
+                            LaunchedEffect(Unit) {
+                                delay(150) // Delay for TV focus stability
+                                focusRequester.requestFocus()
+                            }
+                        }
                         
                         Surface(
                             onClick = { onSeasonChange(index) },
@@ -335,6 +397,7 @@ private fun EpisodeOverlay(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .onFocusChanged { isFocused = it.isFocused }
+                                .then(if (index == 0) Modifier.focusRequester(focusRequester) else Modifier)
                                 .focusable()
                         ) {
                             Text(

@@ -27,9 +27,13 @@ class VideoRepositoryImpl : VideoRepository {
             val movieDeferred = async { getLatestMovies(20, 0) }
             val dramaDeferred = async { getLatestForeignTV() }
 
-            val homeSections = homeDeferred.await().toMutableList()
+            val rawHomeSections = homeDeferred.await()
             val latestMovies = movieDeferred.await()
             val latestDramas = dramaDeferred.await()
+            
+            val homeSections = rawHomeSections.map { section ->
+                section.copy(items = section.items.map { it.copy(path = it.path) })
+            }.toMutableList()
 
             if (latestMovies.isNotEmpty()) {
                 homeSections.add(HomeSection(
@@ -327,7 +331,11 @@ class VideoRepositoryImpl : VideoRepository {
                 (if (it.posterPath != null) 2 else 0) + (if (!it.genreIds.isNullOrEmpty()) 1 else 0)
             } ?: cats.first()
 
-            val fullPath = if (basePathPrefix.isNotEmpty()) "$basePathPrefix/${bestCat.path}" else bestCat.path
+            val fullPath = if (basePathPrefix.isNotEmpty()) {
+                if (bestCat.path?.startsWith(basePathPrefix) == true) bestCat.path 
+                else "$basePathPrefix/${bestCat.path}"
+            } else bestCat.path
+
             Series(
                 title = title, 
                 episodes = emptyList(), 

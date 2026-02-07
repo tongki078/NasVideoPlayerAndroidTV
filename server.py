@@ -231,7 +231,22 @@ def fetch_metadata_async():
     print(f"🏁 [METADATA] 완료 ({updated_count}개 처리됨)", flush=True)
 
 def build_home_recommend():
-    pool = GLOBAL_CACHE.get("movies", []) + GLOBAL_CACHE.get("animations_all", [])
+    movies = GLOBAL_CACHE.get("movies", [])
+    anims = GLOBAL_CACHE.get("animations_all", [])
+
+    # 각 소스에 맞게 path를 보정하여 합칩니다.
+    pool = []
+    for m in movies:
+        c = m.copy()
+        if c.get('path') and not c['path'].startswith('영화/'):
+            c['path'] = '영화/' + c['path']
+        pool.append(c)
+    for a in anims:
+        c = a.copy()
+        if c.get('path') and not c['path'].startswith('애니메이션/'):
+            c['path'] = '애니메이션/' + c['path']
+        pool.append(c)
+
     if pool:
         popular = random.sample(pool, min(len(pool), 20))
         GLOBAL_CACHE["home_recommend"] = [{"title": "지금 가장 핫한 인기작", "items": process_data(popular, True)}]
