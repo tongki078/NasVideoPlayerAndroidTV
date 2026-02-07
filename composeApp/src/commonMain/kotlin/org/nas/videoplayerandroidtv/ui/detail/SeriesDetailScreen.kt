@@ -13,10 +13,13 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.focus.*
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -31,8 +34,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import org.nas.videoplayerandroidtv.*
 import org.nas.videoplayerandroidtv.domain.model.Movie
@@ -90,18 +93,15 @@ fun SeriesDetailScreen(
         else onBack()
     }
 
-    // 최상위 컨테이너에 focusGroup과 enter 설정을 적용하여 상단 바에서 내려오는 포커스를 가로챔
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
             .focusProperties { 
-                // 외부에서 이 화면 영역으로 포커스가 진입할 때 무조건 재생 버튼으로 보냄
                 enter = { playButtonFocusRequester } 
             }
             .focusGroup()
     ) {
-        // 배경 이미지 (기존 유지)
         Box(modifier = Modifier.fillMaxSize().alpha(if (state.showEpisodeOverlay) 0f else 1f)) {
             val backgroundUrl = state.metadata?.backdropUrl ?: state.metadata?.posterUrl ?: series.posterPath?.let { "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_LARGE$it" }
             if (backgroundUrl != null) {
@@ -219,7 +219,7 @@ private fun TvButton(
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
+    val scale by animateFloatAsState(if (isFocused) 1.05f else 1.0f, label = "ButtonScale")
     val backgroundColor = when {
         isFocused -> Color.White
         isPrimary -> Color.White.copy(alpha = 0.2f)
@@ -231,7 +231,8 @@ private fun TvButton(
         onClick = onClick,
         color = backgroundColor,
         shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(if (isFocused) 2.dp else 1.dp, if (isFocused) Color.White else Color.Gray.copy(alpha = 0.5f)),
+        // 두께를 2.dp로 고정하여 레이아웃 흔들림 방지
+        border = BorderStroke(2.dp, if (isFocused) Color.White else Color.Gray.copy(alpha = 0.3f)),
         modifier = modifier
             .onFocusChanged { isFocused = it.isFocused }
             .graphicsLayer {
@@ -271,7 +272,8 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, focusR
                             onClick = { onSeasonChange(index) }, 
                             color = if (isFocused) Color.White else if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent, 
                             shape = RoundedCornerShape(8.dp), 
-                            border = if (isFocused) BorderStroke(2.dp, Color.White) else null,
+                            // 보더 두께를 2.dp로 고정하고 색상만 변경하여 내부 텍스트 밀림 방지
+                            border = BorderStroke(2.dp, if (isFocused) Color.White else Color.Transparent),
                             modifier = Modifier.fillMaxWidth().onFocusChanged { isFocused = it.isFocused }.then(if (index == 0) Modifier.focusRequester(focusRequester) else Modifier).focusable()
                         ) {
                             Text(text = state.seasons[index].name, color = if (isFocused) Color.Black else Color.White, modifier = Modifier.padding(16.dp), fontSize = 18.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium)

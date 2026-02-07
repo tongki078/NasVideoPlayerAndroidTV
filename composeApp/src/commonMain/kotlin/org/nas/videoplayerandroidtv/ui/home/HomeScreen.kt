@@ -2,6 +2,7 @@ package org.nas.videoplayerandroidtv.ui.home
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,8 +18,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -26,11 +25,9 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.model.Movie
@@ -97,9 +94,9 @@ fun HomeScreen(
                 item { SectionTitle("시청 중인 콘텐츠", horizontalPadding) }
                 item {
                     LazyRow(
-                        contentPadding = PaddingValues(horizontal = horizontalPadding),
+                        contentPadding = PaddingValues(start = horizontalPadding, end = horizontalPadding, top = 10.dp, bottom = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        modifier = Modifier.height(210.dp)
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         items(watchHistory.take(20), key = { "h_${it.id}" }) { history ->
                             HistoryMovieCard(
@@ -119,9 +116,9 @@ fun HomeScreen(
                     item(key = section.title) { SectionTitle(section.title, horizontalPadding) }
                     item {
                         LazyRow(
-                            contentPadding = PaddingValues(horizontal = horizontalPadding),
-                            horizontalArrangement = Arrangement.spacedBy(20.dp),
-                            modifier = Modifier.height(340.dp), 
+                            contentPadding = PaddingValues(start = horizontalPadding, end = horizontalPadding, top = 10.dp, bottom = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.Top
                         ) {
                             items(section.items, key = { "${section.title}_${it.path}_${it.name}" }) { item ->
@@ -169,12 +166,12 @@ private fun HeroSection(
             Text(text = title.cleanTitle(), color = Color.White, style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Black, shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 10f)))
             Spacer(Modifier.height(16.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = { onClick(series) }, colors = ButtonDefaults.buttonColors(containerColor = if (isPlayFocused) Color.White else Color.Red), shape = RoundedCornerShape(8.dp), modifier = Modifier.height(40.dp).onFocusChanged { isPlayFocused = it.isFocused }.scale(if (isPlayFocused) 1.05f else 1f)) {
+                Button(onClick = { onClick(series) }, colors = ButtonDefaults.buttonColors(containerColor = if (isPlayFocused) Color.White else Color.Red), shape = RoundedCornerShape(8.dp), modifier = Modifier.height(40.dp).onFocusChanged { isPlayFocused = it.isFocused }) {
                     Icon(Icons.Default.PlayArrow, null, tint = if (isPlayFocused) Color.Black else Color.White, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp)); Text("시청하기", color = if (isPlayFocused) Color.Black else Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
                 Spacer(Modifier.width(16.dp))
-                Button(onClick = { onClick(series) }, shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = if (isInfoFocused) Color.Gray.copy(alpha = 0.6f) else Color.Gray.copy(alpha = 0.3f)), modifier = Modifier.height(40.dp).onFocusChanged { isInfoFocused = it.isFocused }.scale(if (isInfoFocused) 1.05f else 1f)) {
+                Button(onClick = { onClick(series) }, shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = if (isInfoFocused) Color.Gray.copy(alpha = 0.6f) else Color.Gray.copy(alpha = 0.3f)), modifier = Modifier.height(40.dp).onFocusChanged { isInfoFocused = it.isFocused }) {
                     Icon(Icons.Default.Info, null, tint = Color.White, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp)); Text("상세 정보", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
@@ -187,43 +184,23 @@ private fun HeroSection(
 private fun HomeMovieListItem(category: Category, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     
-    // 너비 애니메이션 재도입 (130dp -> 240dp)
-    val width by animateDpAsState(
-        targetValue = if (isFocused) 240.dp else 130.dp,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessLow),
-        label = "itemWidth"
-    )
-    
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.1f else 1f,
-        label = "itemScale"
-    )
-
     val title = category.name ?: "Unknown"
-    val metadata = tmdbCache[title]
 
     Column(
         modifier = Modifier
-            .width(width) // 물리적 너비 조절
-            .zIndex(if (isFocused) 10f else 1f)
+            .width(140.dp)
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable(onClick = onClick)
     ) {
-        // 이미지 영역: 높이 190dp 고정
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(190.dp)
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                }
-                .shadow(elevation = if (isFocused) 15.dp else 0.dp, shape = RoundedCornerShape(8.dp))
+                .aspectRatio(0.68f)
                 .clip(RoundedCornerShape(8.dp))
-                .then(
-                    if (isFocused) Modifier.border(2.5.dp, Color.White, RoundedCornerShape(8.dp))
-                    else Modifier
+                .border(
+                    BorderStroke(2.dp, if (isFocused) Color.White else Color.Transparent),
+                    RoundedCornerShape(8.dp)
                 )
         ) {
             TmdbAsyncImage(
@@ -232,43 +209,26 @@ private fun HomeMovieListItem(category: Category, onClick: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
             )
-            
-            if (isFocused) {
-                Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f)))))
-                Text(
-                    text = title.cleanTitle(),
-                    color = Color.White,
-                    modifier = Modifier.align(Alignment.BottomStart).padding(12.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
         }
 
-        // 정보 영역 (포커스 시 하단 노출)
-        if (isFocused) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 14.dp, start = 4.dp, end = 4.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val genre = category.genreIds?.take(1)?.mapNotNull { genreMap[it] }?.firstOrNull() ?: "추천"
-                    Text(text = genre, color = Color(0xFF46D369), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    Text(text = "98% 일치", color = Color(0xFF46D369), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = metadata?.overview ?: "지금 바로 감상해보세요.",
-                    color = Color.White.copy(alpha = 0.8f),
-                    fontSize = 11.sp,
-                    maxLines = 3,
-                    lineHeight = 16.sp,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+        Spacer(Modifier.height(8.dp))
+        val infoAlpha by animateFloatAsState(if (isFocused) 1f else 0f)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(40.dp)
+                .graphicsLayer { alpha = infoAlpha }
+        ) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            val genre = category.genreIds?.firstNotNullOfOrNull { genreMap[it] } ?: "추천"
+            Text(text = genre, color = Color(0xFF46D369), fontSize = 10.sp)
         }
     }
 }
@@ -276,22 +236,16 @@ private fun HomeMovieListItem(category: Category, onClick: () -> Unit) {
 @Composable
 private fun HistoryMovieCard(title: String, posterPath: String? = null, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isFocused) 1.1f else 1f, label = "scale")
     
     Box(
         modifier = Modifier
-            .width(130.dp)
+            .width(140.dp)
             .aspectRatio(0.68f)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
             .onFocusChanged { isFocused = it.isFocused }
-            .shadow(elevation = if (isFocused) 10.dp else 0.dp, shape = RoundedCornerShape(8.dp))
             .clip(RoundedCornerShape(8.dp))
-            .then(
-                if (isFocused) Modifier.border(2.dp, Color.White, RoundedCornerShape(8.dp))
-                else Modifier
+            .border(
+                BorderStroke(2.dp, if (isFocused) Color.White else Color.Transparent),
+                RoundedCornerShape(8.dp)
             )
             .focusable()
             .clickable(onClick = onClick)
@@ -299,7 +253,8 @@ private fun HistoryMovieCard(title: String, posterPath: String? = null, onClick:
         TmdbAsyncImage(
             title = title,
             posterPath = posterPath,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
         )
     }
 }
