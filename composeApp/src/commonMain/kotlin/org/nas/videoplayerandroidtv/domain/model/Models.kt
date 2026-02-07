@@ -31,5 +31,9 @@ data class Series(
     val thumbnailUrl: String? = null,
     val fullPath: String? = null,
     val genreIds: List<Int> = emptyList(), // 즉각적인 분류에 사용
-    val posterPath: String? = null         // TMDB 포스터 직접 경로
+    val posterPath: String? = null,        // TMDB 포스터 직접 경로
+    val year: String? = null,              // 개봉/방송 년도
+    val overview: String? = null,          // 줄거리
+    val rating: String? = null,            // 연령 제한 (예: 15+, 19+)
+    val seasonCount: Int? = null           // 시즌 개수
 )
