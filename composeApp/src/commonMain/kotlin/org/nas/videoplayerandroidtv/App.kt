@@ -69,6 +69,10 @@ fun App(driver: SqlDriver) {
     var searchCategory by rememberSaveable { mutableStateOf("전체") }
     var searchResultSeries by remember { mutableStateOf<List<Series>>(emptyList()) }
     var isSearchLoading by remember { mutableStateOf(false) }
+    
+    // 마지막으로 실행된 검색어를 추적하여 중복 실행 방지
+    var lastExecutedQuery by remember { mutableStateOf("") }
+
     var selectedSeries by remember { mutableStateOf<Series?>(null) }
     var selectedMovie by remember { mutableStateOf<Movie?>(null) }
     var moviePlaylist by remember { mutableStateOf<List<Movie>>(emptyList()) }
@@ -114,13 +118,25 @@ fun App(driver: SqlDriver) {
     }
 
     val performSearch: suspend (String, String) -> Unit = { query, category ->
-        if (query.length >= 2) {
+        val trimmedQuery = query.trim()
+        if (trimmedQuery.isNotEmpty()) {
+            println("SEARCH_EXEC: Starting search for '$trimmedQuery' in '$category'")
             isSearchLoading = true
-            val results = repository.searchVideos(query, category)
-            searchResultSeries = results
-            isSearchLoading = false
+            try {
+                val results = repository.searchVideos(trimmedQuery, category)
+                println("SEARCH_EXEC: Found ${results.size} series for '$trimmedQuery'")
+                searchResultSeries = results
+                lastExecutedQuery = trimmedQuery
+            } catch (e: Exception) {
+                println("SEARCH_EXEC: Error searching for '$trimmedQuery': ${e.message}")
+                searchResultSeries = emptyList()
+            } finally {
+                isSearchLoading = false
+            }
         } else {
             searchResultSeries = emptyList()
+            isSearchLoading = false
+            lastExecutedQuery = ""
         }
     }
 
@@ -136,18 +152,24 @@ fun App(driver: SqlDriver) {
         }
     }
 
+    // 타이핑 자동 검색: 최근 검색어 클릭 시 performSearch가 별도로 호출되므로 
+    // lastExecutedQuery와 다를 때만 딜레이 후 실행
     LaunchedEffect(searchQuery, searchCategory) {
-        if (searchQuery.isNotEmpty()) {
+        val trimmed = searchQuery.trim()
+        if (trimmed.isNotEmpty() && trimmed != lastExecutedQuery) {
             delay(500)
-            performSearch(searchQuery, searchCategory)
-        } else {
+            if (trimmed != lastExecutedQuery) {
+                performSearch(trimmed, searchCategory)
+            }
+        } else if (trimmed.isEmpty()) {
             searchResultSeries = emptyList()
+            isSearchLoading = false
+            lastExecutedQuery = ""
         }
     }
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Color.Red, background = Color.Black)) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            // Scaffold 대신 Column을 사용하여 상단 바와 본문을 물리적으로 연결 (포커스 탐색 개선)
             Column(modifier = Modifier.fillMaxSize()) {
                 if (selectedMovie == null) {
                     NetflixTopBar(currentScreen) { 
@@ -186,13 +208,7 @@ fun App(driver: SqlDriver) {
                         currentScreen == Screen.SEARCH -> {
                             SearchScreen(
                                 query = searchQuery, 
-                                onQueryChange = { 
-                                    if (searchQuery == it && it.isNotEmpty()) {
-                                        scope.launch { performSearch(it, searchCategory) }
-                                    } else {
-                                        searchQuery = it 
-                                    }
-                                },
+                                onQueryChange = { searchQuery = it },
                                 selectedCategory = searchCategory, 
                                 onCategoryChange = { searchCategory = it },
                                 recentQueries = recentQueries, 
@@ -200,6 +216,7 @@ fun App(driver: SqlDriver) {
                                 isLoading = isSearchLoading,
                                 onSaveQuery = { 
                                     scope.launch { 
+                                        println("SEARCH_EXEC: Manual trigger for '$it'")
                                         searchHistoryDataSource.insertQuery(it, currentTimeMillis())
                                         performSearch(it, searchCategory)
                                     }

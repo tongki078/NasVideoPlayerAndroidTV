@@ -108,8 +108,15 @@ private val REGEX_HANGUL_ALPHA = Regex("""([가-힣])([a-zA-Z0-9])""")
 private val REGEX_ALPHA_HANGUL = Regex("""([a-zA-Z0-9])([가-힣])""")
 private val REGEX_YEAR = Regex("""\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)""")
 private val REGEX_BRACKETS = Regex("""\[.*?\]|\(.*?\)""")
-private val REGEX_TAGS = Regex("""(?i)[.\s_](?:더빙|자막|무삭제|감독판|확장판|최종화|\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|OVA|OAD|ONA|TV판|극장판|FLAC|xvid|DivX|MKV|MP4|AVI|속편|완결|상|하|1부|2부|파트).*""")
-private val REGEX_SPECIAL_CHARS = Regex("""[._\-::!?【】『』「」"'#@*※]""")
+
+// 불필요한 수식어 (NFC + NFD 대응)
+private val REGEX_JUNK_KEYWORDS = Regex("""(?i)\s*(?:더빙|자막|극장판|더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|최종화|TV판|완결|속편|상|하|1부|2부|파트)\s*""")
+
+// '편' 접미사 (NFC + NFD 대응)
+private val REGEX_PYEON_SUFFIX = Regex("""(?:편|편)(?=[.\s_]|$)""")
+
+private val REGEX_TECHNICAL_TAGS = Regex("""(?i)[.\s_](?:\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI).*""")
+private val REGEX_SPECIAL_CHARS = Regex("""[._\-!?【】『』「」"'#@*※]""")
 private val REGEX_SPACES = Regex("""\s+""")
 private val REGEX_EP_MARKER = Regex("""(?i)[.\s_](?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+)""")
 
@@ -121,10 +128,13 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     
     val yearMatch = REGEX_YEAR.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
+    cleaned = REGEX_YEAR.replace(cleaned, " ")
     
-    cleaned = REGEX_BRACKETS.replace(cleaned, " ")
+    // 수식어 제거
+    cleaned = REGEX_JUNK_KEYWORDS.replace(cleaned, " ")
     cleaned = REGEX_EP_MARKER.replace(cleaned, " ")
-    cleaned = REGEX_TAGS.replace(cleaned, " ")
+    cleaned = REGEX_BRACKETS.replace(cleaned, " ")
+    cleaned = REGEX_TECHNICAL_TAGS.replace(cleaned, "")
     
     if (!keepAfterHyphen && cleaned.contains("-")) {
         val parts = cleaned.split("-")
@@ -134,6 +144,7 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
         }
     }
     
+    cleaned = cleaned.replace(":", " ")
     cleaned = REGEX_SPECIAL_CHARS.replace(cleaned, " ")
     cleaned = REGEX_SPACES.replace(cleaned, " ").trim()
     
@@ -205,18 +216,34 @@ private suspend fun performMultiStepSearch(originalTitle: String, typeHint: Stri
     val year = originalTitle.extractYear()
     val fullCleanQuery = originalTitle.cleanTitle(includeYear = false)
     
+    // 1. 기본 정제된 제목으로 검색
     searchTmdbCore(fullCleanQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
     searchTmdbCore(fullCleanQuery, "ko-KR", typeHint ?: "multi", null, isAnimation).first?.let { return it }
-    searchTmdbCore(fullCleanQuery, null, typeHint ?: "multi", year, isAnimation).first?.let { return it }
 
-    if (fullCleanQuery.contains(" ")) {
-        val words = fullCleanQuery.split(" ")
-        if (words.size >= 2) {
-            val shortQuery = "${words[0]} ${words[1]}"
-            searchTmdbCore(shortQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+    // 2. '편' 접미사 제거 후 검색 (귀멸의 칼날 사례)
+    if (fullCleanQuery.contains("편") || fullCleanQuery.contains("편")) {
+        val noPyeonQuery = REGEX_PYEON_SUFFIX.replace(fullCleanQuery, "").trim()
+        if (noPyeonQuery != fullCleanQuery) {
+            searchTmdbCore(noPyeonQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+            searchTmdbCore(noPyeonQuery, "ko-KR", typeHint ?: "multi", null, isAnimation).first?.let { return it }
         }
     }
 
+    // 3. 단어 단위 유연한 검색 (앞의 단어들 조합)
+    val words = fullCleanQuery.split(" ").filter { it.length >= 2 }
+    if (words.size >= 2) {
+        // 앞의 두 단어 (예: "귀멸의 칼날")
+        val shortQuery = "${words[0]} ${words[1]}"
+        searchTmdbCore(shortQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+        
+        if (words.size >= 3) {
+            // 앞의 세 단어 (예: "귀멸의 칼날 나타구모산")
+            val midQuery = "${words[0]} ${words[1]} ${words[2]}"
+            searchTmdbCore(midQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+        }
+    }
+
+    // 4. 최후의 수단: 연도 없이 원본 텍스트 일부로 시도
     val rawQuery = originalTitle.replace(REGEX_EXT, "").take(25)
     searchTmdbCore(rawQuery, "ko-KR", if (isAnimation) "tv" else "multi", null, isAnimation).first?.let { return it }
 

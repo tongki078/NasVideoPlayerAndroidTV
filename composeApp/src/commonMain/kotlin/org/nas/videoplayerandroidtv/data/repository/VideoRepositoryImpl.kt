@@ -2,6 +2,7 @@ package org.nas.videoplayerandroidtv.data.repository
 
 import io.ktor.client.call.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.ktor.client.plugins.*
 import io.ktor.http.*
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
@@ -10,7 +11,11 @@ import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.cleanTitle
 import kotlinx.coroutines.*
 
-private val REGEX_GROUP_BY_SERIES = Regex("""(?i)[.\s_-]+(?:S\d+E\d+|S\d+|E\d+|EP\d+|\d+화|\d+회|시즌\s*\d+|Season\s*\d+|1기|2기|3기|4기|5기|6기|7기|8기|9기|10기).*""")
+// 시리즈 제목 추출을 위한 정밀 정규식
+private val REGEX_GROUP_BY_SERIES = Regex(
+    """(?i)[\s._-]*(?:s\d{1,2}e\d{1,3}|season\s*\d{1,2}|s\d{1,2}|ep\d{1,3}|e\d{1,3}|\d{1,3}화|\d{1,3}회|\d+기|part\s*\d|극장판|완결|special|extras|ova|720p|1080p|2160p|4k|h264|h265|x264|x265|bluray|web-dl|aac|mp4|mkv|avi|\([^)]*\)|\[[^\]]*\]).*|(?:\s+\d+\s*$)""", 
+    RegexOption.IGNORE_CASE
+)
 private val REGEX_INDEX_FOLDER = Regex("""(?i)^\s*([0-9A-Z가-힣ㄱ-ㅎ]|0Z|0-Z|가-하|[0-9]-[0-9]|[A-Z]-[A-Z]|[가-힣]-[가-힣])\s*$""")
 private val REGEX_YEAR_FOLDER = Regex("""(?i)^\s*(\(\d{4}\)|\d{4})\s*$""") 
 private val REGEX_SEASON_FOLDER = Regex("""(?i)Season\s*\d+|시즌\s*\d+|Part\s*\d+|파트\s*\d+|\d+기""")
@@ -20,10 +25,7 @@ class VideoRepositoryImpl : VideoRepository {
     private val baseUrl = NasApiClient.BASE_URL
 
     override suspend fun getHomeRecommendations(): List<HomeSection> = try {
-        // 서버에서 이미 모든 섹션(인기작, 최신 영화, 시리즈 등)이 통합되어 내려오므로 단일 요청으로 끝냄 (초고속 응답 보장)
-        client.get("$baseUrl/home") { 
-            parameter("lite", "true") 
-        }.body<List<HomeSection>>()
+        client.get("$baseUrl/home") { parameter("lite", "true") }.body<List<HomeSection>>()
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         emptyList()
@@ -63,20 +65,65 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun searchVideos(query: String, category: String): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val results: List<Category> = client.get("$baseUrl/search") {
+            val response = client.get("$baseUrl/search") {
                 parameter("q", query)
-                parameter("lite", "true")
                 if (category != "전체") parameter("category", category)
-            }.body()
-            results.filter { cat -> 
-                val name = cat.name ?: ""
-                !REGEX_INDEX_FOLDER.matches(name) && !REGEX_YEAR_FOLDER.matches(name)
             }
-            .flatMap { it.movies ?: emptyList() }
-            .groupBySeries()
+            
+            val results: List<Category> = response.body()
+            val finalSeriesList = mutableListOf<Series>()
+
+            results.forEach { cat ->
+                val movies = cat.movies ?: emptyList()
+                if (movies.isEmpty()) return@forEach
+                
+                val catName = cat.name ?: ""
+                val isGenericFolder = REGEX_INDEX_FOLDER.matches(catName) || REGEX_YEAR_FOLDER.matches(catName) || catName == "Search Results"
+                
+                if (!isGenericFolder && catName.length >= 2) {
+                    val title = catName.cleanTitle(true).replace(REGEX_GROUP_BY_SERIES, "").trim()
+                    finalSeriesList.add(Series(
+                        title = title,
+                        episodes = movies.distinctBy { it.id }.sortedBy { it.title ?: "" },
+                        fullPath = cat.path,
+                        posterPath = cat.posterPath,
+                        genreIds = cat.genreIds ?: emptyList()
+                    ))
+                } else {
+                    // Movie 리스트에는 posterPath가 없으므로 카테고리의 정보를 전달
+                    finalSeriesList.addAll(movies.groupBySeriesInternal(null, cat.posterPath, cat.genreIds))
+                }
+            }
+
+            finalSeriesList.groupBy { it.title }.map { (title, group) ->
+                val allEpisodes = group.flatMap { it.episodes }.distinctBy { it.id }.sortedBy { it.title ?: "" }
+                val representative = group.maxByOrNull { it.episodes.size }!!
+                representative.copy(title = title, episodes = allEpisodes)
+            }.sortedByDescending { it.episodes.size }
+
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
+        }
+    }
+
+    private fun List<Movie>.groupBySeriesInternal(
+        basePath: String? = null,
+        posterPath: String? = null,
+        genreIds: List<Int>? = emptyList()
+    ): List<Series> {
+        if (this.isEmpty()) return emptyList()
+        return this.groupBy { movie ->
+            (movie.title ?: "").cleanTitle(true).replace(REGEX_GROUP_BY_SERIES, "").trim()
+        }.filterKeys { it.isNotBlank() }.map { (title, episodes) ->
+            val sortedEps = episodes.distinctBy { it.id }.sortedBy { it.title ?: "" }
+            Series(
+                title = title,
+                episodes = sortedEps,
+                fullPath = basePath,
+                posterPath = posterPath,
+                genreIds = genreIds ?: emptyList()
+            )
         }
     }
 
@@ -88,7 +135,7 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getAnimations(): List<Series> = withContext(Dispatchers.Default) {
         try {
             val results: List<Category> = client.get("$baseUrl/animations") { parameter("lite", "true") }.body()
-            results.flatMap { it.movies ?: emptyList() }.groupBySeries()
+            results.flatMap { it.movies ?: emptyList() }.groupBySeriesInternal()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
@@ -139,7 +186,7 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getDramas(): List<Series> = withContext(Dispatchers.Default) {
         try {
             val results: List<Category> = client.get("$baseUrl/dramas") { parameter("lite", "true") }.body()
-            results.flatMap { it.movies ?: emptyList() }.groupBySeries()
+            results.flatMap { it.movies ?: emptyList() }.groupBySeriesInternal()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
@@ -249,7 +296,7 @@ class VideoRepositoryImpl : VideoRepository {
 
     private fun List<Category>.groupCategoriesToSeries(basePathPrefix: String = ""): List<Series> {
         val showGroups = mutableMapOf<String, MutableList<Category>>()
-        val titleCache = mutableMapOf<String, String>() // 정제된 제목 캐싱
+        val titleCache = mutableMapOf<String, String>()
         
         for (cat in this) {
             val path = cat.path ?: continue
@@ -282,7 +329,6 @@ class VideoRepositoryImpl : VideoRepository {
                 showPath = path
             }
             
-            // 제목 정제 비용 최적화
             val groupKey = titleCache.getOrPut(showTitle) {
                 val cleaned = showTitle.cleanTitle(false).replace(REGEX_GROUP_BY_SERIES, "").trim()
                 if (cleaned.isBlank()) showTitle else cleaned
@@ -292,7 +338,6 @@ class VideoRepositoryImpl : VideoRepository {
         }
         
         return showGroups.map { (title, cats) ->
-            // 메타데이터가 가장 풍부한 카테고리 선택
             val bestCat = cats.maxByOrNull { 
                 (if (it.posterPath != null) 2 else 0) + (if (!it.genreIds.isNullOrEmpty()) 1 else 0)
             } ?: cats.first()
@@ -313,16 +358,4 @@ class VideoRepositoryImpl : VideoRepository {
         .filter { !REGEX_INDEX_FOLDER.matches(it.title) && !REGEX_YEAR_FOLDER.matches(it.title) }
         .sortedBy { it.title }
     }
-
-    private fun List<Movie>.groupBySeries(basePath: String? = null): List<Series> = 
-        this.map { it to basePath }.groupBySeriesWithPaths()
-
-    private fun List<Pair<Movie, String?>>.groupBySeriesWithPaths(): List<Series> = 
-        this.groupBy { (movie, _) -> 
-            (movie.title ?: "").cleanTitle(false).replace(REGEX_GROUP_BY_SERIES, " ").trim()
-        }.map { (title, pairs) -> 
-            val episodes = pairs.map { it.first }.distinctBy { it.id }.sortedBy { it.title ?: "" }
-            val representativePath = pairs.firstNotNullOfOrNull { it.second }
-            Series(title = title, episodes = episodes, fullPath = representativePath)
-        }.sortedByDescending { it.episodes.size }
 }
