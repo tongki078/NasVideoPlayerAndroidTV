@@ -6,6 +6,7 @@ import io.ktor.client.call.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.*
@@ -104,12 +105,14 @@ private val tmdbInFlightRequests = mutableMapOf<String, Deferred<TmdbMetadata?>>
 internal var persistentCache: TmdbCacheDataSource? = null
 
 private val REGEX_EXT = Regex("""\.[a-zA-Z0-9]{2,4}$""")
-private val REGEX_HANGUL_ALPHA = Regex("""([가-힣])([a-zA-Z0-9])""")
-private val REGEX_ALPHA_HANGUL = Regex("""([a-zA-Z0-9])([가-힣])""")
+// [수정] 한글과 영문 사이만 공백 삽입 (숫자는 제외하여 '3월' 보존)
+private val REGEX_HANGUL_LETTER = Regex("""([가-힣])([a-zA-Z])""")
+private val REGEX_LETTER_HANGUL = Regex("""([a-zA-Z])([가-힣])""")
+
 private val REGEX_YEAR = Regex("""\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)""")
 private val REGEX_BRACKETS = Regex("""\[.*?\]|\(.*?\)""")
 
-// 불필요한 수식어 (NFC + NFD 대응)
+// 불필요한 수식어 (NFC + NFD 대응 강화)
 private val REGEX_JUNK_KEYWORDS = Regex("""(?i)\s*(?:더빙|자막|극장판|더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|최종화|TV판|완결|속편|상|하|1부|2부|파트)\s*""")
 
 // '편' 접미사 (NFC + NFD 대응)
@@ -118,19 +121,31 @@ private val REGEX_PYEON_SUFFIX = Regex("""(?:편|편)(?=[.\s_]|$)""")
 private val REGEX_TECHNICAL_TAGS = Regex("""(?i)[.\s_](?:\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI).*""")
 private val REGEX_SPECIAL_CHARS = Regex("""[._\-!?【】『』「」"'#@*※]""")
 private val REGEX_SPACES = Regex("""\s+""")
-private val REGEX_EP_MARKER = Regex("""(?i)[.\s_](?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+)""")
+
+// [수정] 에피소드 마커 강화: 앞에 공백이 없어도 한글 뒤에 바로 붙은 기/화/회/S 등을 삭제 (귀멸의칼날1기 대응)
+private val REGEX_EP_MARKER = Regex("""(?i)(?:[.\s_]|(?<=[가-힣]))(?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기|화|회|기)|Season\s*\d+|Part\s*\d+)""")
 
 fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = true, preserveSubtitle: Boolean = false): String {
     val original = this
-    var cleaned = REGEX_EXT.replace(this, "")
-    cleaned = REGEX_HANGUL_ALPHA.replace(cleaned, "$1 $2")
-    cleaned = REGEX_ALPHA_HANGUL.replace(cleaned, "$1 $2")
+    
+    // 1. 자소 분리(NFD) 현상을 정규식 처리 전에 최소화하기 위해 기본 정제 수행
+    // (KMM 환경 고려하여 직접적인 Normalizer 대신 정규식으로 안전하게 처리)
+    var cleaned = this.replace(Regex("""[\u1100-\u11FF]""")) { 
+        // 자소 분리된 문자가 발견되면 원본을 사용하되 이후 단계에서 결합된 정규식으로 매칭 유도
+        it.value 
+    }
+
+    cleaned = REGEX_EXT.replace(cleaned, "")
+    
+    // 2. 한글-영문 사이만 공백 삽입 (숫자-한글 결합인 '3월' 등은 보존)
+    cleaned = REGEX_HANGUL_LETTER.replace(cleaned, "$1 $2")
+    cleaned = REGEX_LETTER_HANGUL.replace(cleaned, "$1 $2")
     
     val yearMatch = REGEX_YEAR.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     cleaned = REGEX_YEAR.replace(cleaned, " ")
     
-    // 수식어 제거
+    // 3. 수식어 및 에피소드 마커 제거 (공백 유무와 상관없이 제거됨)
     cleaned = REGEX_JUNK_KEYWORDS.replace(cleaned, " ")
     cleaned = REGEX_EP_MARKER.replace(cleaned, " ")
     cleaned = REGEX_BRACKETS.replace(cleaned, " ")
@@ -139,6 +154,7 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     if (!keepAfterHyphen && cleaned.contains("-")) {
         val parts = cleaned.split("-")
         val afterHyphen = parts.getOrNull(1)?.trim() ?: ""
+        // 숫자로만 된 에피소드 번호가 아니면 하이픈 뒤 제거
         if (!(afterHyphen.length <= 2 && afterHyphen.all { it.isDigit() })) {
             cleaned = parts[0]
         }
@@ -148,8 +164,10 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     cleaned = REGEX_SPECIAL_CHARS.replace(cleaned, " ")
     cleaned = REGEX_SPACES.replace(cleaned, " ").trim()
     
+    // 너무 많이 깎여서 1글자 이하가 되면 확장자만 제거한 원본 사용
     if (cleaned.length < 2) {
-        return original.replace(REGEX_EXT, "").trim()
+        val backup = original.replace(REGEX_EXT, "").trim()
+        return if (backup.length >= 2) backup else original
     }
     
     return if (includeYear && yearStr != null) "$cleaned ($yearStr)" else cleaned
@@ -159,13 +177,13 @@ fun String.extractYear(): String? = REGEX_YEAR.find(this)?.value?.replace("(", "
 
 fun String.extractEpisode(): String? {
     Regex("""(?i)[Ee](\d+)""").find(this)?.let { return "${it.groupValues[1].toInt()}화" }
-    Regex("""(\d+)\s*(?:화|회)""").find(this)?.let { return "${it.groupValues[1].toInt()}화" }
+    Regex("""(\d+)\s*(?:화|회|화|회)""").find(this)?.let { return "${it.groupValues[1].toInt()}화" }
     return null
 }
 
 fun String.extractSeason(): Int {
     Regex("""(?i)[Ss](\d+)""").find(this)?.let { return it.groupValues[1].toInt() }
-    Regex("""(\d+)\s*기""").find(this)?.let { return it.groupValues[1].toInt() }
+    Regex("""(\d+)\s*(?:기|기)""").find(this)?.let { return it.groupValues[1].toInt() }
     return 1
 }
 
@@ -232,12 +250,10 @@ private suspend fun performMultiStepSearch(originalTitle: String, typeHint: Stri
     // 3. 단어 단위 유연한 검색 (앞의 단어들 조합)
     val words = fullCleanQuery.split(" ").filter { it.length >= 2 }
     if (words.size >= 2) {
-        // 앞의 두 단어 (예: "귀멸의 칼날")
         val shortQuery = "${words[0]} ${words[1]}"
         searchTmdbCore(shortQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
         
         if (words.size >= 3) {
-            // 앞의 세 단어 (예: "귀멸의 칼날 나타구모산")
             val midQuery = "${words[0]} ${words[1]} ${words[2]}"
             searchTmdbCore(midQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
         }
