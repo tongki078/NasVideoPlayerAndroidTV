@@ -105,7 +105,6 @@ private val tmdbInFlightRequests = mutableMapOf<String, Deferred<TmdbMetadata?>>
 internal var persistentCache: TmdbCacheDataSource? = null
 
 private val REGEX_EXT = Regex("""\.[a-zA-Z0-9]{2,4}$""")
-// [수정] 한글과 영문 사이만 공백 삽입 (숫자는 제외하여 '3월' 보존)
 private val REGEX_HANGUL_LETTER = Regex("""([가-힣])([a-zA-Z])""")
 private val REGEX_LETTER_HANGUL = Regex("""([a-zA-Z])([가-힣])""")
 
@@ -122,30 +121,23 @@ private val REGEX_TECHNICAL_TAGS = Regex("""(?i)[.\s_](?:\d{3,4}p|WEB-DL|WEBRip|
 private val REGEX_SPECIAL_CHARS = Regex("""[._\-!?【】『』「」"'#@*※]""")
 private val REGEX_SPACES = Regex("""\s+""")
 
-// [수정] 에피소드 마커 강화: 앞에 공백이 없어도 한글 뒤에 바로 붙은 기/화/회/S 등을 삭제 (귀멸의칼날1기 대응)
+// 에피소드 마커 강화 (귀멸의칼날1기 대응)
 private val REGEX_EP_MARKER = Regex("""(?i)(?:[.\s_]|(?<=[가-힣]))(?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기|화|회|기)|Season\s*\d+|Part\s*\d+)""")
 
 fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = true, preserveSubtitle: Boolean = false): String {
     val original = this
-    
-    // 1. 자소 분리(NFD) 현상을 정규식 처리 전에 최소화하기 위해 기본 정제 수행
-    // (KMM 환경 고려하여 직접적인 Normalizer 대신 정규식으로 안전하게 처리)
-    var cleaned = this.replace(Regex("""[\u1100-\u11FF]""")) { 
-        // 자소 분리된 문자가 발견되면 원본을 사용하되 이후 단계에서 결합된 정규식으로 매칭 유도
-        it.value 
-    }
-
+    var cleaned = this
     cleaned = REGEX_EXT.replace(cleaned, "")
     
-    // 2. 한글-영문 사이만 공백 삽입 (숫자-한글 결합인 '3월' 등은 보존)
-    cleaned = REGEX_HANGUL_LETTER.replace(cleaned, "$1 $2")
-    cleaned = REGEX_LETTER_HANGUL.replace(cleaned, "$1 $2")
-    
+    // 연도 먼저 추출 후 제거 (나중에 검색에 사용하거나 버림)
     val yearMatch = REGEX_YEAR.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     cleaned = REGEX_YEAR.replace(cleaned, " ")
     
-    // 3. 수식어 및 에피소드 마커 제거 (공백 유무와 상관없이 제거됨)
+    cleaned = REGEX_HANGUL_LETTER.replace(cleaned, "$1 $2")
+    cleaned = REGEX_LETTER_HANGUL.replace(cleaned, "$1 $2")
+    
+    // 수식어 및 에피소드 마커 제거
     cleaned = REGEX_JUNK_KEYWORDS.replace(cleaned, " ")
     cleaned = REGEX_EP_MARKER.replace(cleaned, " ")
     cleaned = REGEX_BRACKETS.replace(cleaned, " ")
@@ -154,7 +146,6 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     if (!keepAfterHyphen && cleaned.contains("-")) {
         val parts = cleaned.split("-")
         val afterHyphen = parts.getOrNull(1)?.trim() ?: ""
-        // 숫자로만 된 에피소드 번호가 아니면 하이픈 뒤 제거
         if (!(afterHyphen.length <= 2 && afterHyphen.all { it.isDigit() })) {
             cleaned = parts[0]
         }
@@ -164,7 +155,6 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     cleaned = REGEX_SPECIAL_CHARS.replace(cleaned, " ")
     cleaned = REGEX_SPACES.replace(cleaned, " ").trim()
     
-    // 너무 많이 깎여서 1글자 이하가 되면 확장자만 제거한 원본 사용
     if (cleaned.length < 2) {
         val backup = original.replace(REGEX_EXT, "").trim()
         return if (backup.length >= 2) backup else original
@@ -230,36 +220,43 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimati
     return deferred.await() ?: TmdbMetadata()
 }
 
+/**
+ * '어느 날 공주가 되어 버렸다 (2025)'와 같이 연도가 다른 경우를 위해 
+ * 연도 없는 검색을 최우선적으로 시도하도록 순서를 조정했습니다.
+ */
 private suspend fun performMultiStepSearch(originalTitle: String, typeHint: String?, isAnimation: Boolean): TmdbMetadata? {
     val year = originalTitle.extractYear()
     val fullCleanQuery = originalTitle.cleanTitle(includeYear = false)
     
-    // 1. 기본 정제된 제목으로 검색
-    searchTmdbCore(fullCleanQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+    // 1. [전략 변경] 연도 없이 순수 제목으로만 검색 시도 (가장 성공 확률 높음)
     searchTmdbCore(fullCleanQuery, "ko-KR", typeHint ?: "multi", null, isAnimation).first?.let { return it }
 
-    // 2. '편' 접미사 제거 후 검색 (귀멸의 칼날 사례)
+    // 2. 연도를 포함하여 검색 (동명의 다른 작품이 있을 경우 대비)
+    if (year != null) {
+        searchTmdbCore(fullCleanQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+    }
+
+    // 3. '편' 접미사 제거 후 검색
     if (fullCleanQuery.contains("편") || fullCleanQuery.contains("편")) {
         val noPyeonQuery = REGEX_PYEON_SUFFIX.replace(fullCleanQuery, "").trim()
         if (noPyeonQuery != fullCleanQuery) {
-            searchTmdbCore(noPyeonQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
             searchTmdbCore(noPyeonQuery, "ko-KR", typeHint ?: "multi", null, isAnimation).first?.let { return it }
         }
     }
 
-    // 3. 단어 단위 유연한 검색 (앞의 단어들 조합)
+    // 4. 단어 단위 유연한 검색 (앞부분 핵심 단어)
     val words = fullCleanQuery.split(" ").filter { it.length >= 2 }
     if (words.size >= 2) {
         val shortQuery = "${words[0]} ${words[1]}"
-        searchTmdbCore(shortQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+        searchTmdbCore(shortQuery, "ko-KR", typeHint ?: "multi", null, isAnimation).first?.let { return it }
         
         if (words.size >= 3) {
             val midQuery = "${words[0]} ${words[1]} ${words[2]}"
-            searchTmdbCore(midQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+            searchTmdbCore(midQuery, "ko-KR", typeHint ?: "multi", null, isAnimation).first?.let { return it }
         }
     }
 
-    // 4. 최후의 수단: 연도 없이 원본 텍스트 일부로 시도
+    // 5. 최후의 수단: 원본 텍스트 일부
     val rawQuery = originalTitle.replace(REGEX_EXT, "").take(25)
     searchTmdbCore(rawQuery, "ko-KR", if (isAnimation) "tv" else "multi", null, isAnimation).first?.let { return it }
 
@@ -274,7 +271,11 @@ private suspend fun searchTmdbCore(query: String, language: String?, endpoint: S
             else parameter("api_key", TMDB_API_KEY)
             parameter("query", query)
             if (language != null) parameter("language", language)
-            if (year != null) parameter(if (endpoint == "movie") "year" else "first_air_date_year", year)
+            
+            // multi 검색은 연도 파라미터를 지원하지 않으므로 movie/tv 전용일 때만 적용
+            if (year != null && endpoint != "multi") {
+                parameter(if (endpoint == "movie") "year" else "first_air_date_year", year)
+            }
             parameter("include_adult", "false")
         }.body()
         
