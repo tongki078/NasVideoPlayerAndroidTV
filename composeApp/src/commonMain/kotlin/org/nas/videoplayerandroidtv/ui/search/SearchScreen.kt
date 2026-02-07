@@ -267,11 +267,11 @@ private fun SearchResultsGrid(
         }
     } else {
         LazyVerticalGrid(
-            columns = GridCells.Fixed(3),
+            columns = GridCells.Fixed(4), // 가로 4개로 수정
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(12.dp), // 간격 소폭 조정
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             items(results) { series ->
                 var isFocused by remember { mutableStateOf(false) }
@@ -300,13 +300,13 @@ private fun SearchResultsGrid(
 @Composable
 private fun SearchSkeletonGrid() {
     LazyVerticalGrid(
-        columns = GridCells.Fixed(3),
+        columns = GridCells.Fixed(4), // 로딩 화면도 가로 4개로 수정
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        items(9) {
+        items(12) { // 4열에 맞춰 개수 소폭 조정
             Box(
                 modifier = Modifier
                     .aspectRatio(0.67f)

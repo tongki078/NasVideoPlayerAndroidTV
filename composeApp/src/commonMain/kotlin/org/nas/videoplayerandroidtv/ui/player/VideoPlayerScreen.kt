@@ -97,22 +97,7 @@ fun VideoPlayerScreen(
             exit = fadeOut()
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                var isCloseFocused by remember { mutableStateOf(false) }
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier
-                        .statusBarsPadding()
-                        .padding(16.dp)
-                        .align(Alignment.TopStart)
-                        .onFocusChanged { isCloseFocused = it.isFocused }
-                ) {
-                    Icon(
-                        Icons.Default.Close, 
-                        null, 
-                        tint = if (isCloseFocused) Color.Red else Color.White, 
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
+                // TV 환경에서는 리모컨 뒤로가기 버튼을 주로 사용하므로 상단 닫기 아이콘 제거
 
                 if (nextMovie != null) {
                     var isNextFocused by remember { mutableStateOf(false) }

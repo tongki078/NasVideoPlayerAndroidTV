@@ -121,18 +121,7 @@ fun SeriesDetailScreen(
                 CircularProgressIndicator(color = Color.Red)
             }
         } else {
-            Box(modifier = Modifier.statusBarsPadding().padding(16.dp)) {
-                var isBackFocused by remember { mutableStateOf(false) }
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier
-                        .onFocusChanged { isBackFocused = it.isFocused }
-                        .background(if (isBackFocused) Color.White.copy(alpha = 0.2f) else Color.Transparent, CircleShape)
-                        .border(if (isBackFocused) 2.dp else 0.dp, Color.White, CircleShape)
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
-                }
-            }
+            // TV 환경에서는 리모컨 뒤로가기 버튼을 주로 사용하므로 상단 뒤로가기 아이콘 제거
 
             Row(modifier = Modifier.fillMaxSize()) {
                 Column(
