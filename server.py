@@ -17,7 +17,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "9.5"
+CACHE_VERSION = "9.5" # 재인덱싱 방지를 위해 9.5 유지
 
 # TMDB API KEY (공백 제거)
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZDQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk".strip()
@@ -58,18 +58,11 @@ def nfc(text): return unicodedata.normalize('NFC', text) if text else ""
 def nfd(text): return unicodedata.normalize('NFD', text) if text else ""
 
 REGEX_EXT = re.compile(r'\.[a-zA-Z0-9]{2,4}$')
-REGEX_HANGUL_ALPHA = re.compile(r'([가-힣])([a-zA-Z0-9])')
-REGEX_ALPHA_HANGUL = re.compile(r'([a-zA-Z0-9])([가-힣])')
-REGEX_START_NUM = re.compile(r'^\d+[.\s_-]+')
 REGEX_EP_SUFFIX = re.compile(r'(?i)[.\s_](?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+).*')
 
 def clean_title_complex(title):
     if not title: return ""
     cleaned = REGEX_EXT.sub('', title)
-    cleaned = REGEX_HANGUL_ALPHA.sub(r'\1 \2', cleaned)
-    cleaned = REGEX_ALPHA_HANGUL.sub(r'\1 \2', cleaned)
-    cleaned = REGEX_START_NUM.sub('', cleaned)
-    cleaned = REGEX_EP_SUFFIX.sub('', cleaned)
     return cleaned.strip()
 
 def get_real_path(path):
@@ -99,95 +92,52 @@ def get_tmdb_cache_path(title):
 
 def get_tmdb_info_server(title):
     if not title: return {"failed": True}
-
     cp = get_tmdb_cache_path(title)
-
-    # 1. 기술적 폴더명(시즌 등) 사전 차단 (더 포괄적으로 수정)
-    if re.search(r'(?i)(Season\s*\d+|시즌\s*\d+|Specials|Extra|Bonus|S\d{1,2}|Part\s*\d+)', title):
-        if not os.path.exists(cp):
-            with open(cp, 'w', encoding='utf-8') as f: json.dump({"failed": True, "reason": "ignore_pattern"}, f)
-        return {"failed": True}
-
-    # 2. 로컬 캐시 확인
     if os.path.exists(cp):
         try:
             with open(cp, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 if data:
                     if data.get("failed"):
-                        print(f"  [TMDB-CACHE-SKIP] '{title}' (이미 실패 기록됨 - 요청 건너뜀)", flush=True)
+                        print(f"  [TMDB-CACHE-SKIP] '{title}' (이미 실패 기록됨)", flush=True)
                         return data
-                    print(f"  [TMDB-CACHE-LOAD] '{title}' 정보 로컬 JSON에서 불러옴", flush=True)
+                    print(f"  [TMDB-CACHE-LOAD] '{title}' 정보 로드 완료", flush=True)
                     return data
         except: pass
-
     ct = clean_title_complex(title)
     if not ct or len(ct) < 2: return {"failed": True}
-
     print(f"  [TMDB-API-SEARCH] '{title}' -> 검색어: '{ct}'", flush=True)
     try:
         params = {"query": ct, "language": "ko-KR"}
         headers = {}
-        if TMDB_API_KEY.startswith("eyJ"):
-            headers["Authorization"] = f"Bearer {TMDB_API_KEY}"
-        else:
-            params["api_key"] = TMDB_API_KEY
-
-        search_resp = requests.get(f"{TMDB_BASE_URL}/search/multi", params=params, headers=headers, timeout=5)
-
-        # [중요] 401 Unauthorized 발생 시에도 실패 캐시를 생성하여 무한 요청 방지
-        if search_resp.status_code == 401:
-            print(f"    - [TMDB-AUTH-ERROR] 401 Unauthorized! API 키 오류. (매칭 중단 및 캐시 저장)", flush=True)
-            with open(cp, 'w', encoding='utf-8') as f: json.dump({"failed": True, "reason": "auth_error"}, f)
-            return {"failed": True, "auth_stop": True} # 중단을 알리는 플래그 추가
-
-        search_resp.raise_for_status()
-        search_data = search_resp.json()
-
+        if TMDB_API_KEY.startswith("eyJ"): headers["Authorization"] = f"Bearer {TMDB_API_KEY}"
+        else: params["api_key"] = TMDB_API_KEY
+        resp = requests.get(f"{TMDB_BASE_URL}/search/multi", params=params, headers=headers, timeout=5)
+        if resp.status_code == 401:
+            print(f"    - [TMDB-AUTH-ERROR] 401 Unauthorized!", flush=True)
+            return {"failed": True, "auth_stop": True}
+        data = resp.json()
         info = {"failed": True}
-        if search_data.get('results'):
-            res = [r for r in search_data['results'] if r.get('media_type') in ['movie', 'tv']]
+        if data.get('results'):
+            res = [r for r in data['results'] if r.get('media_type') in ['movie', 'tv']]
             if res:
                 best = res[0]
-                media_type, tmdb_id = best.get('media_type'), best.get('id')
+                m_type, t_id = best.get('media_type'), best.get('id')
                 print(f"    - 매칭 성공: {best.get('name') or best.get('title')}", flush=True)
-
-                detail_params = {"language": "ko-KR", "append_to_response": "content_ratings"}
-                if not TMDB_API_KEY.startswith("eyJ"): detail_params["api_key"] = TMDB_API_KEY
-
-                detail_resp = requests.get(f"{TMDB_BASE_URL}/{media_type}/{tmdb_id}", params=detail_params, headers=headers, timeout=5)
-                detail_data = detail_resp.json()
-
-                year = ""
-                if media_type == 'movie':
-                    rd = detail_data.get('release_date', '')
-                    if rd: year = rd.split('-')[0]
-                else:
-                    fd = detail_data.get('first_air_date', '')
-                    if fd: year = fd.split('-')[0]
-
+                d_resp = requests.get(f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings", headers=headers, timeout=5)
+                d_data = d_resp.json()
+                year = (d_data.get('release_date') or d_data.get('first_air_date') or "").split('-')[0]
                 rating = None
-                if 'content_ratings' in detail_data:
-                    kr = next((r['rating'] for r in detail_data['content_ratings'].get('results', []) if r.get('iso_3166_1') == 'KR'), None)
+                if 'content_ratings' in d_data:
+                    kr = next((r['rating'] for r in d_data['content_ratings'].get('results', []) if r.get('iso_3166_1') == 'KR'), None)
                     if kr: rating = f"{kr}+" if kr.isdigit() else kr
-
-                info = {
-                    "genreIds": [g['id'] for g in detail_data.get('genres', [])],
-                    "posterPath": detail_data.get('poster_path'),
-                    "year": year,
-                    "overview": detail_data.get('overview'),
-                    "rating": rating,
-                    "seasonCount": detail_data.get('number_of_seasons'),
-                    "failed": False
-                }
+                info = {"genreIds": [g['id'] for g in d_data.get('genres', [])], "posterPath": d_data.get('poster_path'), "year": year, "overview": d_data.get('overview'), "rating": rating, "seasonCount": d_data.get('number_of_seasons'), "failed": False}
         else:
-            print(f"    - 결과 없음: {ct} (실패 기록 저장)", flush=True)
-
-        # 성공/실패 여부와 상관없이 무조건 로컬 파일로 저장하여 재요청 방지
+            print(f"    - 결과 없음: {ct}", flush=True)
         with open(cp, 'w', encoding='utf-8') as f: json.dump(info, f, ensure_ascii=False)
         return info
     except Exception as e:
-        print(f"    - [TMDB-API-ERROR] {title}: {str(e)}", flush=True)
+        print(f"    - [TMDB-API-ERROR] {str(e)}", flush=True)
         return {"failed": True}
 
 def attach_tmdb_info(cat):
@@ -196,27 +146,21 @@ def attach_tmdb_info(cat):
         cp = get_tmdb_cache_path(name)
         if os.path.exists(cp):
             try:
-                with open(cp, 'r', encoding='utf-8') as f:
-                    info = json.load(f)
-                    cat.update(info)
+                with open(cp, 'r', encoding='utf-8') as f: cat.update(json.load(f))
             except: pass
     return cat
 
 def fetch_metadata_async():
-    print("🚀 [METADATA] 매칭 시작", flush=True)
+    print("🚀 [METADATA] 매칭 프로세스 시작", flush=True)
     tasks = []
     for k in ["foreigntv", "koreantv", "air", "animations_all", "movies"]:
         for cat in GLOBAL_CACHE.get(k, []):
-            if not cat.get('posterPath') and not cat.get('failed'):
-                tasks.append(cat)
-
+            if not cat.get('posterPath') and not cat.get('failed'): tasks.append(cat)
     if not tasks:
-        print("✅ [METADATA] 신규 항목 없음.", flush=True)
+        print("✅ [METADATA] 신규 매칭 항목 없음.", flush=True)
         return
-
-    print(f"🔍 [METADATA] {len(tasks)}개 검색 예정", flush=True)
+    print(f"🔍 [METADATA] 총 {len(tasks)}개 작업 진행 예정", flush=True)
     updated_count = 0
-    # ThreadPoolExecutor를 사용하되, 개별 호출 시 auth_stop 체크
     for cat in tasks:
         info = get_tmdb_info_server(cat['name'])
         cat.update(info)
@@ -224,34 +168,34 @@ def fetch_metadata_async():
         if info.get("auth_stop"):
             print("🛑 [METADATA] 인증 오류 감지로 인해 전체 작업을 중단합니다.", flush=True)
             break
-
     if updated_count > 0:
         build_home_recommend()
         save_cache()
     print(f"🏁 [METADATA] 완료 ({updated_count}개 처리됨)", flush=True)
 
 def build_home_recommend():
-    movies = GLOBAL_CACHE.get("movies", [])
-    anims = GLOBAL_CACHE.get("animations_all", [])
+    print("🏠 [HOME] 고속 추천 목록 사전 빌드 중...", flush=True)
+    def prep(items, prefix):
+        res = []
+        for it in items:
+            c = it.copy(); c['movies'] = [] # 데이터 경량화
+            if c.get('path') and not c['path'].startswith(prefix): c['path'] = f"{prefix}/{c['path']}"
+            res.append(c)
+        return res
+    movies = prep(GLOBAL_CACHE.get("movies", []), "영화")
+    anims = prep(GLOBAL_CACHE.get("animations_all", []), "애니메이션")
+    ktv = prep(GLOBAL_CACHE.get("koreantv", []), "국내TV")
+    ftv = prep(GLOBAL_CACHE.get("foreigntv", []), "외국TV")
+    all_p = list(movies + anims + ktv + ftv)
+    random.shuffle(all_p); random.shuffle(movies); random.shuffle(anims); random.shuffle(ktv); random.shuffle(ftv)
+    GLOBAL_CACHE["home_recommend"] = [
+        {"title": "지금 가장 핫한 인기작", "items": all_p[:20]},
+        {"title": "방금 올라온 최신 영화", "items": movies[:20]},
+        {"title": "지금 가장 인기 있는 시리즈", "items": (ktv + ftv)[:20]},
+        {"title": "놓치면 아쉬운 추천 애니메이션", "items": anims[:20]}
+    ]
+    print(f"🏠 [HOME] 빌드 완료 (섹션: {len(GLOBAL_CACHE['home_recommend'])}개)", flush=True)
 
-    # 각 소스에 맞게 path를 보정하여 합칩니다.
-    pool = []
-    for m in movies:
-        c = m.copy()
-        if c.get('path') and not c['path'].startswith('영화/'):
-            c['path'] = '영화/' + c['path']
-        pool.append(c)
-    for a in anims:
-        c = a.copy()
-        if c.get('path') and not c['path'].startswith('애니메이션/'):
-            c['path'] = '애니메이션/' + c['path']
-        pool.append(c)
-
-    if pool:
-        popular = random.sample(pool, min(len(pool), 20))
-        GLOBAL_CACHE["home_recommend"] = [{"title": "지금 가장 핫한 인기작", "items": process_data(popular, True)}]
-
-# --- [스캔 로직] ---
 def get_movie_info(fp, base, prefix):
     try: rel = nfc(os.path.relpath(fp, base))
     except: rel = nfc(os.path.basename(fp))
@@ -263,15 +207,12 @@ def scan_recursive(bp, prefix, rb=None):
     exts = ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
     p, rel_base = get_real_path(bp), get_real_path(rb) if rb else get_real_path(bp)
     if not os.path.exists(p): return cats
-
     print(f"📂 [SCAN] {prefix.upper()} 시작: {p}", flush=True)
     all_f = []
     for root, dirs, files in os.walk(p):
-        dirs[:] = [d for d in dirs if not is_excluded(os.path.join(root, d))]
-        if is_excluded(root): continue
-        video_files = [f for f in files if f.lower().endswith(exts)]
-        for f in video_files: all_f.append(os.path.join(root, f))
-
+        dirs[:] = [d for d in dirs if not any(ex in d for ex in EXCLUDE_FOLDERS) and not d.startswith('.')]
+        for f in files:
+            if f.lower().endswith(exts): all_f.append(os.path.join(root, f))
     all_f.sort()
     curr, movies = "", []
     for fp in all_f:
@@ -287,16 +228,12 @@ def scan_recursive(bp, prefix, rb=None):
         cats.append(attach_tmdb_info({"name": nfc(os.path.basename(curr)), "movies": movies, "path": rel_path}))
     return cats
 
-def is_excluded(path):
-    n = os.path.basename(path)
-    return any(ex in n for ex in EXCLUDE_FOLDERS) or n.startswith('.')
-
 def perform_full_scan(reason="필요"):
     print(f"\n🔄 {'='*50}\n🔄 사유: {reason} -> 전체 파일 스캔 시작\n🔄 {'='*50}", flush=True)
-    targets = [("방송중", AIR_DIR, "air"), ("애니메이션", ANI_DIR, "anim_all"), ("영화", MOVIES_ROOT_DIR, "movie"), ("외국TV", FOREIGN_TV_DIR, "ftv"), ("국내TV", KOREAN_TV_DIR, "ktv")]
-    key_map = {"air": "air", "anim_all": "animations_all", "movie": "movies", "ftv": "foreigntv", "ktv": "koreantv"}
-    for label, path, prefix in targets:
-        try: GLOBAL_CACHE[key_map.get(prefix, prefix)] = scan_recursive(path, prefix)
+    t = [("방송중", AIR_DIR, "air"), ("애니메이션", ANI_DIR, "anim_all"), ("영화", MOVIES_ROOT_DIR, "movie"), ("외국TV", FOREIGN_TV_DIR, "ftv"), ("국내TV", KOREAN_TV_DIR, "ktv")]
+    km = {"air": "air", "anim_all": "animations_all", "movie": "movies", "ftv": "foreigntv", "ktv": "koreantv"}
+    for _, p, pr in t:
+        try: GLOBAL_CACHE[km[pr]] = scan_recursive(p, pr)
         except: pass
     build_home_recommend(); save_cache()
     threading.Thread(target=fetch_metadata_async, daemon=True).start()
@@ -330,6 +267,7 @@ def init_server():
         else:
             for k, p, pr in [("foreigntv", FOREIGN_TV_DIR, "ftv"), ("koreantv", KOREAN_TV_DIR, "ktv"), ("air", AIR_DIR, "air"), ("animations_all", ANI_DIR, "anim_all"), ("movies", MOVIES_ROOT_DIR, "movie")]:
                 if not GLOBAL_CACHE.get(k): GLOBAL_CACHE[k] = scan_recursive(p, pr); save_cache()
+            build_home_recommend()
     threading.Thread(target=background_resume, daemon=True).start()
 
 init_server()
@@ -359,12 +297,9 @@ def filter_by_path(pool, keyword):
     return [c for c in pool if target in nfc(c.get('path', '')).replace(" ", "").lower()]
 
 @app.route('/anim_raftel')
-def get_anim_raftel():
-    return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "라프텔"), request.args.get('lite') == 'true'))
+def get_anim_raftel(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "라프텔"), request.args.get('lite') == 'true'))
 @app.route('/anim_series')
-def get_anim_series():
-    return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "시리즈"), request.args.get('lite') == 'true'))
-
+def get_anim_series(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "시리즈"), request.args.get('lite') == 'true'))
 @app.route('/foreigntv')
 def get_foreigntv(): return jsonify(process_data(GLOBAL_CACHE.get("foreigntv", []), request.args.get('lite') == 'true'))
 @app.route('/ftv_us')
@@ -394,16 +329,11 @@ def get_animations_all(): return jsonify(process_data(GLOBAL_CACHE.get("animatio
 @app.route('/movies')
 def get_movies(): return jsonify(process_data(GLOBAL_CACHE.get("movies", []), request.args.get('lite') == 'true'))
 @app.route('/movies_latest')
-def get_movies_latest():
-    return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "최신"), request.args.get('lite') == 'true'))
-
+def get_movies_latest(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "최신"), request.args.get('lite') == 'true'))
 @app.route('/movies_uhd')
-def get_movies_uhd():
-    return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "UHD"), request.args.get('lite') == 'true'))
-
+def get_movies_uhd(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "UHD"), request.args.get('lite') == 'true'))
 @app.route('/movies_title')
-def get_movies_title():
-    return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "제목"), request.args.get('lite') == 'true'))
+def get_movies_title(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "제목"), request.args.get('lite') == 'true'))
 
 @app.route('/search')
 def search_videos():
@@ -428,7 +358,7 @@ def get_list():
     res, movies, exts = [], [], ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
     for entry in sorted(os.listdir(real_path)):
         fe = os.path.join(real_path, entry)
-        if is_excluded(fe): continue
+        if any(ex in entry for ex in EXCLUDE_FOLDERS): continue
         if os.path.isdir(fe): res.append({"name": nfc(entry), "path": nfc(os.path.relpath(fe, base_dir)), "movies": []})
         elif entry.lower().endswith(exts): movies.append(get_movie_info(fe, base_dir, type_code))
     if movies: res.append({"name": nfc(os.path.basename(real_path)), "path": nfc(os.path.relpath(real_path, base_dir)), "movies": movies})

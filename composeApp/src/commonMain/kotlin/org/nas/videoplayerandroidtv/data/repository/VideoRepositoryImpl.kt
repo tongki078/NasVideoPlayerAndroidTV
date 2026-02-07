@@ -19,49 +19,15 @@ class VideoRepositoryImpl : VideoRepository {
     private val client = NasApiClient.client
     private val baseUrl = NasApiClient.BASE_URL
 
-    override suspend fun getHomeRecommendations(): List<HomeSection> = coroutineScope {
-        try {
-            val homeDeferred = async { 
-                client.get("$baseUrl/home") { parameter("lite", "true") }.body<List<HomeSection>>() 
-            }
-            val movieDeferred = async { getLatestMovies(20, 0) }
-            val dramaDeferred = async { getLatestForeignTV() }
-
-            val rawHomeSections = homeDeferred.await()
-            val latestMovies = movieDeferred.await()
-            val latestDramas = dramaDeferred.await()
-            
-            val homeSections = rawHomeSections.map { section ->
-                section.copy(items = section.items.map { it.copy(path = it.path) })
-            }.toMutableList()
-
-            if (latestMovies.isNotEmpty()) {
-                homeSections.add(HomeSection(
-                    title = "방금 올라온 최신 영화",
-                    items = latestMovies.take(20).map { it.toCategory() }
-                ))
-            }
-
-            if (latestDramas.isNotEmpty()) {
-                homeSections.add(HomeSection(
-                    title = "지금 가장 인기 있는 시리즈",
-                    items = latestDramas.take(20).map { it.toCategory() }
-                ))
-            }
-
-            homeSections
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            emptyList()
-        }
+    override suspend fun getHomeRecommendations(): List<HomeSection> = try {
+        // 서버에서 이미 모든 섹션(인기작, 최신 영화, 시리즈 등)이 통합되어 내려오므로 단일 요청으로 끝냄 (초고속 응답 보장)
+        client.get("$baseUrl/home") { 
+            parameter("lite", "true") 
+        }.body<List<HomeSection>>()
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        emptyList()
     }
-
-    private fun Series.toCategory() = Category(
-        name = this.title,
-        path = this.fullPath,
-        posterPath = this.posterPath,
-        genreIds = this.genreIds
-    )
 
     override suspend fun getCategoryList(path: String, limit: Int, offset: Int): List<Category> = try {
         val categories: List<Category> = client.get("$baseUrl/list") {
