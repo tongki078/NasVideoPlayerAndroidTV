@@ -10,7 +10,6 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.json.Json
 
 object NasApiClient {
-    // 사용자님이 사용하시던 기존 IP 주소
     const val BASE_URL = "http://192.168.0.2:5000"
 
     val client = HttpClient {
@@ -20,13 +19,15 @@ object NasApiClient {
                 isLenient = true 
             })
         }
+        // 로그 레벨을 NONE으로 변경하여 대용량 데이터 처리 속도 향상
         install(Logging) {
             logger = Logger.DEFAULT
-            level = LogLevel.INFO
+            level = LogLevel.NONE
         }
         install(HttpTimeout) {
-            requestTimeoutMillis = 10000
+            requestTimeoutMillis = 15000
             connectTimeoutMillis = 10000
+            socketTimeoutMillis = 15000
         }
     }
 }

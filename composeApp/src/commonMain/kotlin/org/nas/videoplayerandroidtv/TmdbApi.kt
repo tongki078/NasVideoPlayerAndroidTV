@@ -25,7 +25,7 @@ const val TMDB_BACKDROP_SIZE = "w780"
 
 private val tmdbClient = HttpClient {
     install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
-    install(HttpTimeout) { requestTimeoutMillis = 8000; connectTimeoutMillis = 4000; socketTimeoutMillis = 8000 }
+    install(HttpTimeout) { requestTimeoutMillis = 15000; connectTimeoutMillis = 10000; socketTimeoutMillis = 15000 }
     defaultRequest { 
         header("User-Agent", "Ktor-Client")
         header("Accept", "application/json")
@@ -98,11 +98,10 @@ data class TmdbRole(val character: String, @SerialName("episode_count") val epis
 
 // 전역 캐시
 internal val tmdbCache = mutableStateMapOf<String, TmdbMetadata>()
-private val tmdbInFlightRequests = mutableMapOf<String, Deferred<TmdbMetadata>>()
+private val tmdbInFlightRequests = mutableMapOf<String, Deferred<TmdbMetadata?>>()
 
 internal var persistentCache: TmdbCacheDataSource? = null
 
-// 정규식 생략 (동일)
 private val REGEX_EXT = Regex("""\.[a-zA-Z0-9]{2,4}$""")
 private val REGEX_HANGUL_ALPHA = Regex("""([가-힣])([a-zA-Z0-9])""")
 private val REGEX_ALPHA_HANGUL = Regex("""([a-zA-Z0-9])([가-힣])""")
@@ -111,32 +110,49 @@ private val REGEX_START_PREFIX = Regex("""^[a-zA-Z]\d+[.\s_-]+""")
 private val REGEX_BRACKET_NUM = Regex("""^\[\d+\]\s*""")
 private val REGEX_YEAR = Regex("""\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)""")
 private val REGEX_BRACKETS = Regex("""\[.*?\]|\(.*?\)""")
-private val REGEX_TAGS = Regex("""(?i)[.\s_](?:더빙|자막|무삭제|\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|OVA|OAD|ONA|TV판|극장판|FLAC|xvid|DivX|MKV|MP4|AVI|속편|1부|2부|파트|완결|상|하).*""")
+private val REGEX_TAGS = Regex("""(?i)[.\s_](?:더빙|자막|무삭제|\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|OVA|OAD|ONA|TV판|극장판|FLAC|xvid|DivX|MKV|MP4|AVI|속편|완결|상|하|1부|2부|파트).*""")
 private val REGEX_SPECIAL_CHARS = Regex("""[._\-::!?【】『』「」"'#@*※]""")
 private val REGEX_SPACES = Regex("""\s+""")
 private val REGEX_EP_SUFFIX = Regex("""(?i)[.\s_](?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+).*""")
 private val REGEX_SUBTITLE_SUFFIX = Regex("""(?i)[.\s_](?:S\d+E\d+|E\d+|\d+\s*(?:화|회)).*""")
 
 fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = true, preserveSubtitle: Boolean = false): String {
+    val original = this
     var cleaned = REGEX_EXT.replace(this, "")
     cleaned = REGEX_HANGUL_ALPHA.replace(cleaned, "$1 $2")
     cleaned = REGEX_ALPHA_HANGUL.replace(cleaned, "$1 $2")
-    cleaned = REGEX_START_NUM.replace(cleaned, "")
-    cleaned = REGEX_START_PREFIX.replace(cleaned, "")
-    cleaned = REGEX_BRACKET_NUM.replace(cleaned, "")
+    
+    // 연도 추출
     val yearMatch = REGEX_YEAR.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     if (yearMatch != null) cleaned = cleaned.replace(yearMatch.value, " ")
-    cleaned = REGEX_BRACKETS.replace(cleaned, " ")
+    
+    // 괄호 내용 제거 전 텍스트만 추출해봄
+    val textOnly = REGEX_BRACKETS.replace(cleaned, "").trim()
+    
+    if (textOnly.length >= 2) {
+        cleaned = REGEX_BRACKETS.replace(cleaned, " ")
+    } else {
+        // 괄호를 지우면 남는게 없으면 괄호 기호만 제거
+        cleaned = cleaned.replace("[", " ").replace("]", " ").replace("(", " ").replace(")", " ")
+    }
+
     if (!keepAfterHyphen) {
         cleaned = if (preserveSubtitle) REGEX_SUBTITLE_SUFFIX.replace(cleaned, "")
         else REGEX_EP_SUFFIX.replace(cleaned, "")
     }
+    
     cleaned = REGEX_TAGS.replace(cleaned, " ")
     cleaned = REGEX_SPECIAL_CHARS.replace(cleaned, " ")
     cleaned = REGEX_SPACES.replace(cleaned, " ").trim()
+    
+    if (cleaned.length < 2) {
+        val fallback = original.replace(REGEX_EXT, "").trim()
+        return if (includeYear && yearStr != null && !fallback.contains(yearStr)) "$fallback ($yearStr)" else fallback
+    }
+    
     if (includeYear && yearStr != null) cleaned = "$cleaned ($yearStr)"
-    return if (cleaned.isBlank()) this else cleaned
+    return cleaned
 }
 
 fun String.extractEpisode(): String? {
@@ -175,32 +191,39 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimati
         return it
     }
 
-    // 3. 네트워크 검색 (타임아웃 강화)
+    // 3. 네트워크 검색
     val deferred = synchronized(tmdbInFlightRequests) {
         tmdbInFlightRequests.getOrPut(cacheKey) {
+            // GlobalScope 대신 CoroutineScope를 넘겨받거나 적절한 Scope 사용 권장되나
+            // 현재 구조상 GlobalScope 유지하되 에러 처리를 개선함
             @OptIn(DelicateCoroutinesApi::class)
             GlobalScope.async(Dispatchers.Default) {
                 val result = try {
-                    withTimeout(5000) { // 강제 5초 타임아웃
-                        val cleanTitle = title.cleanTitle(includeYear = false, preserveSubtitle = true)
-                        performSearchSimple(cleanTitle, typeHint, isAnimation) ?: TmdbMetadata()
+                    withTimeout(15000) { 
+                        val cleanQuery = title.cleanTitle(includeYear = false, preserveSubtitle = true)
+                        performSearchSimple(cleanQuery, typeHint, isAnimation)
                     }
                 } catch (e: Exception) {
-                    TmdbMetadata() // 실패 시 빈 객체 반환하여 무한 로딩 방지
+                    null
                 }
                 
-                withContext(Dispatchers.Main) {
-                    tmdbCache[cacheKey] = result
+                if (result != null && result.posterUrl != null) {
+                    withContext(Dispatchers.Main) {
+                        tmdbCache[cacheKey] = result
+                    }
+                    persistentCache?.saveCache(cacheKey, result)
+                    synchronized(tmdbInFlightRequests) { tmdbInFlightRequests.remove(cacheKey) }
+                    result
+                } else {
+                    // 실패 시 캐시하지 않고 즉시 삭제하여 다음에 재시도 가능하게 함
+                    synchronized(tmdbInFlightRequests) { tmdbInFlightRequests.remove(cacheKey) }
+                    null
                 }
-                persistentCache?.saveCache(cacheKey, result)
-
-                synchronized(tmdbInFlightRequests) { tmdbInFlightRequests.remove(cacheKey) }
-                result
             }
         }
     }
     
-    return deferred.await()
+    return deferred.await() ?: TmdbMetadata()
 }
 
 private suspend fun performSearchSimple(query: String, typeHint: String?, isAnimation: Boolean): TmdbMetadata? {

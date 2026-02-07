@@ -20,6 +20,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,7 +62,7 @@ fun MovieRow(
             state = lazyListState,
             contentPadding = PaddingValues(horizontal = 52.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
-            modifier = Modifier.height(215.dp), // 정보창 포함 높이 최적화 (기존 240dp)
+            modifier = Modifier.height(220.dp), // 높이를 넉넉히 고정하여 하단 침범 방지
             verticalAlignment = Alignment.Top
         ) {
             items(seriesList, key = { it.title + (it.fullPath ?: "") }) { series ->
@@ -84,16 +85,19 @@ private fun MovieListItem(series: Series, onClick: () -> Unit) {
         modifier = Modifier
             .width(220.dp)
             .zIndex(if (isFocused) 10f else 1f)
-            .scale(scale)
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable(onClick = onClick)
     ) {
-        // 1. 영상 이미지 카드
+        // 1. 영상 이미지 카드 (graphicsLayer를 사용하여 레이아웃 흔들림 방지)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(124.dp)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
                 .shadow(elevation = if (isFocused) 15.dp else 0.dp, shape = RoundedCornerShape(4.dp))
                 .clip(RoundedCornerShape(4.dp))
                 .then(
@@ -108,58 +112,50 @@ private fun MovieListItem(series: Series, onClick: () -> Unit) {
             )
         }
 
-        // 2. 하단 정보 영역 (영상 밑에 가로로 배치)
-        AnimatedVisibility(
-            visible = isFocused,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp, start = 2.dp, end = 2.dp)
-            ) {
-                // 첫 번째 줄: 메타데이터 가로 배치
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+        // 2. 하단 정보 영역 (고정된 공간을 할애하여 위아래 꿀렁임 방지)
+        Box(modifier = Modifier.fillMaxWidth().height(80.dp)) {
+            if (isFocused) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 14.dp, start = 2.dp, end = 2.dp)
                 ) {
-                    val genre = series.genreIds.take(1).mapNotNull { genreMap[it] }.firstOrNull() ?: "추천"
-                    Text(
-                        text = genre,
-                        color = Color(0xFF46D369), // 넷플릭스 특유의 초록색 강조
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    
-                    if (series.year != null) {
-                        Text(series.year, color = Color.White, fontSize = 12.sp)
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .border(1.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(2.dp))
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text(series.rating ?: "15+", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        val genre = series.genreIds.take(1).mapNotNull { genreMap[it] }.firstOrNull() ?: "추천"
+                        Text(
+                            text = genre,
+                            color = Color(0xFF46D369),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        
+                        if (series.year != null) {
+                            Text(series.year, color = Color.White, fontSize = 12.sp)
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .border(1.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(2.dp))
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        ) {
+                            Text(series.rating ?: "15+", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
 
-                    if (series.seasonCount != null && series.seasonCount > 0) {
-                        Text("시즌 ${series.seasonCount}개", color = Color.White, fontSize = 12.sp)
-                    }
+                    Spacer(Modifier.height(8.dp))
+
+                    Text(
+                        text = series.overview ?: "${series.title} - 지금 바로 감상해보세요.",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                        maxLines = 2,
+                        lineHeight = 15.sp,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-
-                Spacer(Modifier.height(8.dp))
-
-                // 두 번째 줄: 줄거리 요약
-                Text(
-                    text = series.overview ?: "${series.title} - 지금 바로 감상해보세요.",
-                    color = Color.White.copy(alpha = 0.7f),
-                    fontSize = 11.sp,
-                    maxLines = 2,
-                    lineHeight = 15.sp,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
         }
     }

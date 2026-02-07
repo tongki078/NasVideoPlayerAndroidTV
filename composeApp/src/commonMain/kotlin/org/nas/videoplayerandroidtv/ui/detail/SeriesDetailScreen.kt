@@ -121,25 +121,23 @@ fun SeriesDetailScreen(
                 CircularProgressIndicator(color = Color.Red)
             }
         } else {
-            // TV 환경에서는 리모컨 뒤로가기 버튼을 주로 사용하므로 상단 뒤로가기 아이콘 제거
-
             Row(modifier = Modifier.fillMaxSize()) {
                 Column(
                     modifier = Modifier
                         .fillMaxHeight()
                         .weight(1f)
-                        .padding(start = 80.dp, top = 100.dp, end = 40.dp)
+                        .padding(start = 60.dp, top = 60.dp, end = 40.dp) // 상단 여백 및 좌측 여백 축소
                         .verticalScroll(rememberScrollState())
                 ) {
-                    // 제목 디자인 및 가독성 개선
+                    // 제목 텍스트 크기 축소 (52sp -> 38sp)
                     Text(
                         text = series.title.cleanTitle(includeYear = false),
                         color = Color.White,
                         style = TextStyle(
-                            fontSize = 52.sp,
+                            fontSize = 38.sp,
                             fontWeight = FontWeight.Black,
-                            lineHeight = 62.sp,
-                            letterSpacing = (-1).sp,
+                            lineHeight = 46.sp,
+                            letterSpacing = (-0.5).sp,
                             shadow = Shadow(
                                 color = Color.Black.copy(alpha = 0.8f),
                                 offset = Offset(2f, 2f),
@@ -150,13 +148,13 @@ fun SeriesDetailScreen(
                         overflow = TextOverflow.Ellipsis
                     )
                     
-                    Spacer(Modifier.height(20.dp))
+                    Spacer(Modifier.height(12.dp)) // 간격 축소
                     
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         val year = series.year ?: ""
                         if (year.isNotEmpty()) {
-                            Text(year, color = Color.LightGray, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.width(16.dp))
+                            Text(year, color = Color.LightGray, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.width(12.dp))
                         }
                         val rating = series.rating ?: "15+"
                         Surface(
@@ -166,42 +164,43 @@ fun SeriesDetailScreen(
                             Text(
                                 text = rating,
                                 color = Color.White,
-                                fontSize = 14.sp,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
-                        Spacer(Modifier.width(16.dp))
+                        Spacer(Modifier.width(12.dp))
                         val genres = state.metadata?.genreIds?.take(3)?.mapNotNull { genreMap[it] }?.joinToString(", ")
                         if (!genres.isNullOrEmpty()) {
-                            Text(genres, color = Color.LightGray, fontSize = 18.sp)
+                            Text(genres, color = Color.LightGray, fontSize = 14.sp)
                         }
                     }
 
-                    Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(16.dp)) // 간격 축소
 
+                    // 줄거리 가독성 및 크기 최적화 (18sp -> 14sp)
                     Text(
                         text = state.metadata?.overview ?: "상세 정보를 불러오는 중입니다...",
                         color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 18.sp,
-                        lineHeight = 28.sp,
-                        maxLines = 6,
+                        fontSize = 14.sp,
+                        lineHeight = 22.sp,
+                        maxLines = 5, // 최대 라인 수 제한
                         overflow = TextOverflow.Ellipsis
                     )
 
-                    Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(16.dp))
 
                     if (state.credits.isNotEmpty()) {
                         Text(
                             text = "출연: " + state.credits.take(4).joinToString { it.name },
                             color = Color.Gray,
-                            fontSize = 15.sp,
+                            fontSize = 13.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
 
-                    Spacer(Modifier.height(40.dp))
+                    Spacer(Modifier.height(28.dp)) // 간격 축소
 
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         val firstEpisode = state.seasons.getOrNull(0)?.episodes?.firstOrNull()
@@ -225,10 +224,10 @@ fun SeriesDetailScreen(
                         )
                     }
                     
-                    Spacer(Modifier.height(60.dp))
+                    Spacer(Modifier.height(40.dp))
                 }
 
-                Box(modifier = Modifier.weight(1f))
+                Box(modifier = Modifier.weight(1.2f)) // 우측 빈 공간 비중 조절
             }
         }
 
@@ -273,8 +272,8 @@ private fun TvButton(
         border = if (!isFocused && !isPrimary) BorderStroke(1.dp, Color.Gray) else null,
         modifier = Modifier
             .onFocusChanged { isFocused = it.isFocused }
-            .width(180.dp)
-            .height(56.dp)
+            .width(160.dp) // 버튼 가로 소폭 축소
+            .height(48.dp) // 버튼 높이 소폭 축소
             .focusable()
     ) {
         Row(
@@ -282,9 +281,9 @@ private fun TvButton(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
-            Icon(icon, null, tint = contentColor, modifier = Modifier.size(28.dp))
+            Icon(icon, null, tint = contentColor, modifier = Modifier.size(24.dp))
             Spacer(Modifier.width(8.dp))
-            Text(text, color = contentColor, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text(text, color = contentColor, fontSize = 16.sp, fontWeight = FontWeight.Bold)
         }
     }
 }

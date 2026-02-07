@@ -36,16 +36,21 @@ fun TmdbAsyncImage(
 ) {
     val cacheKey = remember(title, isAnimation) { if (isAnimation) "ani_$title" else title }
     val metadata = tmdbCache[cacheKey]
+    
+    // 메타데이터가 아직 로딩 중인지 여부 (캐시에도 없고, 아직 요청 중일 때)
+    val isFetchingMetadata = remember(metadata, posterPath) { 
+        posterPath == null && metadata == null 
+    }
 
     val finalImageUrl = remember(metadata, posterPath, isLarge) {
         val path = posterPath ?: metadata?.posterUrl?.substringAfterLast("/")
-        if (path != null && path != "null") {
+        if (path != null && path != "null" && path.isNotEmpty()) {
             val size = if (isLarge) TMDB_POSTER_SIZE_LARGE else TMDB_POSTER_SIZE_MEDIUM
             "$TMDB_IMAGE_BASE$size/$path"
         } else null
     }
 
-    if (posterPath == null && metadata == null) {
+    if (isFetchingMetadata) {
         LaunchedEffect(cacheKey) {
             fetchTmdbMetadata(title, typeHint, isAnimation = isAnimation)
         }
@@ -60,8 +65,7 @@ fun TmdbAsyncImage(
     val painterState by painter.state.collectAsState()
     val isSuccess = painterState is AsyncImagePainter.State.Success
     val isError = painterState is AsyncImagePainter.State.Error
-    val isLoading = painterState is AsyncImagePainter.State.Loading
-    val isEmpty = painterState is AsyncImagePainter.State.Empty
+    val isLoadingImage = painterState is AsyncImagePainter.State.Loading
 
     LaunchedEffect(isSuccess) {
         if (isSuccess) onSuccess()
@@ -70,7 +74,7 @@ fun TmdbAsyncImage(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF222222))
+            .background(Color(0xFF1A1A1A)) // 더 어두운 배경으로 로딩 시 이질감 감소
     ) {
         if (isSuccess) {
             Image(
@@ -80,20 +84,28 @@ fun TmdbAsyncImage(
                 contentScale = contentScale
             )
         } else {
-            // 포스터 이미지가 아예 없는 경우이거나, 이미지를 가져오려 했으나 실패한 경우에만 텍스트 노출
-            // 로딩 중일 때는 텍스트를 노출하지 않아 깜빡임을 방지함
-            val shouldShowText = (finalImageUrl == null && !isLoading) || isError
-            
-            if (shouldShowText) {
+            // 아래 조건이 모두 만족될 때만 텍스트를 노출함:
+            // 1. 메타데이터 조회가 끝났는데 이미지 URL이 없을 때 (또는 조회 실패가 확정되었을 때)
+            // 2. 이미지를 불러오다가 에러가 났을 때
+            // 3. 현재 이미지를 로딩 중이 아닐 때
+            val showPlaceholderText = when {
+                isError -> true // 이미지 로드 실패 시
+                isFetchingMetadata -> false // 메타데이터 조회 중에는 절대 안 보여줌
+                isLoadingImage -> false // 이미지 로드 중에는 절대 안 보여줌
+                finalImageUrl == null -> true // 조회가 끝났는데 URL이 없으면 보여줌
+                else -> false
+            }
+
+            if (showPlaceholderText) {
                 Box(
-                    modifier = Modifier.fillMaxSize().padding(8.dp),
+                    modifier = Modifier.fillMaxSize().padding(12.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = title.cleanTitle(false),
-                        color = Color.White.copy(alpha = 0.5f),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Normal,
+                        color = Color.White.copy(alpha = 0.4f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
                         textAlign = TextAlign.Center,
                         maxLines = 3
                     )

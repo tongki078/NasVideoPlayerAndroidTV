@@ -1,7 +1,7 @@
 package org.nas.videoplayerandroidtv.ui.home
 
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,22 +18,35 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.HomeSection
+import org.nas.videoplayerandroidtv.domain.model.Category
 import org.nas.videoplayerandroidtv.data.WatchHistory
 import org.nas.videoplayerandroidtv.*
+
+private val genreMap = mapOf(
+    28 to "액션", 12 to "모험", 16 to "애니", 35 to "코미디", 80 to "범죄",
+    99 to "다큐", 18 to "드라마", 10751 to "가족", 14 to "판타지", 36 to "역사",
+    27 to "공포", 10402 to "음악", 9648 to "미스터리", 10749 to "로맨스", 878 to "SF",
+    10770 to "TV영화", 53 to "스릴러", 10752 to "전쟁", 37 to "서부",
+    10759 to "액션&어드벤처", 10762 to "키즈", 10763 to "뉴스", 10764 to "리얼리티",
+    10765 to "SF&판타지", 10766 to "소프", 10767 to "토크", 10768 to "전쟁&정치"
+)
 
 @Composable
 fun HomeScreen(
@@ -68,7 +81,7 @@ fun HomeScreen(
                         series = Series(
                             title = heroItem.name ?: "",
                             episodes = emptyList(),
-                            fullPath = heroItem.path, // [중요] 상세 화면 로딩을 위한 실제 경로
+                            fullPath = heroItem.path,
                             posterPath = heroItem.posterPath,
                             genreIds = heroItem.genreIds ?: emptyList()
                         ),
@@ -85,10 +98,11 @@ fun HomeScreen(
                 item {
                     LazyRow(
                         contentPadding = PaddingValues(horizontal = horizontalPadding),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier.height(200.dp)
                     ) {
                         items(watchHistory.take(20), key = { "h_${it.id}" }) { history ->
-                            MovieCard(
+                            HistoryMovieCard(
                                 title = history.title, 
                                 posterPath = history.posterPath, 
                                 onClick = { onHistoryClick(history) }
@@ -106,17 +120,18 @@ fun HomeScreen(
                     item {
                         LazyRow(
                             contentPadding = PaddingValues(horizontal = horizontalPadding),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            horizontalArrangement = Arrangement.spacedBy(20.dp),
+                            modifier = Modifier.height(220.dp),
+                            verticalAlignment = Alignment.Top
                         ) {
                             items(section.items, key = { "${section.title}_${it.path}_${it.name}" }) { item ->
-                                MovieCard(
-                                    title = item.name ?: "", 
-                                    posterPath = item.posterPath,
+                                HomeMovieListItem(
+                                    category = item,
                                     onClick = { 
                                         onSeriesClick(Series(
                                             title = item.name ?: "", 
                                             episodes = emptyList(), 
-                                            fullPath = item.path, // [중요] 여기서 path 정보가 빠져있으면 상세화면 리스트가 안 뜸
+                                            fullPath = item.path,
                                             posterPath = item.posterPath,
                                             genreIds = item.genreIds ?: emptyList()
                                         )) 
@@ -169,7 +184,86 @@ private fun HeroSection(
 }
 
 @Composable
-private fun MovieCard(title: String, posterPath: String? = null, onClick: () -> Unit) {
+private fun HomeMovieListItem(category: Category, onClick: () -> Unit) {
+    var isFocused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (isFocused) 1.15f else 1f,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium),
+        label = "scale"
+    )
+
+    val title = category.name ?: "Unknown"
+    val cacheKey = remember(title) { title }
+    val metadata = tmdbCache[cacheKey]
+
+    Column(
+        modifier = Modifier
+            .width(220.dp)
+            .zIndex(if (isFocused) 10f else 1f)
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable()
+            .clickable(onClick = onClick)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(124.dp)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
+                .shadow(elevation = if (isFocused) 15.dp else 0.dp, shape = RoundedCornerShape(4.dp))
+                .clip(RoundedCornerShape(4.dp))
+                .then(
+                    if (isFocused) Modifier.border(2.5.dp, Color.White, RoundedCornerShape(4.dp))
+                    else Modifier
+                )
+        ) {
+            TmdbAsyncImage(
+                title = title, 
+                posterPath = category.posterPath,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        Box(modifier = Modifier.fillMaxWidth().height(80.dp)) {
+            if (isFocused) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 14.dp, start = 2.dp, end = 2.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        val genre = category.genreIds?.take(1)?.mapNotNull { genreMap[it] }?.firstOrNull() ?: "추천"
+                        Text(
+                            text = genre,
+                            color = Color(0xFF46D369),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    Text(
+                        text = metadata?.overview ?: "$title - 지금 바로 감상해보세요.",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                        maxLines = 2,
+                        lineHeight = 15.sp,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryMovieCard(title: String, posterPath: String? = null, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.1f else 1f, label = "scale")
     

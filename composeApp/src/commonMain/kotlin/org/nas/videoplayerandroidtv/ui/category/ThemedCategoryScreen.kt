@@ -68,7 +68,7 @@ fun ThemedCategoryScreen(
         isLoading = true
         try {
             val result = withContext(Dispatchers.Default) {
-                val limit = 1000
+                val limit = 500 // 1000개에서 500개로 축소
                 when {
                     isMovieScreen -> when (selectedMode) {
                         0 -> repository.getMoviesByTitle(limit, 0)
@@ -91,8 +91,6 @@ fun ThemedCategoryScreen(
                 }
             }
 
-            println("📊 [$categoryName - ${modes.getOrNull(selectedMode)}] 서버 응답 개수: ${result.size}")
-            
             val sections = withContext(Dispatchers.Default) {
                 val distinctResult = result.distinctBy { it.fullPath ?: it.title }
                 val sectionsList = mutableListOf<ThemeSection>()
@@ -100,17 +98,16 @@ fun ThemedCategoryScreen(
 
                 val usedPaths = mutableSetOf<String>()
 
-                val newArrivals = distinctResult.take(20)
+                val newArrivals = distinctResult.take(15) // 섹션당 노출 개수도 약간 조정
                 if (newArrivals.isNotEmpty()) {
-                    sectionsList.add(ThemeSection("new_arrival", "방금 업데이트된 따끈따끈한 신작", newArrivals))
+                    sectionsList.add(ThemeSection("new_arrival", "방금 업데이트된 신작", newArrivals))
                     usedPaths.addAll(newArrivals.map { it.fullPath ?: it.title ?: "" })
                 }
 
                 val poolAfterNew = distinctResult.filter { (it.fullPath ?: it.title ?: "") !in usedPaths }
-
-                val todayPicks = poolAfterNew.shuffled().take(20)
+                val todayPicks = poolAfterNew.shuffled().take(15)
                 if (todayPicks.isNotEmpty()) {
-                    sectionsList.add(ThemeSection("today_pick", "실시간 인기 추천 콘텐츠", todayPicks))
+                    sectionsList.add(ThemeSection("today_pick", "실시간 인기 추천", todayPicks))
                     usedPaths.addAll(todayPicks.map { it.fullPath ?: it.title ?: "" })
                 }
 
@@ -135,21 +132,12 @@ fun ThemedCategoryScreen(
                 }
                 
                 if (tA.isNotEmpty()) sectionsList.add(ThemeSection("action", "박진감 넘치는 액션 & 어드벤처", tA))
-                if (tF.isNotEmpty()) sectionsList.add(ThemeSection("fantasy", "상상 그 이상! 판타지 & SF", tF))
-                if (tC.isNotEmpty()) sectionsList.add(ThemeSection("comedy", "유쾌한 즐거움! 코미디 & 라이프", tC))
-                if (tT.isNotEmpty()) sectionsList.add(ThemeSection("thriller", "숨막히는 미스터리 & 스릴러", tT))
-                if (tR.isNotEmpty()) sectionsList.add(ThemeSection("romance", "달콤하고 절절한 로맨스 & 드라마", tR))
-                if (tM.isNotEmpty()) sectionsList.add(ThemeSection("family", "온 가족이 함께 즐기는 콘텐츠", tM))
-                
-                if (tE.isNotEmpty()) {
-                    if (tE.size > 40) {
-                        val half = tE.size / 2
-                        sectionsList.add(ThemeSection("etc_1", "놓치면 아쉬운 추천 리스트", tE.take(half)))
-                        sectionsList.add(ThemeSection("etc_2", "더 많은 볼거리 탐색하기", tE.drop(half)))
-                    } else {
-                        sectionsList.add(ThemeSection("etc", "놓치면 아쉬운 더 많은 작품들", tE))
-                    }
-                }
+                if (tF.isNotEmpty()) sectionsList.add(ThemeSection("fantasy", "판타지 & SF", tF))
+                if (tC.isNotEmpty()) sectionsList.add(ThemeSection("comedy", "코미디 & 라이프", tC))
+                if (tT.isNotEmpty()) sectionsList.add(ThemeSection("thriller", "미스터리 & 스릴러", tT))
+                if (tR.isNotEmpty()) sectionsList.add(ThemeSection("romance", "로맨스 & 드라마", tR))
+                if (tM.isNotEmpty()) sectionsList.add(ThemeSection("family", "가족과 함께", tM))
+                if (tE.isNotEmpty()) sectionsList.add(ThemeSection("etc", "추천 콘텐츠", tE))
                 
                 sectionsList
             }
@@ -164,44 +152,25 @@ fun ThemedCategoryScreen(
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFF0F0F0F))) {
         if (modes.isNotEmpty()) {
             LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 24.dp, bottom = 12.dp, start = 48.dp, end = 48.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 12.dp, start = 48.dp, end = 48.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 items(modes.size) { index ->
-                    CategoryTabItem(
-                        text = modes[index], 
-                        isSelected = selectedMode == index, 
-                        onClick = { onModeChange(index) }
-                    )
+                    CategoryTabItem(text = modes[index], isSelected = selectedMode == index, onClick = { onModeChange(index) })
                 }
             }
         }
 
-        if (isLoading) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp), color = Color.White.copy(alpha = 0.5f), trackColor = Color.Transparent)
-        } else {
-            Spacer(Modifier.height(2.dp))
-        }
+        if (isLoading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp), color = Color.White.copy(alpha = 0.5f), trackColor = Color.Transparent)
 
         Box(modifier = Modifier.fillMaxSize()) {
             if (!isLoading && themedSections.isEmpty()) {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("표시할 영상이 없습니다.", color = Color.Gray)
-                        Spacer(Modifier.height(8.dp))
-                        Text("서버에서 인덱싱이 완료될 때까지 잠시만 기다려 주세요.", color = Color.Gray.copy(alpha = 0.6f), fontSize = 12.sp)
-                    }
+                    Text("영상이 없습니다.", color = Color.Gray)
                 }
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(), 
-                    state = lazyListState, 
-                    contentPadding = PaddingValues(top = 8.dp, bottom = 60.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(top = 8.dp, bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(themedSections, key = { it.id }) { section ->
                         MovieRow(title = section.title, seriesList = section.seriesList, onSeriesClick = onSeriesClick)
                     }
@@ -214,43 +183,11 @@ fun ThemedCategoryScreen(
 @Composable
 private fun CategoryTabItem(text: String, isSelected: Boolean, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
-    
-    // Apple TV 스타일: 포커스 시 흰색 배경, 비포커스 시 투명하거나 어두운 반투명
-    val backgroundColor by animateColorAsState(
-        targetValue = when {
-            isFocused -> Color.White
-            isSelected -> Color.White.copy(alpha = 0.15f)
-            else -> Color.Transparent
-        }
-    )
-    
-    val textColor by animateColorAsState(
-        targetValue = when {
-            isFocused -> Color.Black
-            isSelected -> Color.White
-            else -> Color.Gray
-        }
-    )
+    val backgroundColor by animateColorAsState(targetValue = when { isFocused -> Color.White; isSelected -> Color.White.copy(alpha = 0.15f); else -> Color.Transparent })
+    val textColor by animateColorAsState(targetValue = when { isFocused -> Color.Black; isSelected -> Color.White; else -> Color.Gray })
+    val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
 
-    val scale by animateFloatAsState(if (isFocused) 1.15f else 1.0f)
-
-    Box(
-        modifier = Modifier
-            .scale(scale)
-            .clip(RoundedCornerShape(10.dp))
-            .background(backgroundColor)
-            .onFocusChanged { isFocused = it.isFocused }
-            .focusable()
-            .clickable { onClick() }
-            .padding(horizontal = 24.dp, vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = text, 
-            color = textColor, 
-            fontWeight = if (isFocused) FontWeight.ExtraBold else if (isSelected) FontWeight.Bold else FontWeight.Medium, 
-            fontSize = 16.sp,
-            letterSpacing = if (isFocused) 0.sp else 0.5.sp
-        )
+    Box(modifier = Modifier.scale(scale).clip(RoundedCornerShape(10.dp)).background(backgroundColor).onFocusChanged { isFocused = it.isFocused }.focusable().clickable { onClick() }.padding(horizontal = 20.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
+        Text(text = text, color = textColor, fontWeight = if (isFocused || isSelected) FontWeight.Bold else FontWeight.Medium, fontSize = 15.sp)
     }
 }
