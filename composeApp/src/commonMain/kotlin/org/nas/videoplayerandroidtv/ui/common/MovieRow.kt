@@ -1,10 +1,15 @@
 package org.nas.videoplayerandroidtv.ui.common
 
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -16,7 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -24,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import org.nas.videoplayerandroidtv.domain.model.Series
 
 private val genreMap = mapOf(
@@ -58,10 +64,11 @@ fun MovieRow(
         
         LazyRow(
             state = lazyListState,
-            contentPadding = PaddingValues(start = 52.dp, end = 52.dp, top = 10.dp, bottom = 20.dp),
+            // 확장될 때 위아래가 잘리지 않도록 여백 대폭 확보
+            contentPadding = PaddingValues(start = 52.dp, end = 52.dp, top = 50.dp, bottom = 70.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top
+            verticalAlignment = Alignment.CenterVertically
         ) {
             items(seriesList, key = { it.title + (it.fullPath ?: "") }) { series ->
                 MovieListItem(series = series, onClick = { onSeriesClick(series) })
@@ -72,56 +79,79 @@ fun MovieRow(
 
 @Composable
 private fun MovieListItem(series: Series, onClick: () -> Unit) {
-    var isFocused by remember { mutableStateOf(false) }
-    
-    Column(
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    // 넷플릭스 스타일: 압도적인 16:9 확장 (400dp x 225dp)
+    val scale by animateFloatAsState(if (isFocused) 1.15f else 1.0f)
+    val width by animateDpAsState(if (isFocused) 400.dp else 140.dp) // 대폭 확장
+    val height by animateDpAsState(if (isFocused) 225.dp else 205.dp) // 높이도 오히려 키움
+
+    Box(
         modifier = Modifier
-            .width(140.dp) // 세로형 카드 너비로 고정
-            .onFocusChanged { isFocused = it.isFocused }
-            .focusable()
-            .clickable(onClick = onClick)
+            .width(140.dp)
+            .height(205.dp),
+        contentAlignment = Alignment.Center
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(0.68f) // 세로형 포스터 비율
-                .clip(RoundedCornerShape(8.dp))
+                .zIndex(if (isFocused) 100f else 1f)
+                .width(width)
+                .height(height)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    // 위로 툭 튀어나오게 하여 다른 행을 침범하더라도 확실히 부각
+                    translationY = if (isFocused) (-20).dp.toPx() else 0f
+                }
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0xFF1A1A1A))
                 .border(
-                    BorderStroke(2.dp, if (isFocused) Color.White else Color.Transparent),
-                    RoundedCornerShape(8.dp)
+                    BorderStroke(
+                        width = if (isFocused) 4.dp else 0.dp,
+                        color = if (isFocused) Color.White else Color.Transparent
+                    ),
+                    RoundedCornerShape(12.dp)
                 )
+                .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+                .focusable(interactionSource = interactionSource)
         ) {
-            TmdbAsyncImage(
-                title = series.title, 
-                posterPath = series.posterPath,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
-        }
-
-        val infoAlpha by animateFloatAsState(if (isFocused) 1f else 0f)
-        Spacer(Modifier.height(8.dp))
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(44.dp) // 세로형에 맞춰 정보 영역 높이 조정
-                .graphicsLayer { alpha = infoAlpha }
-        ) {
-            Text(
-                text = series.title,
-                color = Color.White,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            val genre = series.genreIds.firstNotNullOfOrNull { genreMap[it] } ?: "추천"
-            Text(
-                text = genre,
-                color = Color(0xFF46D369),
-                fontSize = 10.sp,
-                maxLines = 1
-            )
+            Box(modifier = Modifier.fillMaxSize()) {
+                TmdbAsyncImage(
+                    title = series.title,
+                    posterPath = series.posterPath,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                
+                if (isFocused) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.95f)),
+                                    startY = 60f
+                                )
+                            )
+                            .padding(16.dp),
+                        contentAlignment = Alignment.BottomStart
+                    ) {
+                        Column {
+                            Text(
+                                text = series.title,
+                                color = Color.White,
+                                fontSize = 18.sp, // 큼직하게
+                                fontWeight = FontWeight.Black,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            val genre = series.genreIds.firstNotNullOfOrNull { genreMap[it] } ?: "추천 콘텐츠"
+                            Text(text = genre, color = Color(0xFF46D369), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
         }
     }
 }

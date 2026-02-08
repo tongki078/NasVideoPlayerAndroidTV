@@ -24,8 +24,8 @@ fun MovieCard(series: Series, onClick: () -> Unit) {
     
     Box(
         modifier = Modifier
-            .width(140.dp) // 세로형 너비
-            .aspectRatio(0.68f) // 세로형 포스터 비율
+            .width(140.dp)
+            .aspectRatio(0.68f)
             .onFocusChanged { isFocused = it.isFocused }
             .clip(RoundedCornerShape(8.dp))
             .border(

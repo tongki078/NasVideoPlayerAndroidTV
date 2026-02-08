@@ -7,6 +7,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import coil3.ImageLoader
 import coil3.network.ktor2.KtorNetworkFetcherFactory
 import coil3.request.crossfade
@@ -70,7 +71,6 @@ fun App(driver: SqlDriver) {
     var searchResultSeries by remember { mutableStateOf<List<Series>>(emptyList()) }
     var isSearchLoading by remember { mutableStateOf(false) }
     
-    // 마지막으로 실행된 검색어를 추적하여 중복 실행 방지
     var lastExecutedQuery by remember { mutableStateOf("") }
 
     var selectedSeries by remember { mutableStateOf<Series?>(null) }
@@ -120,15 +120,12 @@ fun App(driver: SqlDriver) {
     val performSearch: suspend (String, String) -> Unit = { query, category ->
         val trimmedQuery = query.trim()
         if (trimmedQuery.isNotEmpty()) {
-            println("SEARCH_EXEC: Starting search for '$trimmedQuery' in '$category'")
             isSearchLoading = true
             try {
                 val results = repository.searchVideos(trimmedQuery, category)
-                println("SEARCH_EXEC: Found ${results.size} series for '$trimmedQuery'")
                 searchResultSeries = results
                 lastExecutedQuery = trimmedQuery
             } catch (e: Exception) {
-                println("SEARCH_EXEC: Error searching for '$trimmedQuery': ${e.message}")
                 searchResultSeries = emptyList()
             } finally {
                 isSearchLoading = false
@@ -152,8 +149,6 @@ fun App(driver: SqlDriver) {
         }
     }
 
-    // 타이핑 자동 검색: 최근 검색어 클릭 시 performSearch가 별도로 호출되므로 
-    // lastExecutedQuery와 다를 때만 딜레이 후 실행
     LaunchedEffect(searchQuery, searchCategory) {
         val trimmed = searchQuery.trim()
         if (trimmed.isNotEmpty() && trimmed != lastExecutedQuery) {
@@ -216,7 +211,6 @@ fun App(driver: SqlDriver) {
                                 isLoading = isSearchLoading,
                                 onSaveQuery = { 
                                     scope.launch { 
-                                        println("SEARCH_EXEC: Manual trigger for '$it'")
                                         searchHistoryDataSource.insertQuery(it, currentTimeMillis())
                                         performSearch(it, searchCategory)
                                     }
@@ -229,14 +223,13 @@ fun App(driver: SqlDriver) {
                             HomeScreen(
                                 watchHistory = watchHistory, 
                                 homeSections = homeSections,
-                                isLoading = isHomeLoading, 
+                                isLoading = isHomeLoading,
                                 lazyListState = homeLazyListState,
                                 onSeriesClick = { selectedSeries = it }, 
                                 onPlayClick = { movie ->
                                     selectedMovie = movie
                                     moviePlaylist = listOf(movie)
                                     lastPlaybackPosition = 0L
-                                    saveWatchHistory(movie, null)
                                 },
                                 onHistoryClick = { history ->
                                     selectedMovie = Movie(
