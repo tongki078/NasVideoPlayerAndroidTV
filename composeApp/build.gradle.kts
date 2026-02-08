@@ -28,7 +28,6 @@ kotlin {
             isStatic = true
             export(libs.androidx.lifecycle.viewmodelCompose)
             export(libs.androidx.lifecycle.runtimeCompose)
-            // Link system sqlite3 and zlib
             linkerOpts("-lsqlite3", "-lz")
         }
     }
@@ -48,7 +47,7 @@ kotlin {
             implementation(libs.androidx.media3.hls)
             implementation(libs.sqldelight.android)
             
-            // TV UI dependencies stay in androidMain
+            // TV UI dependencies must be here in androidMain
             implementation(libs.androidx.tv.foundation)
             implementation(libs.androidx.tv.material)
         }
@@ -98,7 +97,7 @@ android {
     defaultConfig {
         applicationId = "org.nas.videoplayerandroidtv"
         minSdk = 24
-        targetSdk = 34 // 안드로이드 14 타겟 (Shield TV 11과 호환됨)
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0"
         
@@ -107,13 +106,11 @@ android {
         }
     }
 
-    // 릴리스 빌드 시 Lint 오류로 인한 중단 방지
     lint {
         abortOnError = false
         checkReleaseBuilds = false
     }
 
-    // 모든 아키텍처를 포함하는 범용 APK(Universal APK) 생성 설정
     splits {
         abi {
             isEnable = true
@@ -139,7 +136,6 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = false
-            // 테스트를 위해 릴리스 빌드에도 디버그 서명 적용
             signingConfig = signingConfigs.getByName("debug")
         }
     }
