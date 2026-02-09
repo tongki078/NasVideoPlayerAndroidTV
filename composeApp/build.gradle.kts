@@ -92,7 +92,7 @@ sqldelight {
 
 android {
     namespace = "org.nas.videoplayerandroidtv"
-    compileSdk = 34 
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "org.nas.videoplayerandroidtv"

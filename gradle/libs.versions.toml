@@ -20,7 +20,7 @@ androidx-room = "2.7.0-alpha11"
 sqlite = "2.5.0-alpha11"
 ksp = "1.9.24-1.0.20"
 okio = "3.9.1"
-androidx-tv-foundation = "1.0.0-alpha11"
+androidx-tv-foundation = "1.0.0-alpha12"
 androidx-tv-material = "1.0.0"
 
 [libraries]

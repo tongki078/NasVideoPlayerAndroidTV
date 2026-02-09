@@ -1,6 +1,7 @@
 package org.nas.videoplayerandroidtv
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -26,9 +27,9 @@ import org.nas.videoplayerandroidtv.ui.category.ThemedCategoryScreen
 import org.nas.videoplayerandroidtv.data.*
 import org.nas.videoplayerandroidtv.db.AppDatabase
 import app.cash.sqldelight.db.SqlDriver
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.tv.foundation.lazy.list.rememberTvLazyListState
+import androidx.tv.foundation.ExperimentalTvFoundationApi
 
+@OptIn(ExperimentalTvFoundationApi::class)
 @Composable
 fun App(driver: SqlDriver) {
     val repository: VideoRepository = remember { VideoRepositoryImpl() }
@@ -82,8 +83,8 @@ fun App(driver: SqlDriver) {
     var homeSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
     var isHomeLoading by remember { mutableStateOf(false) } 
     
-    // 구조적 개편: HomeScreen 전용 TvLazyListState
-    val homeTvLazyListState = rememberTvLazyListState()
+    // alpha12 대응: 표준 rememberLazyListState 사용
+    val homeTvLazyListState = rememberLazyListState()
     val themedCategoryLazyListState = rememberLazyListState()
 
     var selectedAirMode by rememberSaveable { mutableIntStateOf(0) }
@@ -225,7 +226,7 @@ fun App(driver: SqlDriver) {
                                 watchHistory = watchHistory, 
                                 homeSections = homeSections,
                                 isLoading = isHomeLoading,
-                                tvLazyListState = homeTvLazyListState, // TV 전용 State 전달
+                                lazyListState = homeTvLazyListState,
                                 onSeriesClick = { selectedSeries = it }, 
                                 onPlayClick = { movie ->
                                     selectedMovie = movie
