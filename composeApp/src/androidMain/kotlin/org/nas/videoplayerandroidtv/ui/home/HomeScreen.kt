@@ -30,7 +30,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 import org.nas.videoplayerandroidtv.domain.model.Series
@@ -59,19 +58,31 @@ fun HomeScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFF0F0F0F))) {
+        if (isLoading && homeSections.isEmpty() && watchHistory.isEmpty()) {
+            CircularProgressIndicator(
+                modifier = Modifier.align(Alignment.Center),
+                color = Color.Red
+            )
+        }
+
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = lazyListState,
-            contentPadding = PaddingValues(bottom = 100.dp)
+            contentPadding = PaddingValues(bottom = 60.dp)
         ) {
             item(key = "hero_section") {
                 if (heroItem != null) {
                     HeroSection(
                         series = Series(title = heroItem.name ?: "", episodes = emptyList(), fullPath = heroItem.path, posterPath = heroItem.posterPath, genreIds = heroItem.genreIds ?: emptyList()),
-                        onClick = onSeriesClick,
+                        onWatchClick = {
+                            onSeriesClick(Series(title = heroItem.name ?: "", episodes = emptyList(), fullPath = heroItem.path, posterPath = heroItem.posterPath, genreIds = heroItem.genreIds ?: emptyList()))
+                        },
+                        onInfoClick = {
+                            onSeriesClick(Series(title = heroItem.name ?: "", episodes = emptyList(), fullPath = heroItem.path, posterPath = heroItem.posterPath, genreIds = heroItem.genreIds ?: emptyList()))
+                        },
                         horizontalPadding = standardMargin
                     )
-                } else {
+                } else if (!isLoading) {
                     SkeletonHero()
                 }
             }
@@ -81,7 +92,7 @@ fun HomeScreen(
                     val rowKey = "watch_history"
                     val historyRowState = rowStates.getOrPut(rowKey) { LazyListState() }
 
-                    Column(modifier = Modifier.fillMaxWidth().padding(top = 24.dp)) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { // 여백 대폭 축소
                         SectionTitle("시청 중인 콘텐츠", standardMargin)
                         
                         NetflixTvPivotRow(
@@ -110,7 +121,7 @@ fun HomeScreen(
                 val rowKey = "row_${section.title}"
                 val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
 
-                Column(modifier = Modifier.fillMaxWidth().padding(top = 24.dp)) {
+                Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { // 테마 간 여백 대폭 축소
                     SectionTitle(section.title, standardMargin)
                     
                     NetflixTvPivotRow(
@@ -119,7 +130,7 @@ fun HomeScreen(
                         marginValue = standardMargin,
                         rowKey = rowKey,
                         rowFocusIndices = rowFocusIndices,
-                        keySelector = { "item_${it.path ?: it.name ?: ""}" }
+                        keySelector = { item -> "item_${item.path ?: item.name ?: item.hashCode()}" }
                     ) { item, index, rowState, focusRequester, marginPx ->
                         NetflixPivotItem(
                             title = item.name ?: "", 
@@ -157,7 +168,7 @@ private fun <T> NetflixTvPivotRow(
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .height(320.dp)
+            .height(310.dp) // 세로 포스터 비율에 맞춰 높이 증가
             .focusProperties {
                 enter = { 
                     val lastIdx = rowFocusIndices[rowKey] ?: 0
@@ -165,8 +176,8 @@ private fun <T> NetflixTvPivotRow(
                 }
             },
         state = state,
-        contentPadding = PaddingValues(start = marginValue, end = marginValue, bottom = 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(marginValue), 
+        contentPadding = PaddingValues(start = marginValue, end = marginValue, bottom = 4.dp), 
+        horizontalArrangement = Arrangement.spacedBy(12.dp), 
         verticalAlignment = Alignment.Top
     ) {
         itemsIndexed(items, key = { _, item -> keySelector(item) }) { index, item ->
@@ -192,7 +203,6 @@ private fun NetflixPivotItem(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val coroutineScope = rememberCoroutineScope()
     
     LaunchedEffect(isFocused) {
         if (isFocused) {
@@ -201,8 +211,10 @@ private fun NetflixPivotItem(
         }
     }
 
-    val fixedWidth = 180.dp
-    val totalHeight = 300.dp 
+    // 표준 세로 비율(2:3) 적용
+    val fixedWidth = 150.dp
+    val posterHeight = 225.dp
+    val totalHeight = 290.dp 
 
     Box(
         modifier = Modifier
@@ -215,14 +227,14 @@ private fun NetflixPivotItem(
                 .fillMaxSize()
                 .focusRequester(focusRequester)
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color.Transparent)
+                .background(Color.Transparent) // 배경색 완전 제거
                 .focusable(interactionSource = interactionSource)
                 .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(210.dp)
+                    .height(posterHeight)
                     .clip(RoundedCornerShape(8.dp))
                     .border(
                         width = if (isFocused) 3.dp else 0.dp,
@@ -236,52 +248,30 @@ private fun NetflixPivotItem(
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
-                
-                if (isFocused) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)),
-                                    startY = 300f
-                                )
-                            )
-                    )
-                    Text(
-                        text = title,
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(12.dp),
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
             }
             
+            // 선택되었을 때만 제목과 정보를 노출하도록 수정
             if (isFocused) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .padding(horizontal = 4.dp, vertical = 6.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = rating, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        Spacer(Modifier.width(6.dp))
-                        Box(modifier = Modifier.border(BorderStroke(1.dp, Color.Gray.copy(alpha = 0.5f))).padding(horizontal = 4.dp)) {
-                            Text(text = "15+", color = Color.White, fontSize = 10.sp)
-                        }
-                    }
-                    Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "상세 정보 보기",
-                        color = Color.LightGray,
-                        fontSize = 11.sp,
-                        maxLines = 1
+                        text = title.cleanTitle(),
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
+
+                    Spacer(Modifier.height(2.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = rating, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Spacer(Modifier.width(6.dp))
+                        Text(text = "2024", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                    }
                 }
             }
         }
@@ -289,37 +279,42 @@ private fun NetflixPivotItem(
 }
 
 @Composable
-private fun HeroSection(series: Series, onClick: (Series) -> Unit, horizontalPadding: androidx.compose.ui.unit.Dp) {
+private fun HeroSection(
+    series: Series, 
+    onWatchClick: () -> Unit, 
+    onInfoClick: () -> Unit,
+    horizontalPadding: androidx.compose.ui.unit.Dp
+) {
     var isPlayFocused by remember { mutableStateOf(false) }
     var isInfoFocused by remember { mutableStateOf(false) }
     val title = series.title
-    Box(modifier = Modifier.fillMaxWidth().height(340.dp).background(Color.Black)) {
+    Box(modifier = Modifier.fillMaxWidth().height(320.dp).background(Color.Black)) {
         TmdbAsyncImage(title = title, posterPath = series.posterPath, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, isLarge = true)
         Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(colors = listOf(Color.Transparent, Color(0xFF0F0F0F).copy(alpha = 0.5f), Color(0xFF0F0F0F)))))
-        Column(modifier = Modifier.align(Alignment.BottomStart).padding(start = horizontalPadding, bottom = 32.dp).fillMaxWidth(0.6f)) {
+        Column(modifier = Modifier.align(Alignment.BottomStart).padding(start = horizontalPadding, bottom = 24.dp).fillMaxWidth(0.6f)) {
             Text(text = title.cleanTitle(), color = Color.White, style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Black, shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 10f)))
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Button(
-                    onClick = { onClick(series) }, 
+                    onClick = onWatchClick, 
                     colors = ButtonDefaults.buttonColors(containerColor = if (isPlayFocused) Color.White else Color.Red), 
                     shape = RoundedCornerShape(8.dp), 
-                    modifier = Modifier.height(40.dp).onFocusChanged { isPlayFocused = it.isFocused }
+                    modifier = Modifier.height(36.dp).onFocusChanged { isPlayFocused = it.isFocused }
                 ) {
-                    Icon(Icons.Default.PlayArrow, null, tint = if (isPlayFocused) Color.Black else Color.White, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("시청하기", color = if (isPlayFocused) Color.Black else Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Icon(Icons.Default.PlayArrow, null, tint = if (isPlayFocused) Color.Black else Color.White, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("시청하기", color = if (isPlayFocused) Color.Black else Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
-                Spacer(Modifier.width(16.dp))
+                Spacer(Modifier.width(12.dp))
                 Button(
-                    onClick = { onClick(series) }, 
+                    onClick = onInfoClick, 
                     shape = RoundedCornerShape(8.dp), 
                     colors = ButtonDefaults.buttonColors(containerColor = if (isInfoFocused) Color.Gray.copy(alpha = 0.6f) else Color.Gray.copy(alpha = 0.3f)), 
-                    modifier = Modifier.height(40.dp).onFocusChanged { isInfoFocused = it.isFocused }
+                    modifier = Modifier.height(36.dp).onFocusChanged { isInfoFocused = it.isFocused }
                 ) {
-                    Icon(Icons.Default.Info, null, tint = Color.White, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("상세 정보", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Icon(Icons.Default.Info, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("상세 정보", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
         }
@@ -328,7 +323,7 @@ private fun HeroSection(series: Series, onClick: (Series) -> Unit, horizontalPad
 
 @Composable
 fun SectionTitle(title: String, horizontalPadding: androidx.compose.ui.unit.Dp) {
-    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, bottom = 12.dp), color = Color(0xFFE0E0E0), fontWeight = FontWeight.Bold, fontSize = 20.sp, letterSpacing = 0.5.sp)
+    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, bottom = 2.dp), color = Color(0xFFE0E0E0), fontWeight = FontWeight.Bold, fontSize = 18.sp, letterSpacing = 0.5.sp)
 }
 
 @Composable
