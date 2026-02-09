@@ -59,13 +59,6 @@ fun HomeScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFF0F0F0F))) {
-        if (isLoading && homeSections.isEmpty() && watchHistory.isEmpty()) {
-            CircularProgressIndicator(
-                modifier = Modifier.align(Alignment.Center),
-                color = Color.Red
-            )
-        }
-
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = lazyListState,
@@ -83,69 +76,77 @@ fun HomeScreen(
                         },
                         horizontalPadding = standardMargin
                     )
-                } else if (!isLoading) {
+                } else {
                     SkeletonHero()
                 }
             }
 
-            if (watchHistory.isNotEmpty()) {
-                item(key = "watch_history_row") {
-                    val rowKey = "watch_history"
-                    val historyRowState = rowStates.getOrPut(rowKey) { LazyListState() }
+            // isLoading이 true이거나 서버 데이터(homeSections)가 아직 비어있을 때는 스켈레톤을 보여줌
+            // watchHistory가 로컬이라 먼저 들어오더라도 isLoading 상태에 묶여서 나중에 노출됨
+            if (isLoading && homeSections.isEmpty()) {
+                items(3) {
+                    SkeletonRow(standardMargin)
+                }
+            } else {
+                if (watchHistory.isNotEmpty()) {
+                    item(key = "watch_history_row") {
+                        val rowKey = "watch_history"
+                        val historyRowState = rowStates.getOrPut(rowKey) { LazyListState() }
+
+                        Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { 
+                            SectionTitle("시청 중인 콘텐츠", standardMargin)
+                            
+                            NetflixTvPivotRow(
+                                state = historyRowState,
+                                items = watchHistory.take(20), 
+                                marginValue = standardMargin,
+                                rowKey = rowKey,
+                                rowFocusIndices = rowFocusIndices,
+                                keySelector = { "history_${it.id}" }
+                            ) { history, index, rowState, focusRequester, marginPx, focusedIndex ->
+                                NetflixPivotItem(
+                                    title = history.title, 
+                                    posterPath = history.posterPath,
+                                    index = index,
+                                    focusedIndex = focusedIndex,
+                                    state = rowState,
+                                    marginPx = marginPx,
+                                    focusRequester = focusRequester,
+                                    onClick = { onHistoryClick(history) }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                itemsIndexed(homeSections, key = { _, s -> "row_${s.title}" }) { _, section ->
+                    val rowKey = "row_${section.title}"
+                    val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
 
                     Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { 
-                        SectionTitle("시청 중인 콘텐츠", standardMargin)
+                        SectionTitle(section.title, standardMargin)
                         
                         NetflixTvPivotRow(
-                            state = historyRowState,
-                            items = watchHistory.take(20), 
+                            state = sectionRowState,
+                            items = section.items, 
                             marginValue = standardMargin,
                             rowKey = rowKey,
                             rowFocusIndices = rowFocusIndices,
-                            keySelector = { "history_${it.id}" }
-                        ) { history, index, rowState, focusRequester, marginPx, focusedIndex ->
+                            keySelector = { item -> "item_${item.path ?: item.name ?: item.hashCode()}" }
+                        ) { item, index, rowState, focusRequester, marginPx, focusedIndex ->
                             NetflixPivotItem(
-                                title = history.title, 
-                                posterPath = history.posterPath,
+                                title = item.name ?: "", 
+                                posterPath = item.posterPath,
                                 index = index,
                                 focusedIndex = focusedIndex,
                                 state = rowState,
                                 marginPx = marginPx,
                                 focusRequester = focusRequester,
-                                onClick = { onHistoryClick(history) }
+                                onClick = { 
+                                    onSeriesClick(Series(title = item.name ?: "", episodes = emptyList(), fullPath = item.path, posterPath = item.posterPath, genreIds = item.genreIds ?: emptyList())) 
+                                }
                             )
                         }
-                    }
-                }
-            }
-
-            itemsIndexed(homeSections, key = { _, s -> "row_${s.title}" }) { _, section ->
-                val rowKey = "row_${section.title}"
-                val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
-
-                Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { 
-                    SectionTitle(section.title, standardMargin)
-                    
-                    NetflixTvPivotRow(
-                        state = sectionRowState,
-                        items = section.items, 
-                        marginValue = standardMargin,
-                        rowKey = rowKey,
-                        rowFocusIndices = rowFocusIndices,
-                        keySelector = { item -> "item_${item.path ?: item.name ?: item.hashCode()}" }
-                    ) { item, index, rowState, focusRequester, marginPx, focusedIndex ->
-                        NetflixPivotItem(
-                            title = item.name ?: "", 
-                            posterPath = item.posterPath,
-                            index = index,
-                            focusedIndex = focusedIndex,
-                            state = rowState,
-                            marginPx = marginPx,
-                            focusRequester = focusRequester,
-                            onClick = { 
-                                onSeriesClick(Series(title = item.name ?: "", episodes = emptyList(), fullPath = item.path, posterPath = item.posterPath, genreIds = item.genreIds ?: emptyList())) 
-                            }
-                        )
                     }
                 }
             }
@@ -219,11 +220,10 @@ private fun NetflixPivotItem(
     val posterHeight = 225.dp
     val totalHeight = 290.dp 
 
-    // 피벗(포커스)된 아이템의 왼쪽에 위치한 아이템만 투명도를 낮게 설정
     val alpha = when {
         isFocused -> 1f
-        index < focusedIndex -> 0.05f // 왼쪽으로 지나간 아이템은 거의 안보이게 처리
-        else -> 1f // 오른쪽에 대기 중인 아이템은 기본 밝기 유지
+        index < focusedIndex -> 0.05f 
+        else -> 1f 
     }
 
     Box(
@@ -333,10 +333,26 @@ private fun HeroSection(
 
 @Composable
 fun SectionTitle(title: String, horizontalPadding: androidx.compose.ui.unit.Dp) {
-    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, bottom = 2.dp), color = Color(0xFFE0E0E0), fontWeight = FontWeight.Bold, fontSize = 18.sp, letterSpacing = 0.5.sp)
+    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, bottom = 20.dp), color = Color(0xFFE0E0E0), fontWeight = FontWeight.Bold, fontSize = 18.sp, letterSpacing = 0.5.sp)
 }
 
 @Composable
 fun SkeletonHero() {
     Box(modifier = Modifier.fillMaxWidth().height(320.dp).background(Color(0xFF1A1A1A)))
+}
+
+@Composable
+fun SkeletonRow(horizontalPadding: androidx.compose.ui.unit.Dp) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
+        Box(modifier = Modifier.padding(start = horizontalPadding, bottom = 20.dp).width(120.dp).height(20.dp).background(Color(0xFF1A1A1A)))
+        LazyRow(
+            contentPadding = PaddingValues(start = horizontalPadding, end = horizontalPadding),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            userScrollEnabled = false
+        ) {
+            items(5) {
+                Box(modifier = Modifier.width(150.dp).height(225.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF1A1A1A)))
+            }
+        }
+    }
 }

@@ -44,7 +44,6 @@ fun MovieRow(
     val standardMargin = 20.dp 
     val marginPx = with(density) { standardMargin.roundToPx() }
     
-    // 홈화면과 동일하게 Row별 포커스 인덱스 및 포커스 리퀘스터 관리
     val rowFocusIndices = remember { mutableStateMapOf<String, Int>() }
     val rowKey = remember(title) { "row_$title" }
     val focusRequesters = remember(seriesList.size) { List(seriesList.size) { FocusRequester() } }
@@ -59,7 +58,7 @@ fun MovieRow(
                 letterSpacing = 0.5.sp
             ),
             color = Color(0xFFE0E0E0),
-            modifier = Modifier.padding(start = standardMargin, bottom = 2.dp)
+            modifier = Modifier.padding(start = standardMargin, bottom = 20.dp) // 간격 조정
         )
         
         LazyRow(
