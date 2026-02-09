@@ -15,9 +15,11 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.graphics.Brush
@@ -30,7 +32,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import kotlinx.coroutines.yield
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.model.Movie
@@ -50,7 +51,7 @@ fun HomeScreen(
 ) {
     val standardMargin = 20.dp 
     val rowStates = remember { mutableMapOf<String, LazyListState>() }
-    val rowFocusIndices = remember { mutableMapOf<String, Int>() }
+    val rowFocusIndices = remember { mutableStateMapOf<String, Int>() }
 
     val heroItem = remember(homeSections) { 
         homeSections.find { it.title.contains("인기작") }?.items?.firstOrNull() 
@@ -92,7 +93,7 @@ fun HomeScreen(
                     val rowKey = "watch_history"
                     val historyRowState = rowStates.getOrPut(rowKey) { LazyListState() }
 
-                    Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { // 여백 대폭 축소
+                    Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { 
                         SectionTitle("시청 중인 콘텐츠", standardMargin)
                         
                         NetflixTvPivotRow(
@@ -102,11 +103,12 @@ fun HomeScreen(
                             rowKey = rowKey,
                             rowFocusIndices = rowFocusIndices,
                             keySelector = { "history_${it.id}" }
-                        ) { history, index, rowState, focusRequester, marginPx ->
+                        ) { history, index, rowState, focusRequester, marginPx, focusedIndex ->
                             NetflixPivotItem(
                                 title = history.title, 
                                 posterPath = history.posterPath,
                                 index = index,
+                                focusedIndex = focusedIndex,
                                 state = rowState,
                                 marginPx = marginPx,
                                 focusRequester = focusRequester,
@@ -121,7 +123,7 @@ fun HomeScreen(
                 val rowKey = "row_${section.title}"
                 val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
 
-                Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { // 테마 간 여백 대폭 축소
+                Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { 
                     SectionTitle(section.title, standardMargin)
                     
                     NetflixTvPivotRow(
@@ -131,11 +133,12 @@ fun HomeScreen(
                         rowKey = rowKey,
                         rowFocusIndices = rowFocusIndices,
                         keySelector = { item -> "item_${item.path ?: item.name ?: item.hashCode()}" }
-                    ) { item, index, rowState, focusRequester, marginPx ->
+                    ) { item, index, rowState, focusRequester, marginPx, focusedIndex ->
                         NetflixPivotItem(
                             title = item.name ?: "", 
                             posterPath = item.posterPath,
                             index = index,
+                            focusedIndex = focusedIndex,
                             state = rowState,
                             marginPx = marginPx,
                             focusRequester = focusRequester,
@@ -157,18 +160,19 @@ private fun <T> NetflixTvPivotRow(
     items: List<T>,
     marginValue: androidx.compose.ui.unit.Dp,
     rowKey: String,
-    rowFocusIndices: MutableMap<String, Int>,
+    rowFocusIndices: SnapshotStateMap<String, Int>,
     keySelector: (T) -> Any,
-    itemContent: @Composable (item: T, index: Int, state: LazyListState, focusRequester: FocusRequester, marginPx: Int) -> Unit
+    itemContent: @Composable (item: T, index: Int, state: LazyListState, focusRequester: FocusRequester, marginPx: Int, focusedIndex: Int) -> Unit
 ) {
     val focusRequesters = remember(items.size) { List(items.size) { FocusRequester() } }
     val density = LocalDensity.current
     val marginPx = with(density) { marginValue.roundToPx() }
+    val focusedIndex = rowFocusIndices[rowKey] ?: 0
 
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .height(310.dp) // 세로 포스터 비율에 맞춰 높이 증가
+            .height(310.dp) 
             .focusProperties {
                 enter = { 
                     val lastIdx = rowFocusIndices[rowKey] ?: 0
@@ -184,7 +188,7 @@ private fun <T> NetflixTvPivotRow(
             Box(modifier = Modifier.onFocusChanged { 
                 if (it.isFocused) rowFocusIndices[rowKey] = index 
             }) {
-                itemContent(item, index, state, focusRequesters[index], marginPx)
+                itemContent(item, index, state, focusRequesters[index], marginPx, focusedIndex)
             }
         }
     }
@@ -195,6 +199,7 @@ private fun NetflixPivotItem(
     title: String,
     posterPath: String?,
     index: Int,
+    focusedIndex: Int,
     state: LazyListState,
     marginPx: Int,
     focusRequester: FocusRequester,
@@ -206,28 +211,34 @@ private fun NetflixPivotItem(
     
     LaunchedEffect(isFocused) {
         if (isFocused) {
-            yield()
-            state.scrollToItem(index, -marginPx)
+            state.animateScrollToItem(index, -marginPx)
         }
     }
 
-    // 표준 세로 비율(2:3) 적용
     val fixedWidth = 150.dp
     val posterHeight = 225.dp
     val totalHeight = 290.dp 
+
+    // 피벗(포커스)된 아이템의 왼쪽에 위치한 아이템만 투명도를 낮게 설정
+    val alpha = when {
+        isFocused -> 1f
+        index < focusedIndex -> 0.05f // 왼쪽으로 지나간 아이템은 거의 안보이게 처리
+        else -> 1f // 오른쪽에 대기 중인 아이템은 기본 밝기 유지
+    }
 
     Box(
         modifier = Modifier
             .width(fixedWidth)
             .height(totalHeight)
             .zIndex(if (isFocused) 10f else 1f)
+            .alpha(alpha)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .focusRequester(focusRequester)
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color.Transparent) // 배경색 완전 제거
+                .background(Color.Transparent) 
                 .focusable(interactionSource = interactionSource)
                 .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
         ) {
@@ -250,7 +261,6 @@ private fun NetflixPivotItem(
                 )
             }
             
-            // 선택되었을 때만 제목과 정보를 노출하도록 수정
             if (isFocused) {
                 Column(
                     modifier = Modifier
