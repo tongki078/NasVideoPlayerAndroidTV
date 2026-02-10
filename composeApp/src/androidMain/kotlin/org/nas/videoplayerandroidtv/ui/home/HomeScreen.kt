@@ -69,7 +69,8 @@ fun HomeScreen(
                         val rowKey = "watch_history"
                         val historyRowState = rowStates.getOrPut(rowKey) { LazyListState() }
 
-                        Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { 
+                        // 행 간 간격 축소 (패딩 제거)
+                        Column(modifier = Modifier.fillMaxWidth()) { 
                             SectionTitle("시청 중인 콘텐츠", standardMargin)
                             
                             NetflixTvPivotRow(
@@ -102,7 +103,8 @@ fun HomeScreen(
                     val rowKey = "row_${section.title}"
                     val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
 
-                    Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { 
+                    // 행 간 간격 축소 (패딩 제거)
+                    Column(modifier = Modifier.fillMaxWidth()) { 
                         SectionTitle(section.title, standardMargin)
                         
                         NetflixTvPivotRow(

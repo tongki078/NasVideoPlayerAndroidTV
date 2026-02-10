@@ -69,7 +69,8 @@ fun HeroSection(
 
 @Composable
 fun SectionTitle(title: String, horizontalPadding: androidx.compose.ui.unit.Dp) {
-    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, bottom = 20.dp), color = Color(0xFFE0E0E0), fontWeight = FontWeight.Bold, fontSize = 18.sp, letterSpacing = 0.5.sp)
+    // 테마명과 영상 사이 간격을 20dp에서 10dp로 절반 축소
+    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, bottom = 10.dp), color = Color(0xFFE0E0E0), fontWeight = FontWeight.Bold, fontSize = 18.sp, letterSpacing = 0.5.sp)
 }
 
 @Composable
@@ -80,7 +81,7 @@ fun SkeletonHero() {
 @Composable
 fun SkeletonRow(horizontalPadding: androidx.compose.ui.unit.Dp) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
-        Box(modifier = Modifier.padding(start = horizontalPadding, bottom = 20.dp).width(120.dp).height(20.dp).background(Color(0xFF1A1A1A)))
+        Box(modifier = Modifier.padding(start = horizontalPadding, bottom = 10.dp).width(120.dp).height(20.dp).background(Color(0xFF1A1A1A)))
         LazyRow(
             contentPadding = PaddingValues(start = horizontalPadding, end = horizontalPadding),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
