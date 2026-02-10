@@ -2,6 +2,7 @@ import os, subprocess, hashlib, urllib.parse, unicodedata, threading, time, json
 from flask import Flask, jsonify, send_from_directory, request, Response, redirect, send_file
 from flask_cors import CORS
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
@@ -17,7 +18,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "9.6"  # 속도 최적화 버전
+CACHE_VERSION = "9.7"  # 현재 진행 중인 버전 유지 (재탐색 최소화)
 
 # TMDB API KEY (Bearer 또는 API Key)
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk".strip()
@@ -53,6 +54,10 @@ GLOBAL_CACHE = {
     "air": [], "movies": [], "foreigntv": [], "koreantv": [],
     "animations_all": [], "search_index": [], "home_recommend": [], "version": CACHE_VERSION
 }
+
+def log(msg):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] {msg}", flush=True)
 
 def nfc(text): return unicodedata.normalize('NFC', text) if text else ""
 def nfd(text): return unicodedata.normalize('NFD', text) if text else ""
@@ -111,7 +116,7 @@ def get_tmdb_info_server(title, ignore_cache=False):
         with open(cp, 'w', encoding='utf-8') as f: json.dump(info, f, ensure_ascii=False)
         return info
 
-    print(f"  [TMDB-SEARCH] '{title_pure}' -> '{ct}' ({year})", flush=True)
+    log(f"  [TMDB-SEARCH] '{title_pure}' -> '{ct}' ({year})")
     params = {"query": ct, "language": "ko-KR", "include_adult": "false", "region": "KR"}
     if year: params["year"] = year
     headers = {"Authorization": f"Bearer {TMDB_API_KEY}"} if TMDB_API_KEY.startswith("eyJ") else {}
@@ -145,56 +150,64 @@ def attach_tmdb_info(cat):
     return cat
 
 def fetch_metadata_async(force_all=False):
-    print(f"🚀 [METADATA] 백그라운드 매칭 시작", flush=True)
+    log("🚀 [METADATA] 백그라운드 매칭 시작")
     tasks = []
     for k in ["foreigntv", "koreantv", "air", "animations_all", "movies"]:
         for cat in GLOBAL_CACHE.get(k, []):
             if force_all or (not cat.get('posterPath') and not cat.get('failed')): tasks.append(cat)
 
     total = len(tasks)
-    print(f"  📋 총 {total}개의 메타데이터 업데이트 필요", flush=True)
+    log(f"  📋 총 {total}개의 메타데이터 업데이트 필요")
     count = 0
     for cat in tasks:
         info = get_tmdb_info_server(cat['name'], ignore_cache=force_all)
         cat.update(info)
         count += 1
         if count % 10 == 0:
-            print(f"  ⏳ 매칭 중... ({count}/{total})", flush=True)
-            save_cache() # 10개마다 중간 저장
+            log(f"  ⏳ 매칭 중... ({count}/{total})")
+            save_cache()
         time.sleep(0.1)
 
     build_home_recommend(); save_cache()
-    print(f"🏁 [METADATA] 모든 작업 완료", flush=True)
+    log("🏁 [METADATA] 모든 작업 완료")
 
 def scan_recursive(bp, prefix, rb=None):
     cats = []
     exts = ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
     p, rel_base = get_real_path(bp), get_real_path(rb) if rb else get_real_path(bp)
+
+    log(f"    [SCAN] 경로 진입: {p}")
     if not os.path.exists(p):
-        print(f"    ⚠️ 경로 없음: {p}")
+        log(f"    ⚠️ 경로 없음: {p}")
         return cats
 
-    print(f"    🔎 파일 탐색 중...", flush=True)
     all_f = []
     file_count = 0
-    last_log_time = time.time()
 
-    for root, dirs, files in os.walk(p):
-        dirs[:] = [d for d in dirs if not any(ex in d for ex in EXCLUDE_FOLDERS) and not d.startswith('.')]
+    # 반복문 기반 os.scandir 고속 탐색 (심층 폴더 지원)
+    def fast_walk_iterative(target_path):
+        nonlocal file_count
+        stack = [target_path]
+        while stack:
+            current = stack.pop()
+            try:
+                with os.scandir(current) as it:
+                    for entry in it:
+                        if entry.is_dir():
+                            if not any(ex in entry.name for ex in EXCLUDE_FOLDERS) and not entry.name.startswith('.'):
+                                stack.append(entry.path)
+                        elif entry.is_file():
+                            if entry.name.lower().endswith(exts):
+                                all_f.append(entry.path)
+                                file_count += 1
+                                if file_count % 1000 == 0:
+                                    log(f"    >>> {file_count}개 파일 발견 중... ({entry.name[:20]})")
+            except: pass
 
-        # 탐색 중인 폴더 로그 (5초마다 하나씩 출력하여 너무 많은 로그 방지)
-        if time.time() - last_log_time > 5:
-            print(f"    ... 탐색 중: {os.path.basename(root)}", flush=True)
-            last_log_time = time.time()
+    log(f"    🔎 고속 탐색 시작 (os.scandir 반복문)...")
+    fast_walk_iterative(p)
 
-        for f in files:
-            if f.lower().endswith(exts):
-                all_f.append(os.path.join(root, f))
-                file_count += 1
-                if file_count % 2000 == 0:
-                    print(f"    ... {file_count}개 파일 발견", flush=True)
-
-    print(f"    📦 총 {file_count}개 파일 분석 및 그룹화 시작...", flush=True)
+    log(f"    📦 탐색 완료! 총 {file_count}개 파일 분석 및 그룹화 시작...")
     all_f.sort()
     curr, movies = "", []
     for fp in all_f:
@@ -208,6 +221,8 @@ def scan_recursive(bp, prefix, rb=None):
     if movies:
         rel_path = nfc(os.path.relpath(curr, rel_base))
         cats.append({"name": nfc(os.path.basename(curr)), "movies": movies, "path": rel_path})
+
+    log(f"    ✅ 그룹화 완료: {len(cats)}개 카테고리 생성")
     return cats
 
 def get_movie_info(fp, base, prefix):
@@ -216,7 +231,7 @@ def get_movie_info(fp, base, prefix):
     return {"id": tid, "title": os.path.basename(fp), "videoUrl": f"/video_serve?type={prefix}&path={urllib.parse.quote(rel)}", "thumbnailUrl": f"/thumb_serve?type={prefix}&id={tid}&path={urllib.parse.quote(rel)}"}
 
 def build_home_recommend():
-    print("🏠 [HOME] 고속 추천 목록 사전 빌드 중...", flush=True)
+    log("🏠 [HOME] 고속 추천 목록 빌드 중...")
     def prep(items, prefix):
         res = []
         for it in items:
@@ -234,26 +249,31 @@ def build_home_recommend():
     ]
 
 def perform_full_scan(reason="필요"):
-    print(f"\n🔄 사유: {reason} -> 전체 파일 스캔 시작", flush=True)
+    log(f"\n🔄 사유: {reason} -> 백그라운드 탐색 시작 (우선순위 순)")
+    # 요청하신 순서: 애니메이션 -> 외국TV -> 국내TV -> 영화 -> 방송중
     t = [
-        ("방송중", AIR_DIR, "air", "air"),
         ("애니메이션", ANI_DIR, "anim_all", "animations_all"),
-        ("영화", MOVIES_ROOT_DIR, "movie", "movies"),
         ("외국TV", FOREIGN_TV_DIR, "ftv", "foreigntv"),
-        ("국내TV", KOREAN_TV_DIR, "ktv", "koreantv")
+        ("국내TV", KOREAN_TV_DIR, "ktv", "koreantv"),
+        ("영화", MOVIES_ROOT_DIR, "movie", "movies"),
+        ("방송중", AIR_DIR, "air", "air")
     ]
     for label, path, prefix, cache_key in t:
-        print(f"  📂 [{label}] 스캔 시작: {path}", flush=True)
+        # 이미 데이터가 1개라도 로드되었다면 다시 스캔하지 않음
+        if GLOBAL_CACHE.get(cache_key) and len(GLOBAL_CACHE[cache_key]) > 0:
+             log(f"  ⏭️ [{label}] 이미 로드된 데이터가 있음. 건너뜁니다.")
+             continue
+
+        log(f"  📂 [{label}] 탐색 시작")
         try:
             results = scan_recursive(path, prefix)
             GLOBAL_CACHE[cache_key] = results
-            print(f"  ✅ [{label}] 완료: {len(results)}개 카테고리 발견", flush=True)
+            log(f"  ✅ [{label}] 완료! 즉시 반영 중")
+            build_home_recommend(); save_cache() # 카테고리 끝날 때마다 즉시 노출
         except Exception as e:
-            print(f"  ❌ [{label}] 오류: {e}", flush=True)
-            traceback.print_exc()
+            log(f"  ❌ [{label}] 오류: {e}")
 
-    build_home_recommend(); save_cache()
-    print(f"💾 캐시 저장 완료. 메타데이터 조회를 시작합니다.", flush=True)
+    log("💾 모든 탐색 완료. 메타데이터 업데이트를 시작합니다.")
     threading.Thread(target=fetch_metadata_async, daemon=True).start()
 
 def load_cache():
@@ -261,7 +281,10 @@ def load_cache():
         try:
             with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 d = json.load(f)
-                if d.get("version") == CACHE_VERSION: GLOBAL_CACHE.update(d); return True
+                if d.get("version") == CACHE_VERSION:
+                    GLOBAL_CACHE.update(d)
+                    log(f"📂 기존 캐시 로드 성공 (v{CACHE_VERSION})")
+                    return True
         except: pass
     return False
 
@@ -271,12 +294,12 @@ def save_cache():
     except: pass
 
 def init_server():
-    print(f"📺 NAS Server v{CACHE_VERSION} 시작", flush=True)
-    if not load_cache(): perform_full_scan(reason="최초 실행")
-    else:
-        build_home_recommend()
-        # 캐시가 있어도 누락된 메타데이터 조회를 위해 백그라운드 스레드 실행
-        threading.Thread(target=fetch_metadata_async, daemon=True).start()
+    log(f"📺 NAS Server v{CACHE_VERSION} 즉시 시작")
+    has_cache = load_cache()
+    if has_cache: build_home_recommend()
+
+    # 서버 응답을 위해 탐색은 무조건 백그라운드 스레드로 실행 (비차단 방식)
+    threading.Thread(target=perform_full_scan, args=("시스템 시작",), daemon=True).start()
 
 init_server()
 
@@ -305,13 +328,31 @@ def debug_match():
     final_info = get_tmdb_info_server(q, ignore_cache=True)
     return jsonify({"input_original": q, "step1_cleaned_title": ct, "step1_extracted_year": year, "step2_raw_tmdb_results": search_data.get('results', []), "step3_final_processed_info": final_info})
 
-def process_data(data, lite=False):
-    if lite: return [{"name": c.get('name',''), "path": c.get('path',''), "movies": [], "genreIds": c.get('genreIds', []), "posterPath": c.get('posterPath'), "year": c.get('year'), "overview": c.get('overview'), "rating": c.get('rating'), "seasonCount": c.get('seasonCount'), "failed": c.get('failed', False)} for c in data]
-    return data
+def process_data(data, lite=False, is_search=False):
+    # 페이징 지원
+    limit = request.args.get('limit', type=int)
+    offset = request.args.get('offset', type=int, default=0)
+
+    result = data
+    # [v9.7 추가] 일일 고정 무작위 샘플링 지원 (사용자 피드백 반영: 하루 동안은 순서 고정)
+    if request.args.get('random') == 'true':
+        result = list(data)
+        # 오늘 날짜를 시드로 사용하여 하루 동안은 동일한 순서 유지
+        daily_seed = datetime.now().strftime("%Y%m%d")
+        rng = random.Random(daily_seed)
+        rng.shuffle(result)
+
+    if offset: result = result[offset:]
+    if limit: result = result[:limit]
+
+    if lite:
+        # Lite 모드: 목록에서는 movies를 비우지만, 검색 결과인 경우엔 검색된 movies 정보를 유지함
+        return [{"name": c.get('name',''), "path": c.get('path',''), "movies": c.get('movies', []) if is_search else [], "genreIds": c.get('genreIds', []), "posterPath": c.get('posterPath'), "year": c.get('year'), "overview": c.get('overview'), "rating": c.get('rating'), "seasonCount": c.get('seasonCount'), "failed": c.get('failed', False)} for c in result]
+    return result
 
 def filter_by_path(pool, keyword):
     target = nfc(keyword).replace(" ", "").lower()
-    return [c for c in pool if target in nfc(c.get('path', '')).replace(" ", "").lower()]
+    return [c for c in pool if target in c.get('path', '').replace(" ", "").lower()]
 
 # 방송중 카테고리 관련 라우터
 @app.route('/air')
@@ -377,11 +418,15 @@ def search_videos():
     pool = GLOBAL_CACHE['movies'] + GLOBAL_CACHE['animations_all'] + GLOBAL_CACHE['foreigntv'] + GLOBAL_CACHE['koreantv'] + GLOBAL_CACHE['air']
     res = []
     for cat in pool:
-        if q in cat['name'].lower(): res.append(cat)
+        if q in cat['name'].lower():
+            res.append(cat)
         else:
             fm = [m for m in cat.get('movies', []) if q in m['title'].lower()]
-            if fm: nc = cat.copy(); nc['movies'] = fm; res.append(nc)
-    return jsonify(process_data(res, request.args.get('lite') == 'true'))
+            if fm:
+                nc = cat.copy()
+                nc['movies'] = fm
+                res.append(nc)
+    return jsonify(process_data(res, lite=request.args.get('lite') == 'true', is_search=True))
 
 @app.route('/list')
 def get_list():

@@ -1,5 +1,6 @@
 package org.nas.videoplayerandroidtv.ui.search
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -7,7 +8,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -17,12 +17,14 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -41,8 +43,6 @@ import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
 fun SearchScreen(
     query: String,
     onQueryChange: (String) -> Unit,
-    selectedCategory: String,
-    onCategoryChange: (String) -> Unit,
     recentQueries: List<SearchHistory>,
     searchResults: List<Series>,
     isLoading: Boolean,
@@ -50,42 +50,85 @@ fun SearchScreen(
     onDeleteQuery: (String) -> Unit,
     onSeriesClick: (Series) -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxSize().background(Color.Black).statusBarsPadding()) {
-        SearchTextField(query, onQueryChange, onSaveQuery)
-        CategoryFilters(selectedCategory, onCategoryChange)
+    Row(modifier = Modifier.fillMaxSize().background(Color(0xFF0F0F0F)).statusBarsPadding()) {
+        
+        // --- [좌측: 검색 입력 및 최근 검색어 (350.dp)] ---
+        Column(
+            modifier = Modifier
+                .width(350.dp)
+                .fillMaxHeight()
+                .padding(24.dp)
+        ) {
+            Text(
+                "검색",
+                color = Color.White,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 24.dp)
+            )
 
-        Box(modifier = Modifier.weight(1f)) {
+            // 검색창
+            SearchInputField(query, onQueryChange, onSaveQuery)
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // 최근 검색어 섹션
+            if (recentQueries.isNotEmpty()) {
+                Text(
+                    "최근 검색어",
+                    color = Color.Gray,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(recentQueries) { history ->
+                        RecentSearchItem(
+                            history = history,
+                            onQueryClick = { 
+                                onQueryChange(history.query)
+                                onSaveQuery(history.query)
+                            },
+                            onDeleteClick = { onDeleteQuery(history.query) }
+                        )
+                    }
+                }
+            }
+        }
+
+        // --- [우측: 검색 결과 그리드 (나머지 영역)] ---
+        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
             when {
                 query.isEmpty() -> {
-                    RecentSearchesList(
-                        queries = recentQueries, 
-                        onQueryClick = { 
-                            onQueryChange(it)
-                            onSaveQuery(it) // 최근 검색어 클릭 시 즉시 검색 실행 (로그 즉시 찍힘)
-                        }, 
-                        onDeleteClick = onDeleteQuery
-                    )
+                    // 검색 전 가이드 메시지
+                    Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.Search, null, modifier = Modifier.size(80.dp), tint = Color.DarkGray)
+                            Text("찾고 싶은 영화나 TV 프로그램을 검색해 보세요.", color = Color.Gray, fontSize = 18.sp)
+                        }
+                    }
                 }
                 isLoading && searchResults.isEmpty() -> {
-                    // 처음 검색 시작 시 스켈레톤 표시
                     SearchSkeletonGrid()
                 }
                 searchResults.isNotEmpty() -> {
-                    // 결과가 있으면 결과 표시 (로딩 중이어도 결과가 있으면 유지)
                     SearchResultsGrid(searchResults, onSeriesClick)
                 }
                 !isLoading && searchResults.isEmpty() -> {
-                    // 로딩이 끝났는데 결과가 없으면 메시지 표시
                     Box(Modifier.fillMaxSize(), Alignment.Center) {
-                        Text("검색 결과가 없습니다.", color = Color.Gray)
+                        Text("검색 결과가 없습니다.", color = Color.Gray, fontSize = 18.sp)
                     }
                 }
             }
 
-            // 상단 로딩 바 (검색 중임을 항상 표시)
+            // 검색 중 상단 로딩 표시
             if (isLoading) {
                 LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth().height(2.dp).align(Alignment.TopCenter),
+                    modifier = Modifier.fillMaxWidth().height(3.dp).align(Alignment.TopCenter),
                     color = Color.Red,
                     trackColor = Color.Transparent
                 )
@@ -95,16 +138,34 @@ fun SearchScreen(
 }
 
 @Composable
-private fun SearchTextField(query: String, onQueryChange: (String) -> Unit, onSaveQuery: (String) -> Unit) {
+private fun SearchInputField(query: String, onQueryChange: (String) -> Unit, onSaveQuery: (String) -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
+    
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
-        modifier = Modifier.fillMaxWidth().padding(16.dp).onFocusChanged { isFocused = it.isFocused },
-        placeholder = { Text("영화, 애니메이션, TV 프로그램 검색", color = Color.Gray) },
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { isFocused = it.isFocused },
+        placeholder = { Text("제목 입력", color = Color.Gray) },
         leadingIcon = { Icon(Icons.Default.Search, null, tint = if (isFocused) Color.Red else Color.Gray) },
-        trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { onQueryChange("") }) { Icon(Icons.Default.Close, null, tint = Color.Gray) } },
-        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = Color.Red, unfocusedBorderColor = Color.DarkGray, cursorColor = Color.Red),
+        trailingIcon = { 
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange("") }) { 
+                    Icon(Icons.Default.Close, null, tint = Color.Gray) 
+                } 
+            }
+        },
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color.White,
+            focusedContainerColor = Color(0xFF222222),
+            unfocusedContainerColor = Color(0xFF181818),
+            focusedBorderColor = Color.Red,
+            unfocusedBorderColor = Color.Transparent,
+            cursorColor = Color.Red
+        ),
+        shape = RoundedCornerShape(8.dp),
         singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         keyboardActions = KeyboardActions(onSearch = { if (query.isNotBlank()) onSaveQuery(query) })
@@ -112,72 +173,115 @@ private fun SearchTextField(query: String, onQueryChange: (String) -> Unit, onSa
 }
 
 @Composable
-private fun CategoryFilters(selectedCategory: String, onCategoryChange: (String) -> Unit) {
-    LazyRow(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-        items(listOf("전체", "영화", "애니메이션", "TV")) { cat ->
-            val isSelected = selectedCategory == cat
-            FilterChip(
-                selected = isSelected,
-                onClick = { onCategoryChange(cat) },
-                label = { Text(cat) },
-                modifier = Modifier.padding(end = 8.dp),
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Color.Red, 
-                    selectedLabelColor = Color.White, 
-                    labelColor = Color.Gray,
-                    containerColor = Color.Transparent
-                ),
-                border = FilterChipDefaults.filterChipBorder(
-                    borderColor = if (isSelected) Color.Red else Color.DarkGray,
-                    enabled = true,
-                    selected = isSelected
+private fun RecentSearchItem(history: SearchHistory, onQueryClick: () -> Unit, onDeleteClick: () -> Unit) {
+    var isFocused by remember { mutableStateOf(false) }
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable()
+            .clickable(onClick = onQueryClick)
+            .background(if (isFocused) Color.White.copy(alpha = 0.1f) else Color.Transparent)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Default.Refresh, null, tint = if (isFocused) Color.White else Color.Gray, modifier = Modifier.size(18.dp))
+        Text(
+            text = history.query,
+            color = if (isFocused) Color.White else Color.LightGray,
+            fontSize = 16.sp,
+            modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (isFocused) {
+            IconButton(onClick = onDeleteClick, modifier = Modifier.size(24.dp)) {
+                Icon(Icons.Default.Close, null, tint = Color.Gray, modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchResultsGrid(results: List<Series>, onSeriesClick: (Series) -> Unit) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(4), // TV 화면에 맞게 4열로 큼직하게 배치
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(24.dp),
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp)
+    ) {
+        items(results) { series ->
+            SearchGridItem(series, onSeriesClick)
+        }
+    }
+}
+
+@Composable
+private fun SearchGridItem(series: Series, onSeriesClick: (Series) -> Unit) {
+    var isFocused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
+    
+    Column(
+        modifier = Modifier
+            .onFocusChanged { isFocused = it.isFocused }
+            .zIndex(if (isFocused) 10f else 1f)
+            .scale(scale)
+            .focusable()
+            .clickable { onSeriesClick(series) },
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.68f)
+                .clip(RoundedCornerShape(8.dp))
+                .border(
+                    BorderStroke(3.dp, if (isFocused) Color.White else Color.Transparent),
+                    RoundedCornerShape(8.dp)
                 )
+        ) {
+            TmdbAsyncImage(
+                title = series.title,
+                posterPath = series.posterPath,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        }
+        
+        // 포커스 시 제목 표시
+        if (isFocused) {
+            Text(
+                text = series.title,
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                modifier = Modifier.padding(top = 8.dp),
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
 }
 
 @Composable
-private fun RecentSearchesList(queries: List<SearchHistory>, onQueryClick: (String) -> Unit, onDeleteClick: (String) -> Unit) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        if (queries.isNotEmpty()) {
-            Text(text = "최근 검색어", modifier = Modifier.padding(16.dp), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-            LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(queries) { history -> RecentSearchItem(history = history, onQueryClick = { onQueryClick(history.query) }, onDeleteClick = { onDeleteClick(history.query) }) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RecentSearchItem(history: SearchHistory, onQueryClick: () -> Unit, onDeleteClick: () -> Unit) {
-    var isFocused by remember { mutableStateOf(false) }
-    Row(modifier = Modifier.fillMaxWidth().onFocusChanged { isFocused = it.isFocused }.focusable().clickable(onClick = onQueryClick).background(if (isFocused) Color.DarkGray.copy(alpha = 0.5f) else Color.Transparent).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(modifier = Modifier.width(60.dp).aspectRatio(0.68f).clip(RoundedCornerShape(4.dp)).background(Color.DarkGray)) {
-            TmdbAsyncImage(title = history.query, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        }
-        Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
-            Text(text = history.query, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        IconButton(onClick = onDeleteClick) { Icon(imageVector = Icons.Default.Close, contentDescription = "Delete", tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(20.dp)) }
-    }
-}
-
-@Composable
-private fun SearchResultsGrid(results: List<Series>, onSeriesClick: (Series) -> Unit) {
-    LazyVerticalGrid(columns = GridCells.Fixed(5), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        items(results) { series ->
-            var isFocused by remember { mutableStateOf(false) }
-            Box(modifier = Modifier.fillMaxWidth().aspectRatio(0.68f).zIndex(if (isFocused) 10f else 1f).onFocusChanged { isFocused = it.isFocused }.clip(RoundedCornerShape(8.dp)).border(BorderStroke(2.dp, if (isFocused) Color.White else Color.Transparent), RoundedCornerShape(8.dp)).focusable().clickable { onSeriesClick(series) }) {
-                TmdbAsyncImage(title = series.title, posterPath = series.posterPath, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            }
-        }
-    }
-}
-
-@Composable
 private fun SearchSkeletonGrid() {
-    LazyVerticalGrid(columns = GridCells.Fixed(5), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        items(15) { Box(modifier = Modifier.aspectRatio(0.68f).clip(RoundedCornerShape(8.dp)).background(shimmerBrush())) }
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(4),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(24.dp),
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp)
+    ) {
+        items(8) { 
+            Box(
+                modifier = Modifier
+                    .aspectRatio(0.68f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(shimmerBrush())
+            ) 
+        }
     }
 }

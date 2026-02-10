@@ -76,6 +76,7 @@ class VideoRepositoryImpl : VideoRepository {
         try {
             val response = client.get("$baseUrl/search") {
                 parameter("q", query)
+                parameter("lite", "true") // 서버에서 검색어 매칭된 영상은 movies에 담아줌
                 if (category != "전체") parameter("category", category)
             }
             
@@ -84,16 +85,23 @@ class VideoRepositoryImpl : VideoRepository {
 
             results.forEach { cat ->
                 val movies = cat.movies ?: emptyList()
-                if (movies.isEmpty()) return@forEach
-                
                 val catName = cat.name ?: ""
                 val isGenericFolder = REGEX_INDEX_FOLDER.matches(catName) || REGEX_YEAR_FOLDER.matches(catName) || catName == "Search Results"
                 
+                // 검색 결과 UI에 맞게 Series 객체 생성
                 if (!isGenericFolder && catName.length >= 2) {
                     val title = catName.cleanTitle(true).replace(REGEX_GROUP_BY_SERIES, "").trim()
+                    
+                    // 서버에서 보내준 검색된 영상 정보를 episodes에 담음
+                    val episodes = movies.map { movie ->
+                        if (movie.videoUrl != null && !movie.videoUrl.startsWith("http")) {
+                            movie.copy(videoUrl = "$baseUrl${if (movie.videoUrl.startsWith("/")) "" else "/"}${movie.videoUrl}")
+                        } else movie
+                    }
+
                     finalSeriesList.add(Series(
                         title = title,
-                        episodes = movies.distinctBy { it.id }.sortedBy { it.title ?: "" },
+                        episodes = episodes,
                         fullPath = cat.path,
                         posterPath = cat.posterPath,
                         genreIds = cat.genreIds ?: emptyList(),
@@ -101,16 +109,10 @@ class VideoRepositoryImpl : VideoRepository {
                         year = cat.year,
                         rating = cat.rating
                     ))
-                } else {
-                    finalSeriesList.addAll(movies.groupBySeriesInternal(null, cat.posterPath, cat.genreIds))
                 }
             }
 
-            finalSeriesList.groupBy { it.title }.map { (title, group) ->
-                val allEpisodes = group.flatMap { it.episodes }.distinctBy { it.id }.sortedBy { it.title ?: "" }
-                val representative = group.maxByOrNull { it.episodes.size }!!
-                representative.copy(title = title, episodes = allEpisodes)
-            }.sortedByDescending { it.episodes.size }
+            finalSeriesList.distinctBy { it.title }.sortedBy { it.title }
 
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -145,9 +147,22 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun getAnimations(): List<Series> = withContext(Dispatchers.Default) {
         try {
-            // 방송중 애니메이션 전용 라우터 호출
-            val results: List<Category> = client.get("$baseUrl/air_animations").body()
-            results.flatMap { it.movies ?: emptyList() }.groupBySeriesInternal()
+            // 방송중 애니메이션
+            val results: List<Category> = client.get("$baseUrl/air_animations") {
+                parameter("lite", "true")
+            }.body()
+            results.map { cat ->
+                Series(
+                    title = cat.name ?: "Unknown",
+                    episodes = emptyList(),
+                    fullPath = "방송중/${cat.path}",
+                    genreIds = cat.genreIds ?: emptyList(),
+                    posterPath = cat.posterPath,
+                    overview = cat.overview,
+                    year = cat.year,
+                    rating = cat.rating
+                )
+            }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
@@ -156,7 +171,10 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun getAnimationsAll(): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val response = client.get("$baseUrl/animations_all")
+            val response = client.get("$baseUrl/animations_all") {
+                parameter("lite", "true")
+                parameter("limit", 1000)
+            }
             if (response.status == HttpStatusCode.OK) {
                 val categories: List<Category> = response.body()
                 categories.filter { cat -> 
@@ -172,6 +190,7 @@ class VideoRepositoryImpl : VideoRepository {
             val categories: List<Category> = client.get("$baseUrl/anim_raftel") {
                 parameter("limit", 500)
                 parameter("offset", offset)
+                parameter("lite", "true")
             }.body()
             categories.filter { cat -> 
                 val name = cat.name ?: ""
@@ -185,6 +204,7 @@ class VideoRepositoryImpl : VideoRepository {
             val categories: List<Category> = client.get("$baseUrl/anim_series") {
                 parameter("limit", 500)
                 parameter("offset", offset)
+                parameter("lite", "true")
             }.body()
             categories.filter { cat -> 
                 val name = cat.name ?: ""
@@ -195,9 +215,22 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun getDramas(): List<Series> = withContext(Dispatchers.Default) {
         try {
-            // 방송중 드라마 전용 라우터 호출
-            val results: List<Category> = client.get("$baseUrl/air_dramas").body()
-            results.flatMap { it.movies ?: emptyList() }.groupBySeriesInternal()
+            // 방송중 드라마
+            val results: List<Category> = client.get("$baseUrl/air_dramas") {
+                parameter("lite", "true")
+            }.body()
+            results.map { cat ->
+                Series(
+                    title = cat.name ?: "Unknown",
+                    episodes = emptyList(),
+                    fullPath = "방송중/${cat.path}",
+                    genreIds = cat.genreIds ?: emptyList(),
+                    posterPath = cat.posterPath,
+                    overview = cat.overview,
+                    year = cat.year,
+                    rating = cat.rating
+                )
+            }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
@@ -210,26 +243,27 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getLatestForeignTV(): List<Series> = getGroupedData("/foreigntv", 500, 0, "외국TV")
     override suspend fun getPopularForeignTV(): List<Series> = getLatestForeignTV()
 
-    override suspend fun getFtvUs(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_us", 500, 0, "외국TV", "미국 드라마")
-    override suspend fun getFtvCn(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_cn", 500, 0, "외국TV", "중국 드라마")
-    override suspend fun getFtvJp(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_jp", 500, 0, "외국TV", "일본 드라마")
-    override suspend fun getFtvDocu(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_docu", 500, 0, "외국TV", "다큐")
-    override suspend fun getFtvEtc(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_etc", 500, 0, "외국TV", "기타국가 드라마")
+    override suspend fun getFtvUs(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_us", 500, offset, "외국TV", "미국 드라마")
+    override suspend fun getFtvCn(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_cn", 500, offset, "외국TV", "중국 드라마")
+    override suspend fun getFtvJp(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_jp", 500, offset, "외국TV", "일본 드라마")
+    override suspend fun getFtvDocu(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_docu", 500, offset, "외국TV", "다큐")
+    override suspend fun getFtvEtc(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_etc", 500, offset, "외국TV", "기타국가 드라마")
 
     override suspend fun getLatestKoreanTV(): List<Series> = getGroupedData("/koreantv", 500, 0, "국내TV")
     override suspend fun getPopularKoreanTV(): List<Series> = getLatestKoreanTV()
 
-    override suspend fun getKtvDrama(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_drama", 500, 0, "국내TV", "드라마")
-    override suspend fun getKtvSitcom(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_sitcom", 500, 0, "국내TV", "시트콤")
-    override suspend fun getKtvVariety(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_variety", 500, 0, "국내TV", "예능")
-    override suspend fun getKtvEdu(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_edu", 500, 0, "국내TV", "교양")
-    override suspend fun getKtvDocu(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_docu", 500, 0, "국내TV", "다큐멘터리")
+    override suspend fun getKtvDrama(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_drama", 500, offset, "국내TV", "드라마")
+    override suspend fun getKtvSitcom(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_sitcom", 500, offset, "국내TV", "시트콤")
+    override suspend fun getKtvVariety(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_variety", 500, offset, "국내TV", "예능")
+    override suspend fun getKtvEdu(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_edu", 500, offset, "국내TV", "교양")
+    override suspend fun getKtvDocu(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_docu", 500, offset, "국내TV", "다큐멘터리")
 
     private suspend fun getGroupedData(endpoint: String, limit: Int, offset: Int, prefix: String, filterKeyword: String? = null): List<Series> = withContext(Dispatchers.Default) {
         try {
             val response = client.get("$baseUrl$endpoint") {
                 parameter("limit", limit)
                 parameter("offset", offset)
+                parameter("lite", "true")
             }
             if (response.status == HttpStatusCode.OK) {
                 val categories: List<Category> = response.body()
@@ -253,6 +287,7 @@ class VideoRepositoryImpl : VideoRepository {
             val response = client.get("$baseUrl$endpoint") {
                 parameter("limit", limit)
                 parameter("offset", offset)
+                parameter("lite", "true")
             }
             if (response.status == HttpStatusCode.OK) {
                 val categories: List<Category> = response.body()
@@ -278,7 +313,9 @@ class VideoRepositoryImpl : VideoRepository {
     private suspend fun getAirDataInternal(filterKeyword: String? = null): List<Series> = withContext(Dispatchers.Default) {
         try {
             val endpoint = if (filterKeyword == "라프텔") "/air_animations" else if (filterKeyword == "드라마") "/air_dramas" else "/air"
-            val response = client.get("$baseUrl$endpoint")
+            val response = client.get("$baseUrl$endpoint") {
+                parameter("lite", "true")
+            }
             if (response.status != HttpStatusCode.OK) return@withContext emptyList()
             
             val categories: List<Category> = response.body()

@@ -1,5 +1,8 @@
 package org.nas.videoplayerandroidtv
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
@@ -7,36 +10,40 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import coil3.ImageLoader
-import coil3.network.ktor2.KtorNetworkFetcherFactory
-import coil3.request.crossfade
-import coil3.disk.DiskCache
 import coil3.compose.setSingletonImageLoaderFactory
+import coil3.disk.DiskCache
+import coil3.request.crossfade
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import okio.Path.Companion.toPath
-import kotlinx.coroutines.*
+import org.nas.videoplayerandroidtv.data.SearchHistoryDataSource
+import org.nas.videoplayerandroidtv.data.TmdbCacheDataSource
+import org.nas.videoplayerandroidtv.data.WatchHistoryDataSource
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.data.repository.VideoRepositoryImpl
 import org.nas.videoplayerandroidtv.domain.model.*
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
-import org.nas.videoplayerandroidtv.ui.home.HomeScreen
-import org.nas.videoplayerandroidtv.ui.search.SearchScreen
-import org.nas.videoplayerandroidtv.ui.detail.SeriesDetailScreen
-import org.nas.videoplayerandroidtv.ui.player.VideoPlayerScreen
+import org.nas.videoplayerandroidtv.ui.category.ThemedCategoryScreen
 import org.nas.videoplayerandroidtv.ui.common.NetflixTopBar
-import org.nas.videoplayerandroidtv.ui.category.*
-import org.nas.videoplayerandroidtv.data.*
+import org.nas.videoplayerandroidtv.ui.detail.SeriesDetailScreen
+import org.nas.videoplayerandroidtv.ui.home.HomeScreen
+import org.nas.videoplayerandroidtv.ui.player.VideoPlayerScreen
+import org.nas.videoplayerandroidtv.ui.search.SearchScreen
+import org.nas.videoplayerandroidtv.ui.category.processThemedSections
+import org.nas.videoplayerandroidtv.ui.category.ThemeSection
 import org.nas.videoplayerandroidtv.db.AppDatabase
 import app.cash.sqldelight.db.SqlDriver
-import androidx.tv.foundation.ExperimentalTvFoundationApi
 
-@OptIn(ExperimentalTvFoundationApi::class)
 @Composable
 fun App(driver: SqlDriver) {
     val repository: VideoRepository = remember { VideoRepositoryImpl() }
     
+    // Coil 3 안정적인 설정 적용
     setSingletonImageLoaderFactory { ctx -> 
         ImageLoader.Builder(ctx)
-            .components { add(KtorNetworkFetcherFactory(NasApiClient.client)) }
             .diskCache { 
                 DiskCache.Builder()
                     .directory(getImageCacheDirectory(ctx).toPath().resolve("coil_cache"))
@@ -83,16 +90,14 @@ fun App(driver: SqlDriver) {
     var homeSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
     var isHomeLoading by remember { mutableStateOf(false) } 
     
-    // 카테고리 메모리 캐시: 이제 분류된 ThemeSection 리스트를 저장
     val categoryCache = remember { mutableMapOf<String, List<ThemeSection>>() }
 
-    // 고도화된 프리페칭: 데이터 로드부터 분류까지 백그라운드에서 완료
     LaunchedEffect(homeSections) {
         if (homeSections.isNotEmpty()) {
             scope.launch(Dispatchers.IO) {
                 val prefetchTargets = listOf(
-                    Triple("영화", Screen.MOVIES, 2), // 최신 영화
-                    Triple("애니메이션", Screen.ANIMATIONS, 0) // 라프텔 애니
+                    Triple("영화", Screen.MOVIES, 2),
+                    Triple("애니메이션", Screen.ANIMATIONS, 0)
                 )
                 
                 prefetchTargets.forEach { (name, screen, mode) ->
@@ -100,12 +105,11 @@ fun App(driver: SqlDriver) {
                     if (!categoryCache.containsKey(cacheKey)) {
                         try {
                             val rawData = when(screen) {
-                                Screen.MOVIES -> repository.getLatestMovies(200, 0) // 개수를 200개로 최적화
+                                Screen.MOVIES -> repository.getLatestMovies(200, 0)
                                 Screen.ANIMATIONS -> repository.getAnimationsRaftel(200, 0)
                                 else -> emptyList()
                             }
                             if (rawData.isNotEmpty()) {
-                                // 백그라운드에서 미리 분류 연산 수행
                                 val processed = processThemedSections(rawData)
                                 categoryCache[cacheKey] = processed
                             }
@@ -238,8 +242,6 @@ fun App(driver: SqlDriver) {
                             SearchScreen(
                                 query = searchQuery, 
                                 onQueryChange = { searchQuery = it },
-                                selectedCategory = searchCategory, 
-                                onCategoryChange = { searchCategory = it },
                                 recentQueries = recentQueries, 
                                 searchResults = searchResultSeries, 
                                 isLoading = isSearchLoading,
