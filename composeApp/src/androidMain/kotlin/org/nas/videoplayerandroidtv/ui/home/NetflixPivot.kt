@@ -148,7 +148,7 @@ fun NetflixPivotItem(
                 .fillMaxSize()
                 .focusRequester(focusRequester)
                 .clip(RoundedCornerShape(8.dp))
-                .background(if (isFocused) Color(0xFF1F1F1F) else Color.Transparent) 
+                .background(Color.Transparent) // 회색 배경 제거 및 투명 설정
                 .focusable(interactionSource = interactionSource)
                 .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
         ) {
@@ -179,7 +179,7 @@ fun NetflixPivotItem(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .padding(horizontal = 4.dp, vertical = 8.dp) // 좌우 패딩을 줄여서 더 깔끔하게 조정
                 ) {
                     Text(
                         text = title.cleanTitle(),

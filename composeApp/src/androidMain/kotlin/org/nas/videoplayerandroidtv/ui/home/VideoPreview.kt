@@ -23,6 +23,7 @@ import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
 import kotlin.OptIn
 
+@androidx.annotation.OptIn(UnstableApi::class)
 @OptIn(UnstableApi::class)
 @Composable
 fun VideoPreview(url: String, modifier: Modifier = Modifier) {
