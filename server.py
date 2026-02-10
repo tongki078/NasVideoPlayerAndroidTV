@@ -85,7 +85,7 @@ def clean_title_complex(title):
     cleaned = REGEX_SPECIAL.sub(' ', cleaned)
     cleaned = REGEX_SPACES.sub(' ', cleaned).strip()
 
-    if not cleaned or len(cleaned) < 2:
+    if not cleaned or len(cleaned) < 1:
         cleaned = REGEX_EXT.sub('', title)
         cleaned = REGEX_YEAR.sub('', cleaned).strip()
     return cleaned, year
@@ -116,8 +116,10 @@ def get_tmdb_cache_path(title):
     return os.path.join(TMDB_CACHE_DIR, f"{h}.json")
 
 def search_tmdb_api(query, year=None):
-    if not query or len(query) < 2 or REGEX_FORBIDDEN_TITLE.match(query): return None
-    params = {"query": query, "language": "ko-KR", "include_adult": "false"}
+    if not query or len(query) < 1 or REGEX_FORBIDDEN_TITLE.match(query): return None
+    params = {"query": query, "language": "ko-KR", "include_adult": "false", "region": "KR"}
+    if year: params["year"] = year # API 레벨에서 연도 필터링
+
     headers = {"Authorization": f"Bearer {TMDB_API_KEY}"} if TMDB_API_KEY.startswith("eyJ") else {}
     if not headers: params["api_key"] = TMDB_API_KEY
 
@@ -125,18 +127,17 @@ def search_tmdb_api(query, year=None):
         resp = requests.get(f"{TMDB_BASE_URL}/search/multi", params=params, headers=headers, timeout=5)
         data = resp.json()
         results = [r for r in data.get('results', []) if r.get('media_type') in ['movie', 'tv']]
-        if results:
-            if year:
-                for r in results:
-                    r_year = (r.get('release_date') or r.get('first_air_date') or "").split('-')[0]
-                    if r_year == year: return r
-            return results[0]
+        if results: return results[0]
     except: pass
     return None
 
 def get_tmdb_info_server(title, ignore_cache=False):
     if not title: return {"failed": True}
-    cp = get_tmdb_cache_path(title)
+
+    # 경로일 경우 마지막 이름만 추출
+    title_pure = nfc(title).split('/')[-1]
+    cp = get_tmdb_cache_path(title_pure)
+
     if not ignore_cache and os.path.exists(cp):
         try:
             with open(cp, 'r', encoding='utf-8') as f:
@@ -144,18 +145,27 @@ def get_tmdb_info_server(title, ignore_cache=False):
                 if d and (not d.get("failed") or d.get("forbidden")): return d
         except: pass
 
-    ct, extracted_year = clean_title_complex(title)
+    ct, extracted_year = clean_title_complex(title_pure)
     if REGEX_FORBIDDEN_TITLE.match(ct) or ct.lower() in ["season", "series", "video", "episode"]:
         info = {"failed": True, "forbidden": True}
         with open(cp, 'w', encoding='utf-8') as f: json.dump(info, f, ensure_ascii=False)
         return info
 
-    print(f"  [TMDB-SEARCH] '{title}' -> '{ct}' ({extracted_year})", flush=True)
-    best = search_tmdb_api(ct)
-    if not best and extracted_year: best = search_tmdb_api(ct, extracted_year)
+    print(f"  [TMDB-SEARCH] '{title_pure}' -> '{ct}' ({extracted_year})", flush=True)
+
+    # 1. 연도가 있다면 연도와 함께 검색 (최우선)
+    best = None
+    if extracted_year:
+        best = search_tmdb_api(ct, extracted_year)
+
+    # 2. 실패 시 일반 검색 (단, 제목이 너무 짧지 않을 때만)
+    if not best and len(ct) >= 2:
+        best = search_tmdb_api(ct)
+
+    # 3. 여전히 실패 시 첫 단어로 재시도
     if not best:
         words = ct.split(' ')
-        if len(words) > 2: best = search_tmdb_api(f"{words[0]} {words[1]}")
+        if len(words) > 1: best = search_tmdb_api(words[0], extracted_year)
 
     if best:
         m_type, t_id = best.get('media_type'), best.get('id')
@@ -293,6 +303,23 @@ def test_match():
     info = get_tmdb_info_server(q, ignore_cache=True)
     return jsonify({"input": q, "result": info})
 
+@app.route('/debug_match')
+def debug_match():
+    q = request.args.get('q', '')
+    if not q: return "Usage: /debug_match?q=폴더명"
+    ct, year = clean_title_complex(q)
+    params = {"query": ct, "language": "ko-KR", "include_adult": "false"}
+    if year: params["year"] = year
+    headers = {"Authorization": f"Bearer {TMDB_API_KEY}"} if TMDB_API_KEY.startswith("eyJ") else {}
+    if not headers: params["api_key"] = TMDB_API_KEY
+    search_data = {}
+    try:
+        resp = requests.get(f"{TMDB_BASE_URL}/search/multi", params=params, headers=headers, timeout=5)
+        search_data = resp.json()
+    except Exception as e: search_data = {"error": str(e)}
+    final_info = get_tmdb_info_server(q, ignore_cache=True)
+    return jsonify({"input_original": q, "step1_cleaned_title": ct, "step1_extracted_year": year, "step2_raw_tmdb_results": search_data.get('results', []), "step3_final_processed_info": final_info})
+
 @app.route('/refresh_metadata')
 def refresh_metadata():
     threading.Thread(target=fetch_metadata_async, kwargs={"force_all": True}).start()
@@ -383,7 +410,6 @@ def get_list():
         fe = os.path.join(real_path, entry)
         if any(ex in entry for ex in EXCLUDE_FOLDERS): continue
         if os.path.isdir(fe):
-            # 폴더인 경우 TMDB 정보를 붙여서 반환
             res.append(attach_tmdb_info({"name": nfc(entry), "path": nfc(os.path.relpath(fe, base_dir)), "movies": []}))
         elif entry.lower().endswith(exts): movies.append(get_movie_info(fe, base_dir, type_code))
     if movies: res.append({"name": nfc(os.path.basename(real_path)), "path": nfc(os.path.relpath(real_path, base_dir)), "movies": movies})

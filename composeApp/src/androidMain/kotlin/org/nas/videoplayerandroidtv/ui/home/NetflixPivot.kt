@@ -108,7 +108,6 @@ fun NetflixPivotItem(
         if (isFocused) {
             state.animateScrollToItem(index, -marginPx)
             
-            // 정보가 부족하면 비동기로 보강
             if ((previewUrl == null || itemOverview == null) && categoryPath != null) {
                 launch {
                     try {
@@ -135,7 +134,7 @@ fun NetflixPivotItem(
 
     val itemWidth = if (isFocused) 330.dp else 135.dp
     val posterMaxHeight = 185.dp 
-    val infoAreaHeight = 85.dp // 줄거리 표시를 위해 높이 확대
+    val infoAreaHeight = 85.dp 
     val totalItemHeight = posterMaxHeight + infoAreaHeight
 
     Box(
@@ -196,32 +195,51 @@ fun NetflixPivotItem(
                             .fillMaxSize()
                             .padding(horizontal = 8.dp, vertical = 6.dp)
                     ) {
-                        Text(
-                            text = title.cleanTitle(),
-                            color = Color.White,
-                            fontSize = 14.sp, 
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-
-                        Spacer(Modifier.height(2.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = itemRating ?: "98% 일치", color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        // 제목, 년도, 연령 정보를 한 줄에 배치
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = title.cleanTitle(),
+                                color = Color.White,
+                                fontSize = 14.sp, 
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            
                             Spacer(Modifier.width(8.dp))
-                            Text(text = itemYear ?: "2024", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                            
+                            // 년도 정보
+                            Text(
+                                text = itemYear ?: "2024", 
+                                color = Color.White.copy(alpha = 0.6f), 
+                                fontSize = 11.sp
+                            )
+                            
+                            Spacer(Modifier.width(6.dp))
+                            
+                            // 연령 정보 (녹색 강조)
+                            Text(
+                                text = itemRating ?: "15+", 
+                                color = Color(0xFF46D369), 
+                                fontWeight = FontWeight.Bold, 
+                                fontSize = 11.sp
+                            )
                         }
-                        
-                        // 메인 줄거리 표시
+
+                        // 줄거리 정보를 2줄로 표시
                         if (!itemOverview.isNullOrBlank()) {
                             Spacer(Modifier.height(4.dp))
                             Text(
                                 text = itemOverview!!,
-                                color = Color.LightGray,
+                                color = Color.LightGray.copy(alpha = 0.8f),
                                 fontSize = 11.sp,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
-                                lineHeight = 14.sp
+                                lineHeight = 15.sp
                             )
                         }
                     }
