@@ -25,7 +25,19 @@ class VideoRepositoryImpl : VideoRepository {
     private val baseUrl = NasApiClient.BASE_URL
 
     override suspend fun getHomeRecommendations(): List<HomeSection> = try {
-        client.get("$baseUrl/home") { parameter("lite", "true") }.body<List<HomeSection>>()
+        // lite=true를 제거하여 movies 목록을 포함하도록 수정
+        val response = client.get("$baseUrl/home").body<List<HomeSection>>()
+        
+        response.map { section ->
+            section.copy(items = section.items.map { cat ->
+                val updatedMovies = cat.movies?.map { movie ->
+                    if (movie.videoUrl != null && !movie.videoUrl.startsWith("http")) {
+                        movie.copy(videoUrl = "$baseUrl${if (movie.videoUrl.startsWith("/")) "" else "/"}${movie.videoUrl}")
+                    } else movie
+                }
+                cat.copy(movies = updatedMovies)
+            })
+        }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         emptyList()
@@ -36,7 +48,7 @@ class VideoRepositoryImpl : VideoRepository {
             parameter("path", path)
             parameter("limit", limit)
             parameter("offset", offset)
-            parameter("lite", "true")
+            // 미리보기를 위해 상세 정보가 필요하므로 lite 파라미터를 제거함
         }.body()
         
         categories.distinctBy { it.name ?: it.path }.map { cat ->
@@ -90,7 +102,6 @@ class VideoRepositoryImpl : VideoRepository {
                         genreIds = cat.genreIds ?: emptyList()
                     ))
                 } else {
-                    // Movie 리스트에는 posterPath가 없으므로 카테고리의 정보를 전달
                     finalSeriesList.addAll(movies.groupBySeriesInternal(null, cat.posterPath, cat.genreIds))
                 }
             }

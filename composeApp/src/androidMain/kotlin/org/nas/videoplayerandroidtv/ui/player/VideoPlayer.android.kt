@@ -11,7 +11,6 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -57,31 +56,17 @@ actual fun VideoPlayer(
                     .build(),
                 true 
             )
-            .setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT)
+            .setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING)
             .build().apply {
                 playWhenReady = true
                 volume = 1.0f
                 addListener(object : Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
-                        Log.e("VideoPlayer", "❌ 재생 에러: ${error.errorCodeName} (${error.errorCode})")
+                        Log.e("VideoPlayer", "❌ 재생 에러: ${error.errorCodeName} (${error.errorCode}) - ${error.message}")
                     }
-
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         if (playbackState == Player.STATE_ENDED) {
                             currentOnVideoEnded?.invoke()
-                        }
-                    }
-
-                    override fun onTracksChanged(tracks: Tracks) {
-                        for (group in tracks.groups) {
-                            if (group.type == C.TRACK_TYPE_AUDIO) {
-                                for (i in 0 until group.length) {
-                                    val format = group.getTrackFormat(i)
-                                    if (group.isTrackSelected(i)) {
-                                        Log.d("VideoPlayer", "✅ 선택된 오디오 코덱: ${format.sampleMimeType}")
-                                    }
-                                }
-                            }
                         }
                     }
                 })
@@ -115,12 +100,13 @@ actual fun VideoPlayer(
 
     LaunchedEffect(url) {
         if (url.isBlank()) return@LaunchedEffect
-        Log.d("VideoPlayer", "🎬 재생 시작: $url")
-        val mediaItem = MediaItem.Builder().setUri(url).build()
+        Log.d("VideoPlayer", "🎬 재생 시도: $url")
+        val mediaItem = MediaItem.Builder()
+            .setUri(url)
+            .build()
         exoPlayer.setMediaItem(mediaItem)
         if (initialPosition > 0) exoPlayer.seekTo(initialPosition)
         exoPlayer.prepare()
-        exoPlayer.play()
     }
 
     Box(modifier = modifier) {
@@ -133,12 +119,7 @@ actual fun VideoPlayer(
                     setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
                         currentOnVisibilityChanged?.invoke(visibility == View.VISIBLE)
                     })
-                    showController()
-                }
-            },
-            update = { playerView ->
-                playerView.setFullscreenButtonClickListener {
-                    onFullscreenClick?.invoke()
+                    setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                 }
             },
             modifier = Modifier.fillMaxSize()
