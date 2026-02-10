@@ -56,7 +56,8 @@ actual fun VideoPlayer(
                     .build(),
                 true 
             )
-            .setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING)
+            // 4K 재생을 위해 비디오 스케일링 모드를 최적화합니다.
+            .setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT)
             .build().apply {
                 playWhenReady = true
                 volume = 1.0f
@@ -115,6 +116,8 @@ actual fun VideoPlayer(
                 PlayerView(ctx).apply {
                     player = exoPlayer
                     useController = true
+                    // 4K 화면에서 더 안정적인 TextureView 사용을 고려할 수 있으나, 
+                    // 일단 하드웨어 가속 성능이 좋은 SurfaceView(기본값)를 유지하며 설정만 최적화합니다.
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
                         currentOnVisibilityChanged?.invoke(visibility == View.VISIBLE)

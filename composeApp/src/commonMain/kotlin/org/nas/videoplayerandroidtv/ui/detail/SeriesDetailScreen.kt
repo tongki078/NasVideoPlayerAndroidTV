@@ -7,10 +7,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -59,6 +59,11 @@ fun SeriesDetailScreen(
     
     val playButtonFocusRequester = remember { FocusRequester() }
     val overlayFocusRequester = remember { FocusRequester() }
+
+    // UHD 여부 판별 (경로에 UHD가 포함된 경우)
+    val isUhd = remember(series.fullPath) {
+        series.fullPath?.contains("UHD", ignoreCase = true) == true
+    }
 
     LaunchedEffect(series) {
         state = state.copy(isLoading = true)
@@ -134,9 +139,20 @@ fun SeriesDetailScreen(
                                 Text(series.year!!, color = Color.LightGray, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                                 Spacer(Modifier.width(12.dp))
                             }
+                            
+                            // 연령 등급 배지
                             Surface(color = Color.DarkGray, shape = RoundedCornerShape(4.dp)) {
                                 Text(text = series.rating ?: "15+", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                             }
+                            
+                            // UHD 배지 추가
+                            if (isUhd) {
+                                Spacer(Modifier.width(8.dp))
+                                Surface(color = Color(0xFFE50914), shape = RoundedCornerShape(4.dp)) {
+                                    Text(text = "UHD", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                }
+                            }
+                            
                             Spacer(Modifier.width(12.dp))
                             state.metadata?.genreIds?.take(3)?.mapNotNull { genreMap[it] }?.joinToString(", ")?.let {
                                 if (it.isNotEmpty()) Text(it, color = Color.LightGray, fontSize = 14.sp)
@@ -231,7 +247,6 @@ private fun TvButton(
         onClick = onClick,
         color = backgroundColor,
         shape = RoundedCornerShape(8.dp),
-        // 두께를 2.dp로 고정하여 레이아웃 흔들림 방지
         border = BorderStroke(2.dp, if (isFocused) Color.White else Color.Gray.copy(alpha = 0.3f)),
         modifier = modifier
             .onFocusChanged { isFocused = it.isFocused }
@@ -272,7 +287,6 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, focusR
                             onClick = { onSeasonChange(index) }, 
                             color = if (isFocused) Color.White else if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent, 
                             shape = RoundedCornerShape(8.dp), 
-                            // 보더 두께를 2.dp로 고정하고 색상만 변경하여 내부 텍스트 밀림 방지
                             border = BorderStroke(2.dp, if (isFocused) Color.White else Color.Transparent),
                             modifier = Modifier.fillMaxWidth().onFocusChanged { isFocused = it.isFocused }.then(if (index == 0) Modifier.focusRequester(focusRequester) else Modifier).focusable()
                         ) {
