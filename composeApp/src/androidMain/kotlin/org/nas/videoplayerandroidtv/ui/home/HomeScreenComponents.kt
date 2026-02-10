@@ -34,33 +34,34 @@ fun HeroSection(
     var isPlayFocused by remember { mutableStateOf(false) }
     var isInfoFocused by remember { mutableStateOf(false) }
     val title = series.title
-    Box(modifier = Modifier.fillMaxWidth().height(320.dp).background(Color.Black)) {
+    // 상단 히어로 섹션 높이를 320dp에서 260dp로 축소하여 하단 리스트 노출 면적 확대
+    Box(modifier = Modifier.fillMaxWidth().height(260.dp).background(Color.Black)) {
         TmdbAsyncImage(title = title, posterPath = series.posterPath, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, isLarge = true)
         Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(colors = listOf(Color.Transparent, Color(0xFF0F0F0F).copy(alpha = 0.5f), Color(0xFF0F0F0F)))))
-        Column(modifier = Modifier.align(Alignment.BottomStart).padding(start = horizontalPadding, bottom = 24.dp).fillMaxWidth(0.6f)) {
-            Text(text = title.cleanTitle(), color = Color.White, style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Black, shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 10f)))
-            Spacer(Modifier.height(12.dp))
+        Column(modifier = Modifier.align(Alignment.BottomStart).padding(start = horizontalPadding, bottom = 20.dp).fillMaxWidth(0.6f)) {
+            Text(text = title.cleanTitle(), color = Color.White, style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black, shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 10f)))
+            Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Button(
                     onClick = onWatchClick, 
                     colors = ButtonDefaults.buttonColors(containerColor = if (isPlayFocused) Color.White else Color.Red), 
                     shape = RoundedCornerShape(8.dp), 
-                    modifier = Modifier.height(36.dp).onFocusChanged { isPlayFocused = it.isFocused }
+                    modifier = Modifier.height(32.dp).onFocusChanged { isPlayFocused = it.isFocused }
                 ) {
-                    Icon(Icons.Default.PlayArrow, null, tint = if (isPlayFocused) Color.Black else Color.White, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.PlayArrow, null, tint = if (isPlayFocused) Color.Black else Color.White, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("시청하기", color = if (isPlayFocused) Color.Black else Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("시청하기", color = if (isPlayFocused) Color.Black else Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
-                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(10.dp))
                 Button(
                     onClick = onInfoClick, 
                     shape = RoundedCornerShape(8.dp), 
                     colors = ButtonDefaults.buttonColors(containerColor = if (isInfoFocused) Color.Gray.copy(alpha = 0.6f) else Color.Gray.copy(alpha = 0.3f)), 
-                    modifier = Modifier.height(36.dp).onFocusChanged { isInfoFocused = it.isFocused }
+                    modifier = Modifier.height(32.dp).onFocusChanged { isInfoFocused = it.isFocused }
                 ) {
-                    Icon(Icons.Default.Info, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Info, null, tint = Color.White, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("상세 정보", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("상세 정보", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
         }
@@ -69,26 +70,27 @@ fun HeroSection(
 
 @Composable
 fun SectionTitle(title: String, horizontalPadding: androidx.compose.ui.unit.Dp) {
-    // 테마명과 영상 사이 간격을 20dp에서 10dp로 절반 축소
-    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, bottom = 10.dp), color = Color(0xFFE0E0E0), fontWeight = FontWeight.Bold, fontSize = 18.sp, letterSpacing = 0.5.sp)
+    // 테마명과 영상 사이 간격을 8dp에서 4dp로 절반 축소
+    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, bottom = 4.dp), color = Color(0xFFE0E0E0), fontWeight = FontWeight.Bold, fontSize = 16.sp, letterSpacing = 0.5.sp)
 }
 
 @Composable
 fun SkeletonHero() {
-    Box(modifier = Modifier.fillMaxWidth().height(320.dp).background(Color(0xFF1A1A1A)))
+    Box(modifier = Modifier.fillMaxWidth().height(260.dp).background(Color(0xFF1A1A1A)))
 }
 
 @Composable
 fun SkeletonRow(horizontalPadding: androidx.compose.ui.unit.Dp) {
-    Column(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
-        Box(modifier = Modifier.padding(start = horizontalPadding, bottom = 10.dp).width(120.dp).height(20.dp).background(Color(0xFF1A1A1A)))
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        // 스켈레톤 타이틀과 영상 사이 간격도 4dp로 축소
+        Box(modifier = Modifier.padding(start = horizontalPadding, bottom = 4.dp).width(100.dp).height(16.dp).background(Color(0xFF1A1A1A)))
         LazyRow(
             contentPadding = PaddingValues(start = horizontalPadding, end = horizontalPadding),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             userScrollEnabled = false
         ) {
             items(5) {
-                Box(modifier = Modifier.width(150.dp).height(225.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF1A1A1A)))
+                Box(modifier = Modifier.width(120.dp).height(165.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF1A1A1A)))
             }
         }
     }

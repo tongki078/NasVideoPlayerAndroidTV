@@ -21,7 +21,7 @@ import org.nas.videoplayerandroidtv.ui.home.NetflixTvPivotRow
 fun MovieRow(
     title: String,
     seriesList: List<Series>,
-    repository: VideoRepository, // 미리보기를 위해 리포지토리 추가
+    repository: VideoRepository,
     onSeriesClick: (Series) -> Unit
 ) {
     if (seriesList.isEmpty()) return
@@ -29,23 +29,21 @@ fun MovieRow(
     val lazyListState = rememberLazyListState()
     val standardMargin = 20.dp 
     
-    // 행별 포커스 상태 관리
     val rowFocusIndices = remember { mutableStateMapOf<String, Int>() }
     val rowKey = remember(title) { "row_$title" }
     
-    Column(modifier = Modifier.padding(top = 4.dp)) {
+    Column(modifier = Modifier.padding(top = 0.dp)) { // 상단 여백 제거
         Text(
             text = title,
             style = MaterialTheme.typography.titleMedium.copy(
                 fontWeight = FontWeight.Bold,
-                fontSize = 18.sp,
+                fontSize = 16.sp, // 폰트 크기 통일
                 letterSpacing = 0.5.sp
             ),
             color = Color(0xFFE0E0E0),
-            modifier = Modifier.padding(start = standardMargin, bottom = 20.dp)
+            modifier = Modifier.padding(start = standardMargin, bottom = 4.dp) // 간격 4dp로 축소
         )
         
-        // 홈 화면과 동일한 피벗 로우 사용
         NetflixTvPivotRow(
             state = lazyListState,
             items = seriesList,
@@ -54,7 +52,6 @@ fun MovieRow(
             rowFocusIndices = rowFocusIndices,
             keySelector = { it.title + (it.fullPath ?: "") }
         ) { series, index, rowState, focusRequester, marginPx, focusedIndex ->
-            // 홈 화면과 동일한 피벗 아이템 사용
             NetflixPivotItem(
                 title = series.title,
                 posterPath = series.posterPath,

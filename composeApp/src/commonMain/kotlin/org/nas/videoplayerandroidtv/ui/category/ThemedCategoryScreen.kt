@@ -170,9 +170,9 @@ fun ThemedCategoryScreen(
                     Text("영상이 없습니다.", color = Color.Gray)
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(top = 8.dp, bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // 리스트 간 간격을 12.dp에서 4.dp로 절반 이상 축소
+                LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(top = 8.dp, bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     items(themedSections, key = { it.id }) { section ->
-                        // MovieRow 호출 시 repository 전달
                         MovieRow(
                             title = section.title, 
                             seriesList = section.seriesList, 
