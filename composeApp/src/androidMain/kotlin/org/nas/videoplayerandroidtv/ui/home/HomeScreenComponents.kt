@@ -34,10 +34,10 @@ fun HeroSection(
     var isPlayFocused by remember { mutableStateOf(false) }
     var isInfoFocused by remember { mutableStateOf(false) }
     val title = series.title
-    // 상단 히어로 섹션 높이를 320dp에서 260dp로 축소하여 하단 리스트 노출 면적 확대
     Box(modifier = Modifier.fillMaxWidth().height(260.dp).background(Color.Black)) {
         TmdbAsyncImage(title = title, posterPath = series.posterPath, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, isLarge = true)
-        Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(colors = listOf(Color.Transparent, Color(0xFF0F0F0F).copy(alpha = 0.5f), Color(0xFF0F0F0F)))))
+        // 하단 그라데이션 색상을 완전한 검은색으로 변경하여 전체 배경과 통일
+        Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.5f), Color.Black))))
         Column(modifier = Modifier.align(Alignment.BottomStart).padding(start = horizontalPadding, bottom = 20.dp).fillMaxWidth(0.6f)) {
             Text(text = title.cleanTitle(), color = Color.White, style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black, shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 10f)))
             Spacer(Modifier.height(10.dp))
@@ -70,27 +70,25 @@ fun HeroSection(
 
 @Composable
 fun SectionTitle(title: String, horizontalPadding: androidx.compose.ui.unit.Dp) {
-    // 테마명과 영상 사이 간격을 8dp에서 4dp로 절반 축소
-    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, bottom = 4.dp), color = Color(0xFFE0E0E0), fontWeight = FontWeight.Bold, fontSize = 16.sp, letterSpacing = 0.5.sp)
+    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, bottom = 0.dp), color = Color(0xFFE0E0E0), fontWeight = FontWeight.Bold, fontSize = 16.sp, letterSpacing = 0.5.sp)
 }
 
 @Composable
 fun SkeletonHero() {
-    Box(modifier = Modifier.fillMaxWidth().height(260.dp).background(Color(0xFF1A1A1A)))
+    Box(modifier = Modifier.fillMaxWidth().height(260.dp).background(Color.Black))
 }
 
 @Composable
 fun SkeletonRow(horizontalPadding: androidx.compose.ui.unit.Dp) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        // 스켈레톤 타이틀과 영상 사이 간격도 4dp로 축소
-        Box(modifier = Modifier.padding(start = horizontalPadding, bottom = 4.dp).width(100.dp).height(16.dp).background(Color(0xFF1A1A1A)))
+        Box(modifier = Modifier.padding(start = horizontalPadding, bottom = 0.dp).width(100.dp).height(16.dp).background(Color(0xFF1A1A1A)))
         LazyRow(
             contentPadding = PaddingValues(start = horizontalPadding, end = horizontalPadding),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             userScrollEnabled = false
         ) {
             items(5) {
-                Box(modifier = Modifier.width(120.dp).height(165.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF1A1A1A)))
+                Box(modifier = Modifier.width(135.dp).height(175.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF1A1A1A)))
             }
         }
     }

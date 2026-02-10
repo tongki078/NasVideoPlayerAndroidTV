@@ -56,7 +56,7 @@ fun <T> NetflixTvPivotRow(
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .height(280.dp) // 행 전체 높이를 360dp에서 280dp로 대폭 축소
+            .height(300.dp) // 요청하신 대로 행 전체 높이를 300dp로 조정
             .focusProperties {
                 enter = {
                     val lastIdx = rowFocusIndices[rowKey] ?: 0
@@ -65,7 +65,7 @@ fun <T> NetflixTvPivotRow(
             },
         state = state,
         contentPadding = PaddingValues(start = marginValue, end = marginValue, bottom = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp), // 간격도 약간 좁힘
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically 
     ) {
         itemsIndexed(items, key = { _, item -> keySelector(item) }) { index, item ->
@@ -124,11 +124,10 @@ fun NetflixPivotItem(
         }
     }
 
-    // 75인치 대형 TV를 고려하여 전체적인 DP 스케일 하향 조정
-    // 포커스 시 16:9 비율 유지 (높이 180dp 기준 너비 320dp)
-    val itemWidth = if (isFocused) 320.dp else 120.dp
-    val posterMaxHeight = 180.dp // 기존 245dp에서 180dp로 축소
-    val infoAreaHeight = 70.dp 
+    // 행 높이 300dp에 맞춘 새로운 스케일 적용
+    val itemWidth = if (isFocused) 330.dp else 135.dp
+    val posterMaxHeight = 185.dp 
+    val infoAreaHeight = 65.dp 
     val totalItemHeight = posterMaxHeight + infoAreaHeight
 
     val alpha = when {
@@ -154,7 +153,6 @@ fun NetflixPivotItem(
                 .focusable(interactionSource = interactionSource)
                 .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
         ) {
-            // 영상/포스터 영역
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -164,7 +162,7 @@ fun NetflixPivotItem(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (isFocused) 180.dp else 165.dp) // 기본 165dp, 포커스 시 180dp
+                        .height(if (isFocused) 185.dp else 175.dp) // 기본 175dp, 포커스 시 185dp
                         .clip(RoundedCornerShape(6.dp))
                         .border(
                             width = if (isFocused) 2.dp else 0.dp,
@@ -185,7 +183,6 @@ fun NetflixPivotItem(
                 }
             }
             
-            // 정보 영역
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -195,21 +192,21 @@ fun NetflixPivotItem(
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 4.dp, vertical = 6.dp)
+                            .padding(horizontal = 6.dp, vertical = 6.dp)
                     ) {
                         Text(
                             text = title.cleanTitle(),
                             color = Color.White,
-                            fontSize = 13.sp, // 폰트 크기도 소폭 하향
+                            fontSize = 13.sp, 
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
 
-                        Spacer(Modifier.height(2.dp))
+                        Spacer(Modifier.height(4.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(text = rating, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                            Spacer(Modifier.width(6.dp))
+                            Spacer(Modifier.width(8.dp))
                             Text(text = "2024", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
                         }
                     }

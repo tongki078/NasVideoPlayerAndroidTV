@@ -36,7 +36,8 @@ fun HomeScreen(
         ?: homeSections.firstOrNull()?.items?.firstOrNull()
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF0F0F0F))) {
+    // 전체 배경을 완전한 검은색으로 변경
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = lazyListState,
@@ -69,7 +70,6 @@ fun HomeScreen(
                         val rowKey = "watch_history"
                         val historyRowState = rowStates.getOrPut(rowKey) { LazyListState() }
 
-                        // 행 간 간격 축소 (패딩 제거)
                         Column(modifier = Modifier.fillMaxWidth()) { 
                             SectionTitle("시청 중인 콘텐츠", standardMargin)
                             
@@ -103,7 +103,6 @@ fun HomeScreen(
                     val rowKey = "row_${section.title}"
                     val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
 
-                    // 행 간 간격 축소 (패딩 제거)
                     Column(modifier = Modifier.fillMaxWidth()) { 
                         SectionTitle(section.title, standardMargin)
                         

@@ -149,7 +149,8 @@ fun ThemedCategoryScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF0F0F0F))) {
+    // TopBar와 동일한 완전한 검은색으로 배경 통일
+    Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         if (modes.isNotEmpty()) {
             LazyRow(
                 modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 12.dp, start = 48.dp, end = 48.dp),
@@ -170,8 +171,7 @@ fun ThemedCategoryScreen(
                     Text("영상이 없습니다.", color = Color.Gray)
                 }
             } else {
-                // 리스트 간 간격을 12.dp에서 4.dp로 절반 이상 축소
-                LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(top = 8.dp, bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(top = 0.dp, bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     items(themedSections, key = { it.id }) { section ->
                         MovieRow(
                             title = section.title, 
@@ -189,11 +189,31 @@ fun ThemedCategoryScreen(
 @Composable
 private fun CategoryTabItem(text: String, isSelected: Boolean, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
-    val backgroundColor by animateColorAsState(targetValue = when { isFocused -> Color.White; isSelected -> Color.White.copy(alpha = 0.15f); else -> Color.Transparent })
-    val textColor by animateColorAsState(targetValue = when { isFocused -> Color.Black; isSelected -> Color.White; else -> Color.Gray })
+    
+    // 선택되었을 때 원래의 흐릿한 회색 배경(0.15f)을 다시 적용
+    val backgroundColor by animateColorAsState(targetValue = when { 
+        isFocused -> Color.White 
+        isSelected -> Color.White.copy(alpha = 0.15f)
+        else -> Color.Transparent 
+    })
+    val textColor by animateColorAsState(targetValue = when { 
+        isFocused -> Color.Black 
+        isSelected -> Color.White 
+        else -> Color.Gray 
+    })
     val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
 
-    Box(modifier = Modifier.scale(scale).clip(RoundedCornerShape(10.dp)).background(backgroundColor).onFocusChanged { isFocused = it.isFocused }.focusable().clickable { onClick() }.padding(horizontal = 20.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
+    Box(
+        modifier = Modifier
+            .scale(scale)
+            .clip(RoundedCornerShape(10.dp))
+            .background(backgroundColor)
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable()
+            .clickable { onClick() }
+            .padding(horizontal = 20.dp, vertical = 8.dp), 
+        contentAlignment = Alignment.Center
+    ) {
         Text(text = text, color = textColor, fontWeight = if (isFocused || isSelected) FontWeight.Bold else FontWeight.Medium, fontSize = 15.sp)
     }
 }
