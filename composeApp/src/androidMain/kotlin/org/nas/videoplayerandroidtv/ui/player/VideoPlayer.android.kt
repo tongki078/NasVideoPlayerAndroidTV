@@ -31,7 +31,9 @@ actual fun VideoPlayer(
     url: String,
     modifier: Modifier,
     initialPosition: Long,
+    seekToPosition: Long,
     onPositionUpdate: ((Long) -> Unit)?,
+    onDurationDetermined: ((Long) -> Unit)?,
     onControllerVisibilityChanged: ((Boolean) -> Unit)?,
     onFullscreenClick: (() -> Unit)?,
     onVideoEnded: (() -> Unit)?
@@ -40,7 +42,7 @@ actual fun VideoPlayer(
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnVideoEnded by rememberUpdatedState(onVideoEnded)
     val currentOnPositionUpdate by rememberUpdatedState(onPositionUpdate)
-    val currentOnVisibilityChanged by rememberUpdatedState(onControllerVisibilityChanged)
+    val currentOnDurationDetermined by rememberUpdatedState(onDurationDetermined)
 
     val exoPlayer = remember {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
@@ -56,22 +58,31 @@ actual fun VideoPlayer(
                     .build(),
                 true 
             )
-            // 4K 재생을 위해 비디오 스케일링 모드를 최적화합니다.
             .setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT)
             .build().apply {
                 playWhenReady = true
                 volume = 1.0f
                 addListener(object : Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
-                        Log.e("VideoPlayer", "❌ 재생 에러: ${error.errorCodeName} (${error.errorCode}) - ${error.message}")
+                        Log.e("VideoPlayer", "❌ 재생 에러: ${error.errorCodeName} (${error.errorCode})")
                     }
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         if (playbackState == Player.STATE_ENDED) {
                             currentOnVideoEnded?.invoke()
                         }
+                        if (playbackState == Player.STATE_READY) {
+                            currentOnDurationDetermined?.invoke(duration)
+                        }
                     }
                 })
             }
+    }
+
+    LaunchedEffect(seekToPosition) {
+        if (seekToPosition >= 0) {
+            exoPlayer.seekTo(seekToPosition)
+            exoPlayer.play()
+        }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -95,16 +106,13 @@ actual fun VideoPlayer(
             if (exoPlayer.isPlaying) {
                 currentOnPositionUpdate?.invoke(exoPlayer.currentPosition)
             }
-            delay(1000)
+            delay(500)
         }
     }
 
     LaunchedEffect(url) {
         if (url.isBlank()) return@LaunchedEffect
-        Log.d("VideoPlayer", "🎬 재생 시도: $url")
-        val mediaItem = MediaItem.Builder()
-            .setUri(url)
-            .build()
+        val mediaItem = MediaItem.Builder().setUri(url).build()
         exoPlayer.setMediaItem(mediaItem)
         if (initialPosition > 0) exoPlayer.seekTo(initialPosition)
         exoPlayer.prepare()
@@ -115,13 +123,9 @@ actual fun VideoPlayer(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     player = exoPlayer
-                    useController = true
-                    // 4K 화면에서 더 안정적인 TextureView 사용을 고려할 수 있으나, 
-                    // 일단 하드웨어 가속 성능이 좋은 SurfaceView(기본값)를 유지하며 설정만 최적화합니다.
+                    // 커스텀 UI를 사용하기 위해 자체 컨트롤러 비활성화
+                    useController = false
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
-                        currentOnVisibilityChanged?.invoke(visibility == View.VISIBLE)
-                    })
                     setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                 }
             },

@@ -8,7 +8,9 @@ expect fun VideoPlayer(
     url: String, 
     modifier: Modifier = Modifier,
     initialPosition: Long = 0L,
+    seekToPosition: Long = -1L,
     onPositionUpdate: ((Long) -> Unit)? = null,
+    onDurationDetermined: ((Long) -> Unit)? = null,
     onControllerVisibilityChanged: ((Boolean) -> Unit)? = null,
     onFullscreenClick: (() -> Unit)? = null,
     onVideoEnded: (() -> Unit)? = null

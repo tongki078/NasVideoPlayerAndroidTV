@@ -17,9 +17,9 @@ DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "9.5" # 9.5 유지하여 자동 재스캔 방지
+CACHE_VERSION = "9.5"
 
-# TMDB API KEY (공백 제거)
+# TMDB API KEY (Bearer 또는 API Key)
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk".strip()
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
@@ -57,37 +57,23 @@ GLOBAL_CACHE = {
 def nfc(text): return unicodedata.normalize('NFC', text) if text else ""
 def nfd(text): return unicodedata.normalize('NFD', text) if text else ""
 
-# --- [개선된 정규식] ---
+# --- [정규식 및 유틸리티] ---
 REGEX_EXT = re.compile(r'\.[a-zA-Z0-9]{2,4}$')
 REGEX_YEAR = re.compile(r'\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)')
-REGEX_BRACKETS = re.compile(r'\[.*?\]|\(.*?\)')
-REGEX_JUNK = re.compile(r'(?i)\s*(?:더빙|자막|극장판|더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|최종화|TV판|완결|속편|상|하|1부|2부|파트)\s*')
-REGEX_EP_MARKER = re.compile(r'(?i)(?:^|[.\s_]|(?<=[가-힣]))(?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기|화|회|기)|Season\s*\d+|Part\s*\d+).*')
-REGEX_TECHNICAL = re.compile(r'(?i)[.\s_](?:\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI).*')
-REGEX_SPECIAL = re.compile(r'[._\-!?【】『』「」"\'#@*※:]')
-REGEX_SPACES = re.compile(r'\s+')
+REGEX_EP_MARKER = re.compile(r'(?i)(?:^|[.\s_]|(?<=[가-힣]))(?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+).*')
 REGEX_FORBIDDEN_TITLE = re.compile(r'(?i)^\s*(Season\s*\d+|Part\s*\d+|EP\s*\d+|\d+화|\d+회|\d+기|시즌\s*\d+|S\d+|E\d+)\s*$', re.I)
 
 def clean_title_complex(title):
     if not title: return "", None
     title = nfc(title)
     cleaned = REGEX_EXT.sub('', title)
-
-    # 연도 분리
     year_match = REGEX_YEAR.search(cleaned)
     year = year_match.group().replace('(', '').replace(')', '') if year_match else None
     cleaned = REGEX_YEAR.sub(' ', cleaned)
-
-    cleaned = REGEX_JUNK.sub(' ', cleaned)
     cleaned = REGEX_EP_MARKER.sub(' ', cleaned)
-    cleaned = REGEX_BRACKETS.sub(' ', cleaned)
-    cleaned = REGEX_TECHNICAL.sub('', cleaned)
-    cleaned = REGEX_SPECIAL.sub(' ', cleaned)
-    cleaned = REGEX_SPACES.sub(' ', cleaned).strip()
-
-    if not cleaned or len(cleaned) < 1:
-        cleaned = REGEX_EXT.sub('', title)
-        cleaned = REGEX_YEAR.sub('', cleaned).strip()
+    cleaned = re.sub(r'\[.*?\]|\(.*?\)', ' ', cleaned)
+    cleaned = re.sub(r'[._\-!?【】『』「」"\'#@*※:]', ' ', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned, year
 
 def get_real_path(path):
@@ -110,80 +96,44 @@ def resolve_nas_path(app_path):
         return resolved, type_code
     return None, None
 
-# --- [TMDB 검색 및 정보 수집] ---
-def get_tmdb_cache_path(title):
-    h = hashlib.md5(nfc(title).encode()).hexdigest()
-    return os.path.join(TMDB_CACHE_DIR, f"{h}.json")
-
-def search_tmdb_api(query, year=None):
-    if not query or len(query) < 1 or REGEX_FORBIDDEN_TITLE.match(query): return None
-    params = {"query": query, "language": "ko-KR", "include_adult": "false", "region": "KR"}
-    if year: params["year"] = year # API 레벨에서 연도 필터링
-
-    headers = {"Authorization": f"Bearer {TMDB_API_KEY}"} if TMDB_API_KEY.startswith("eyJ") else {}
-    if not headers: params["api_key"] = TMDB_API_KEY
-
-    try:
-        resp = requests.get(f"{TMDB_BASE_URL}/search/multi", params=params, headers=headers, timeout=5)
-        data = resp.json()
-        results = [r for r in data.get('results', []) if r.get('media_type') in ['movie', 'tv']]
-        if results: return results[0]
-    except: pass
-    return None
-
 def get_tmdb_info_server(title, ignore_cache=False):
     if not title: return {"failed": True}
-
-    # 경로일 경우 마지막 이름만 추출
     title_pure = nfc(title).split('/')[-1]
-    cp = get_tmdb_cache_path(title_pure)
-
+    cp = os.path.join(TMDB_CACHE_DIR, f"{hashlib.md5(title_pure.encode()).hexdigest()}.json")
     if not ignore_cache and os.path.exists(cp):
         try:
-            with open(cp, 'r', encoding='utf-8') as f:
-                d = json.load(f)
-                if d and (not d.get("failed") or d.get("forbidden")): return d
+            with open(cp, 'r', encoding='utf-8') as f: return json.load(f)
         except: pass
 
-    ct, extracted_year = clean_title_complex(title_pure)
+    ct, year = clean_title_complex(title_pure)
     if REGEX_FORBIDDEN_TITLE.match(ct) or ct.lower() in ["season", "series", "video", "episode"]:
         info = {"failed": True, "forbidden": True}
         with open(cp, 'w', encoding='utf-8') as f: json.dump(info, f, ensure_ascii=False)
         return info
 
-    print(f"  [TMDB-SEARCH] '{title_pure}' -> '{ct}' ({extracted_year})", flush=True)
+    print(f"  [TMDB-SEARCH] '{title_pure}' -> '{ct}' ({year})", flush=True)
+    params = {"query": ct, "language": "ko-KR", "include_adult": "false", "region": "KR"}
+    if year: params["year"] = year
+    headers = {"Authorization": f"Bearer {TMDB_API_KEY}"} if TMDB_API_KEY.startswith("eyJ") else {}
+    if not headers: params["api_key"] = TMDB_API_KEY
 
-    # 1. 연도가 있다면 연도와 함께 검색 (최우선)
-    best = None
-    if extracted_year:
-        best = search_tmdb_api(ct, extracted_year)
-
-    # 2. 실패 시 일반 검색 (단, 제목이 너무 짧지 않을 때만)
-    if not best and len(ct) >= 2:
-        best = search_tmdb_api(ct)
-
-    # 3. 여전히 실패 시 첫 단어로 재시도
-    if not best:
-        words = ct.split(' ')
-        if len(words) > 1: best = search_tmdb_api(words[0], extracted_year)
-
-    if best:
-        m_type, t_id = best.get('media_type'), best.get('id')
-        try:
-            headers = {"Authorization": f"Bearer {TMDB_API_KEY}"} if TMDB_API_KEY.startswith("eyJ") else {}
-            params = {} if headers else {"api_key": TMDB_API_KEY}
-            d_resp = requests.get(f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings", params=params, headers=headers, timeout=5)
-            d_data = d_resp.json()
-            year = (d_data.get('release_date') or d_data.get('first_air_date') or "").split('-')[0]
+    try:
+        resp = requests.get(f"{TMDB_BASE_URL}/search/multi", params=params, headers=headers, timeout=5).json()
+        results = [r for r in resp.get('results', []) if r.get('media_type') in ['movie', 'tv']]
+        if results:
+            best = results[0]
+            m_type, t_id = best.get('media_type'), best.get('id')
+            d_resp = requests.get(f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings", params=params, headers=headers, timeout=5).json()
+            year_val = (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0]
             rating = None
-            if 'content_ratings' in d_data:
-                results_list = d_data['content_ratings'].get('results', [])
+            if 'content_ratings' in d_resp:
+                results_list = d_resp['content_ratings'].get('results', [])
                 kr = next((r['rating'] for r in results_list if r.get('iso_3166_1') == 'KR'), None)
                 if kr: rating = f"{kr}+" if kr.isdigit() else kr
-            info = {"genreIds": [g['id'] for g in d_data.get('genres', [])], "posterPath": d_data.get('poster_path'), "year": year, "overview": d_data.get('overview'), "rating": rating, "seasonCount": d_data.get('number_of_seasons'), "failed": False}
+            info = {"genreIds": [g['id'] for g in d_resp.get('genres', [])], "posterPath": d_resp.get('poster_path'), "year": year_val, "overview": d_resp.get('overview'), "rating": rating, "seasonCount": d_resp.get('number_of_seasons'), "failed": False}
             with open(cp, 'w', encoding='utf-8') as f: json.dump(info, f, ensure_ascii=False)
             return info
-        except: pass
+    except: pass
     with open(cp, 'w', encoding='utf-8') as f: json.dump({"failed": True}, f, ensure_ascii=False)
     return {"failed": True}
 
@@ -195,13 +145,11 @@ def attach_tmdb_info(cat):
     return cat
 
 def fetch_metadata_async(force_all=False):
-    print(f"🚀 [METADATA] 시작 (강제: {force_all})", flush=True)
+    print(f"🚀 [METADATA] 시작", flush=True)
     tasks = []
     for k in ["foreigntv", "koreantv", "air", "animations_all", "movies"]:
         for cat in GLOBAL_CACHE.get(k, []):
-            if force_all or (not cat.get('posterPath') and not cat.get('failed')):
-                tasks.append(cat)
-    if not tasks: return
+            if force_all or (not cat.get('posterPath') and not cat.get('failed')): tasks.append(cat)
     for cat in tasks:
         info = get_tmdb_info_server(cat['name'], ignore_cache=force_all)
         cat.update(info)
@@ -209,31 +157,11 @@ def fetch_metadata_async(force_all=False):
     build_home_recommend(); save_cache()
     print(f"🏁 [METADATA] 완료", flush=True)
 
-def build_home_recommend():
-    print("🏠 [HOME] 고속 추천 목록 사전 빌드 중...", flush=True)
-    def prep(items, prefix):
-        res = []
-        for it in items:
-            c = it.copy(); c['movies'] = []
-            if c.get('path') and not c['path'].startswith(prefix): c['path'] = f"{prefix}/{c['path']}"
-            res.append(c)
-        return res
-    m, a, k, f = prep(GLOBAL_CACHE.get("movies", []), "영화"), prep(GLOBAL_CACHE.get("animations_all", []), "애니메이션"), prep(GLOBAL_CACHE.get("koreantv", []), "국내TV"), prep(GLOBAL_CACHE.get("foreigntv", []), "외국TV")
-    all_p = list(m + a + k + f); random.shuffle(all_p)
-    GLOBAL_CACHE["home_recommend"] = [{"title": "지금 가장 핫한 인기작", "items": all_p[:20]}, {"title": "방금 올라온 최신 영화", "items": m[:20]}, {"title": "지금 가장 인기 있는 시리즈", "items": (k + f)[:20]}, {"title": "추천 애니메이션", "items": a[:20]}]
-
-def get_movie_info(fp, base, prefix):
-    try: rel = nfc(os.path.relpath(fp, base))
-    except: rel = nfc(os.path.basename(fp))
-    tid = hashlib.md5(f"{prefix}_{rel}".encode()).hexdigest() + ".jpg"
-    return {"id": tid, "title": os.path.basename(fp), "videoUrl": f"/video_serve?type={prefix}&path={urllib.parse.quote(rel)}", "thumbnailUrl": f"/thumb_serve?type={prefix}&id={tid}&path={urllib.parse.quote(rel)}"}
-
 def scan_recursive(bp, prefix, rb=None):
     cats = []
     exts = ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
     p, rel_base = get_real_path(bp), get_real_path(rb) if rb else get_real_path(bp)
     if not os.path.exists(p): return cats
-    print(f"📂 [SCAN] {prefix.upper()} 시작: {p}", flush=True)
     all_f = []
     for root, dirs, files in os.walk(p):
         dirs[:] = [d for d in dirs if not any(ex in d for ex in EXCLUDE_FOLDERS) and not d.startswith('.')]
@@ -254,6 +182,29 @@ def scan_recursive(bp, prefix, rb=None):
         cats.append(attach_tmdb_info({"name": nfc(os.path.basename(curr)), "movies": movies, "path": rel_path}))
     return cats
 
+def get_movie_info(fp, base, prefix):
+    rel = nfc(os.path.relpath(fp, base))
+    tid = hashlib.md5(f"{prefix}_{rel}".encode()).hexdigest() + ".jpg"
+    return {"id": tid, "title": os.path.basename(fp), "videoUrl": f"/video_serve?type={prefix}&path={urllib.parse.quote(rel)}", "thumbnailUrl": f"/thumb_serve?type={prefix}&id={tid}&path={urllib.parse.quote(rel)}"}
+
+def build_home_recommend():
+    print("🏠 [HOME] 고속 추천 목록 사전 빌드 중...", flush=True)
+    def prep(items, prefix):
+        res = []
+        for it in items:
+            c = it.copy(); c['movies'] = []
+            if c.get('path') and not c['path'].startswith(prefix): c['path'] = f"{prefix}/{c['path']}"
+            res.append(c)
+        return res
+    m, a, k, f = prep(GLOBAL_CACHE.get("movies", []), "영화"), prep(GLOBAL_CACHE.get("animations_all", []), "애니메이션"), prep(GLOBAL_CACHE.get("koreantv", []), "국내TV"), prep(GLOBAL_CACHE.get("foreigntv", []), "외국TV")
+    all_p = list(m + a + k + f); random.shuffle(all_p)
+    GLOBAL_CACHE["home_recommend"] = [
+        {"title": "지금 가장 핫한 인기작", "items": all_p[:20]},
+        {"title": "방금 올라온 최신 영화", "items": m[:20]},
+        {"title": "지금 인기 있는 시리즈", "items": (k + f)[:20]},
+        {"title": "추천 애니메이션", "items": a[:20]}
+    ]
+
 def perform_full_scan(reason="필요"):
     print(f"\n🔄 사유: {reason} -> 전체 파일 스캔 시작", flush=True)
     t = [("air", AIR_DIR, "air"), ("animations_all", ANI_DIR, "anim_all"), ("movies", MOVIES_ROOT_DIR, "movie"), ("foreigntv", FOREIGN_TV_DIR, "ftv"), ("koreantv", KOREAN_TV_DIR, "ktv")]
@@ -268,40 +219,29 @@ def load_cache():
         try:
             with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 d = json.load(f)
-                if d.get("version") == CACHE_VERSION: GLOBAL_CACHE.update(d); print(f"✅ [BOOT] 로드 완료 (v{CACHE_VERSION})", flush=True); return True
+                if d.get("version") == CACHE_VERSION: GLOBAL_CACHE.update(d); return True
         except: pass
     return False
 
 def save_cache():
     try:
         with open(CACHE_FILE, 'w', encoding='utf-8') as f: json.dump(GLOBAL_CACHE, f, ensure_ascii=False)
-        print(f"💾 [CACHE] 서버 상태 저장 완료", flush=True)
     except: pass
 
 def init_server():
     print(f"📺 NAS Server v{CACHE_VERSION} 시작", flush=True)
-    loaded = load_cache()
-    threading.Thread(target=fetch_metadata_async, daemon=True).start()
-    def background_resume():
-        if not loaded: perform_full_scan(reason="최초 실행")
-        else:
-            for k, p, pr in [("foreigntv", FOREIGN_TV_DIR, "ftv"), ("koreantv", KOREAN_TV_DIR, "ktv"), ("air", AIR_DIR, "air"), ("animations_all", ANI_DIR, "anim_all"), ("movies", MOVIES_ROOT_DIR, "movie")]:
-                if not GLOBAL_CACHE.get(k): GLOBAL_CACHE[k] = scan_recursive(p, pr); save_cache()
-            build_home_recommend()
-    threading.Thread(target=background_resume, daemon=True).start()
+    if not load_cache(): perform_full_scan(reason="최초 실행")
+    else: build_home_recommend()
 
 init_server()
 
 # --- [API 엔드포인트] ---
+@app.route('/home')
+def get_home(): return jsonify(GLOBAL_CACHE.get("home_recommend", []))
 @app.route('/scan')
 def manual_scan(): threading.Thread(target=perform_full_scan, args=("사용자 요청",)).start(); return "스캔 시작"
-
-@app.route('/test_match')
-def test_match():
-    q = request.args.get('q', '')
-    if not q: return "Usage: /test_match?q=제목"
-    info = get_tmdb_info_server(q, ignore_cache=True)
-    return jsonify({"input": q, "result": info})
+@app.route('/refresh_metadata')
+def refresh_metadata(): threading.Thread(target=fetch_metadata_async, kwargs={"force_all": True}).start(); return "메타데이터 재매칭 시작"
 
 @app.route('/debug_match')
 def debug_match():
@@ -320,13 +260,14 @@ def debug_match():
     final_info = get_tmdb_info_server(q, ignore_cache=True)
     return jsonify({"input_original": q, "step1_cleaned_title": ct, "step1_extracted_year": year, "step2_raw_tmdb_results": search_data.get('results', []), "step3_final_processed_info": final_info})
 
-@app.route('/refresh_metadata')
-def refresh_metadata():
-    threading.Thread(target=fetch_metadata_async, kwargs={"force_all": True}).start()
-    return "메타데이터 전체 재매칭 시작 (파일 스캔 없음)"
+def process_data(data, lite=False):
+    if lite: return [{"name": c.get('name',''), "path": c.get('path',''), "movies": [], "genreIds": c.get('genreIds', []), "posterPath": c.get('posterPath'), "year": c.get('year'), "overview": c.get('overview'), "rating": c.get('rating'), "seasonCount": c.get('seasonCount'), "failed": c.get('failed', False)} for c in data]
+    return data
 
-@app.route('/home')
-def get_home(): return jsonify(GLOBAL_CACHE.get("home_recommend", []))
+def filter_by_path(pool, keyword):
+    target = nfc(keyword).replace(" ", "").lower()
+    return [c for c in pool if target in nfc(c.get('path', '')).replace(" ", "").lower()]
+
 @app.route('/air')
 def get_air(): return jsonify(process_data(GLOBAL_CACHE.get("air", []), request.args.get('lite') == 'true'))
 @app.route('/animations')
@@ -337,15 +278,6 @@ def get_animations():
 def get_dramas():
     res = [c for c in GLOBAL_CACHE.get("air", []) if "드라마" in c.get('path', '')]
     return jsonify(process_data(res, request.args.get('lite') == 'true'))
-
-def process_data(data, lite=False):
-    if lite: return [{"name": c.get('name',''), "path": c.get('path',''), "movies": [], "genreIds": c.get('genreIds', []), "posterPath": c.get('posterPath'), "year": c.get('year'), "overview": c.get('overview'), "rating": c.get('rating'), "seasonCount": c.get('seasonCount'), "failed": c.get('failed', False)} for c in data]
-    return data
-
-def filter_by_path(pool, keyword):
-    target = nfc(keyword).replace(" ", "").lower()
-    return [c for c in pool if target in nfc(c.get('path', '')).replace(" ", "").lower()]
-
 @app.route('/anim_raftel')
 def get_anim_raftel(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "라프텔"), request.args.get('lite') == 'true'))
 @app.route('/anim_series')
@@ -403,14 +335,11 @@ def get_list():
     if not path: return jsonify([])
     real_path, type_code = resolve_nas_path(path)
     if not real_path or not os.path.exists(real_path): return jsonify([])
-    if os.path.isfile(real_path): real_path = os.path.dirname(real_path)
     base_dir = PATH_MAP.get(path.split('/')[0], (None, None))[0]
-    res, movies, exts = [], [], ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
+    res, movies, exts = [], [], ('.mp4', '.mkv', '.avi', '.ts', '.tp')
     for entry in sorted(os.listdir(real_path)):
         fe = os.path.join(real_path, entry)
-        if any(ex in entry for ex in EXCLUDE_FOLDERS): continue
-        if os.path.isdir(fe):
-            res.append(attach_tmdb_info({"name": nfc(entry), "path": nfc(os.path.relpath(fe, base_dir)), "movies": []}))
+        if os.path.isdir(fe): res.append(attach_tmdb_info({"name": nfc(entry), "path": nfc(os.path.relpath(fe, base_dir)), "movies": []}))
         elif entry.lower().endswith(exts): movies.append(get_movie_info(fe, base_dir, type_code))
     if movies: res.append({"name": nfc(os.path.basename(real_path)), "path": nfc(os.path.relpath(real_path, base_dir)), "movies": movies})
     return jsonify(res)
@@ -419,22 +348,24 @@ def get_list():
 def video_serve():
     path, prefix = request.args.get('path'), request.args.get('type')
     base = {"ftv": FOREIGN_TV_DIR, "ktv": KOREAN_TV_DIR, "air": AIR_DIR, "anim_all": ANI_DIR, "movie": MOVIES_ROOT_DIR}.get(prefix)
-    if not base: return "Invalid Type", 400
     fp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path))))
-    if os.path.exists(fp): return send_file(fp, conditional=True, mimetype=mimetypes.guess_type(fp)[0] or 'video/mp4')
-    return "Not Found", 404
+    return send_file(fp, conditional=True)
 
 @app.route('/thumb_serve')
 def thumb_serve():
     path, prefix, tid = request.args.get('path'), request.args.get('type'), request.args.get('id')
+    try:
+        t_raw = float(request.args.get('t', '300'))
+        t = int(round(t_raw / 10.0) * 10)
+    except: t = 300
     base = {"ftv": FOREIGN_TV_DIR, "ktv": KOREAN_TV_DIR, "air": AIR_DIR, "anim_all": ANI_DIR, "movie": MOVIES_ROOT_DIR}.get(prefix)
     vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path))))
     if os.path.isdir(vp):
         fs = sorted([f for f in os.listdir(vp) if f.lower().endswith(('.mp4', '.mkv', '.avi'))])
         if fs: vp = os.path.join(vp, fs[0])
-    tp = os.path.join(DATA_DIR, tid)
+    tp = os.path.join(DATA_DIR, f"seek_{t}_{tid}")
     if not os.path.exists(tp):
-        try: subprocess.run([FFMPEG_PATH, "-y", "-ss", "00:05:00", "-i", vp, "-vframes", "1", "-q:v", "2", tp], timeout=15)
+        try: subprocess.run([FFMPEG_PATH, "-y", "-ss", str(t), "-i", vp, "-vframes", "1", "-q:v", "5", "-vf", "scale=320:-1", tp], timeout=10)
         except: pass
     return send_file(tp, mimetype='image/jpeg') if os.path.exists(tp) else ("Not Found", 404)
 
