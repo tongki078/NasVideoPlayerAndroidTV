@@ -145,7 +145,8 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun getAnimations(): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val results: List<Category> = client.get("$baseUrl/animations").body()
+            // 방송중 애니메이션 전용 라우터 호출
+            val results: List<Category> = client.get("$baseUrl/air_animations").body()
             results.flatMap { it.movies ?: emptyList() }.groupBySeriesInternal()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -194,7 +195,8 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun getDramas(): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val results: List<Category> = client.get("$baseUrl/dramas").body()
+            // 방송중 드라마 전용 라우터 호출
+            val results: List<Category> = client.get("$baseUrl/air_dramas").body()
             results.flatMap { it.movies ?: emptyList() }.groupBySeriesInternal()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -238,7 +240,7 @@ class VideoRepositoryImpl : VideoRepository {
                     if (filterKeyword != null) {
                         val target = filterKeyword.replace(" ", "").lowercase()
                         val pathNormalized = cat.path?.replace(" ", "")?.lowercase() ?: ""
-                        pathNormalized.startsWith(target) || name.replace(" ", "").lowercase().startsWith(target)
+                        pathNormalized.contains(target) || name.replace(" ", "").lowercase().contains(target)
                     } else true
                 }
                 filtered.groupCategoriesToSeries(prefix)
@@ -275,24 +277,13 @@ class VideoRepositoryImpl : VideoRepository {
 
     private suspend fun getAirDataInternal(filterKeyword: String? = null): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val response = client.get("$baseUrl/air")
+            val endpoint = if (filterKeyword == "라프텔") "/air_animations" else if (filterKeyword == "드라마") "/air_dramas" else "/air"
+            val response = client.get("$baseUrl$endpoint")
             if (response.status != HttpStatusCode.OK) return@withContext emptyList()
             
             val categories: List<Category> = response.body()
-            val normalizedKeyword = filterKeyword?.replace(" ", "")?.lowercase()
             
-            val filtered = categories.filter { cat -> 
-                val name = cat.name ?: ""
-                if (REGEX_INDEX_FOLDER.matches(name) || REGEX_YEAR_FOLDER.matches(name)) return@filter false
-                if (normalizedKeyword == null) true
-                else {
-                    val n = name.replace(" ", "").lowercase()
-                    val p = (cat.path ?: "").replace(" ", "").lowercase()
-                    n.contains(normalizedKeyword) || p.contains(normalizedKeyword)
-                }
-            }
-            
-            filtered.map { cat ->
+            categories.map { cat ->
                 Series(
                     title = cat.name ?: "Unknown",
                     episodes = emptyList(),

@@ -23,7 +23,7 @@ import org.nas.videoplayerandroidtv.ui.search.SearchScreen
 import org.nas.videoplayerandroidtv.ui.detail.SeriesDetailScreen
 import org.nas.videoplayerandroidtv.ui.player.VideoPlayerScreen
 import org.nas.videoplayerandroidtv.ui.common.NetflixTopBar
-import org.nas.videoplayerandroidtv.ui.category.ThemedCategoryScreen
+import org.nas.videoplayerandroidtv.ui.category.*
 import org.nas.videoplayerandroidtv.data.*
 import org.nas.videoplayerandroidtv.db.AppDatabase
 import app.cash.sqldelight.db.SqlDriver
@@ -83,7 +83,39 @@ fun App(driver: SqlDriver) {
     var homeSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
     var isHomeLoading by remember { mutableStateOf(false) } 
     
-    // alpha12 대응: 표준 rememberLazyListState 사용
+    // 카테고리 메모리 캐시: 이제 분류된 ThemeSection 리스트를 저장
+    val categoryCache = remember { mutableMapOf<String, List<ThemeSection>>() }
+
+    // 고도화된 프리페칭: 데이터 로드부터 분류까지 백그라운드에서 완료
+    LaunchedEffect(homeSections) {
+        if (homeSections.isNotEmpty()) {
+            scope.launch(Dispatchers.IO) {
+                val prefetchTargets = listOf(
+                    Triple("영화", Screen.MOVIES, 2), // 최신 영화
+                    Triple("애니메이션", Screen.ANIMATIONS, 0) // 라프텔 애니
+                )
+                
+                prefetchTargets.forEach { (name, screen, mode) ->
+                    val cacheKey = "category_${name}_mode_${mode}"
+                    if (!categoryCache.containsKey(cacheKey)) {
+                        try {
+                            val rawData = when(screen) {
+                                Screen.MOVIES -> repository.getLatestMovies(200, 0) // 개수를 200개로 최적화
+                                Screen.ANIMATIONS -> repository.getAnimationsRaftel(200, 0)
+                                else -> emptyList()
+                            }
+                            if (rawData.isNotEmpty()) {
+                                // 백그라운드에서 미리 분류 연산 수행
+                                val processed = processThemedSections(rawData)
+                                categoryCache[cacheKey] = processed
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+        }
+    }
+
     val homeTvLazyListState = rememberLazyListState()
     val themedCategoryLazyListState = rememberLazyListState()
 
@@ -274,6 +306,7 @@ fun App(driver: SqlDriver) {
                                     repository = repository,
                                     selectedMode = categoryInfo.third,
                                     onModeChange = onModeChange,
+                                    cache = categoryCache,
                                     lazyListState = themedCategoryLazyListState,
                                     onSeriesClick = { selectedSeries = it }
                                 )

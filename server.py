@@ -17,7 +17,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "9.5"
+CACHE_VERSION = "9.6"  # 속도 최적화 버전
 
 # TMDB API KEY (Bearer 또는 API Key)
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk".strip()
@@ -145,28 +145,56 @@ def attach_tmdb_info(cat):
     return cat
 
 def fetch_metadata_async(force_all=False):
-    print(f"🚀 [METADATA] 시작", flush=True)
+    print(f"🚀 [METADATA] 백그라운드 매칭 시작", flush=True)
     tasks = []
     for k in ["foreigntv", "koreantv", "air", "animations_all", "movies"]:
         for cat in GLOBAL_CACHE.get(k, []):
             if force_all or (not cat.get('posterPath') and not cat.get('failed')): tasks.append(cat)
+
+    total = len(tasks)
+    print(f"  📋 총 {total}개의 메타데이터 업데이트 필요", flush=True)
+    count = 0
     for cat in tasks:
         info = get_tmdb_info_server(cat['name'], ignore_cache=force_all)
         cat.update(info)
+        count += 1
+        if count % 10 == 0:
+            print(f"  ⏳ 매칭 중... ({count}/{total})", flush=True)
+            save_cache() # 10개마다 중간 저장
         time.sleep(0.1)
+
     build_home_recommend(); save_cache()
-    print(f"🏁 [METADATA] 완료", flush=True)
+    print(f"🏁 [METADATA] 모든 작업 완료", flush=True)
 
 def scan_recursive(bp, prefix, rb=None):
     cats = []
     exts = ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
     p, rel_base = get_real_path(bp), get_real_path(rb) if rb else get_real_path(bp)
-    if not os.path.exists(p): return cats
+    if not os.path.exists(p):
+        print(f"    ⚠️ 경로 없음: {p}")
+        return cats
+
+    print(f"    🔎 파일 탐색 중...", flush=True)
     all_f = []
+    file_count = 0
+    last_log_time = time.time()
+
     for root, dirs, files in os.walk(p):
         dirs[:] = [d for d in dirs if not any(ex in d for ex in EXCLUDE_FOLDERS) and not d.startswith('.')]
+
+        # 탐색 중인 폴더 로그 (5초마다 하나씩 출력하여 너무 많은 로그 방지)
+        if time.time() - last_log_time > 5:
+            print(f"    ... 탐색 중: {os.path.basename(root)}", flush=True)
+            last_log_time = time.time()
+
         for f in files:
-            if f.lower().endswith(exts): all_f.append(os.path.join(root, f))
+            if f.lower().endswith(exts):
+                all_f.append(os.path.join(root, f))
+                file_count += 1
+                if file_count % 2000 == 0:
+                    print(f"    ... {file_count}개 파일 발견", flush=True)
+
+    print(f"    📦 총 {file_count}개 파일 분석 및 그룹화 시작...", flush=True)
     all_f.sort()
     curr, movies = "", []
     for fp in all_f:
@@ -174,12 +202,12 @@ def scan_recursive(bp, prefix, rb=None):
         if dp != curr:
             if movies:
                 rel_path = nfc(os.path.relpath(curr, rel_base))
-                cats.append(attach_tmdb_info({"name": nfc(os.path.basename(curr)), "movies": movies, "path": rel_path}))
+                cats.append({"name": nfc(os.path.basename(curr)), "movies": movies, "path": rel_path})
             curr, movies = dp, []
         movies.append(get_movie_info(fp, rel_base, prefix))
     if movies:
         rel_path = nfc(os.path.relpath(curr, rel_base))
-        cats.append(attach_tmdb_info({"name": nfc(os.path.basename(curr)), "movies": movies, "path": rel_path}))
+        cats.append({"name": nfc(os.path.basename(curr)), "movies": movies, "path": rel_path})
     return cats
 
 def get_movie_info(fp, base, prefix):
@@ -207,11 +235,25 @@ def build_home_recommend():
 
 def perform_full_scan(reason="필요"):
     print(f"\n🔄 사유: {reason} -> 전체 파일 스캔 시작", flush=True)
-    t = [("air", AIR_DIR, "air"), ("animations_all", ANI_DIR, "anim_all"), ("movies", MOVIES_ROOT_DIR, "movie"), ("foreigntv", FOREIGN_TV_DIR, "ftv"), ("koreantv", KOREAN_TV_DIR, "ktv")]
-    for k, p, pr in t:
-        try: GLOBAL_CACHE[k] = scan_recursive(p, pr)
-        except: pass
+    t = [
+        ("방송중", AIR_DIR, "air", "air"),
+        ("애니메이션", ANI_DIR, "anim_all", "animations_all"),
+        ("영화", MOVIES_ROOT_DIR, "movie", "movies"),
+        ("외국TV", FOREIGN_TV_DIR, "ftv", "foreigntv"),
+        ("국내TV", KOREAN_TV_DIR, "ktv", "koreantv")
+    ]
+    for label, path, prefix, cache_key in t:
+        print(f"  📂 [{label}] 스캔 시작: {path}", flush=True)
+        try:
+            results = scan_recursive(path, prefix)
+            GLOBAL_CACHE[cache_key] = results
+            print(f"  ✅ [{label}] 완료: {len(results)}개 카테고리 발견", flush=True)
+        except Exception as e:
+            print(f"  ❌ [{label}] 오류: {e}", flush=True)
+            traceback.print_exc()
+
     build_home_recommend(); save_cache()
+    print(f"💾 캐시 저장 완료. 메타데이터 조회를 시작합니다.", flush=True)
     threading.Thread(target=fetch_metadata_async, daemon=True).start()
 
 def load_cache():
@@ -231,7 +273,10 @@ def save_cache():
 def init_server():
     print(f"📺 NAS Server v{CACHE_VERSION} 시작", flush=True)
     if not load_cache(): perform_full_scan(reason="최초 실행")
-    else: build_home_recommend()
+    else:
+        build_home_recommend()
+        # 캐시가 있어도 누락된 메타데이터 조회를 위해 백그라운드 스레드 실행
+        threading.Thread(target=fetch_metadata_async, daemon=True).start()
 
 init_server()
 
@@ -268,20 +313,27 @@ def filter_by_path(pool, keyword):
     target = nfc(keyword).replace(" ", "").lower()
     return [c for c in pool if target in nfc(c.get('path', '')).replace(" ", "").lower()]
 
+# 방송중 카테고리 관련 라우터
 @app.route('/air')
 def get_air(): return jsonify(process_data(GLOBAL_CACHE.get("air", []), request.args.get('lite') == 'true'))
-@app.route('/animations')
-def get_animations():
+@app.route('/air_animations')
+def get_air_animations():
     res = [c for c in GLOBAL_CACHE.get("air", []) if any(k in c.get('path', '') for k in ["라프텔", "애니"])]
     return jsonify(process_data(res, request.args.get('lite') == 'true'))
-@app.route('/dramas')
-def get_dramas():
+@app.route('/air_dramas')
+def get_air_dramas():
     res = [c for c in GLOBAL_CACHE.get("air", []) if "드라마" in c.get('path', '')]
     return jsonify(process_data(res, request.args.get('lite') == 'true'))
+
+# 애니 카테고리 관련 라우터
+@app.route('/animations_all')
+def get_animations_all(): return jsonify(process_data(GLOBAL_CACHE.get("animations_all", []), request.args.get('lite') == 'true'))
 @app.route('/anim_raftel')
 def get_anim_raftel(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "라프텔"), request.args.get('lite') == 'true'))
 @app.route('/anim_series')
 def get_anim_series(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "시리즈"), request.args.get('lite') == 'true'))
+
+# 외국TV 카테고리 관련 라우터
 @app.route('/foreigntv')
 def get_foreigntv(): return jsonify(process_data(GLOBAL_CACHE.get("foreigntv", []), request.args.get('lite') == 'true'))
 @app.route('/ftv_us')
@@ -294,6 +346,8 @@ def get_ftv_jp(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("f
 def get_ftv_docu(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("foreigntv", []), "다큐"), request.args.get('lite') == 'true'))
 @app.route('/ftv_etc')
 def get_ftv_etc(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("foreigntv", []), "기타"), request.args.get('lite') == 'true'))
+
+# 국내TV 카테고리 관련 라우터
 @app.route('/koreantv')
 def get_koreantv(): return jsonify(process_data(GLOBAL_CACHE.get("koreantv", []), request.args.get('lite') == 'true'))
 @app.route('/ktv_drama')
@@ -306,8 +360,8 @@ def get_ktv_sitcom(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.ge
 def get_ktv_edu(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("koreantv", []), "교양"), request.args.get('lite') == 'true'))
 @app.route('/ktv_docu')
 def get_ktv_docu(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("koreantv", []), "다큐"), request.args.get('lite') == 'true'))
-@app.route('/animations_all')
-def get_animations_all(): return jsonify(process_data(GLOBAL_CACHE.get("animations_all", []), request.args.get('lite') == 'true'))
+
+# 영화 카테고리 관련 라우터
 @app.route('/movies')
 def get_movies(): return jsonify(process_data(GLOBAL_CACHE.get("movies", []), request.args.get('lite') == 'true'))
 @app.route('/movies_latest')

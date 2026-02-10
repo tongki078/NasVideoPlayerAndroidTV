@@ -56,7 +56,7 @@ fun <T> NetflixTvPivotRow(
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .height(300.dp) 
+            .height(300.dp) // 요청하신 높이 300dp로 조정
             .focusProperties {
                 enter = {
                     val lastIdx = rowFocusIndices[rowKey] ?: 0
@@ -195,11 +195,7 @@ fun NetflixPivotItem(
                             .fillMaxSize()
                             .padding(horizontal = 8.dp, vertical = 6.dp)
                     ) {
-                        // 제목, 년도, 연령 정보를 한 줄에 배치
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             Text(
                                 text = title.cleanTitle(),
                                 color = Color.White,
@@ -209,28 +205,12 @@ fun NetflixPivotItem(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false)
                             )
-                            
                             Spacer(Modifier.width(8.dp))
-                            
-                            // 년도 정보
-                            Text(
-                                text = itemYear ?: "2024", 
-                                color = Color.White.copy(alpha = 0.6f), 
-                                fontSize = 11.sp
-                            )
-                            
+                            Text(text = itemYear ?: "2024", color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
                             Spacer(Modifier.width(6.dp))
-                            
-                            // 연령 정보 (녹색 강조)
-                            Text(
-                                text = itemRating ?: "15+", 
-                                color = Color(0xFF46D369), 
-                                fontWeight = FontWeight.Bold, 
-                                fontSize = 11.sp
-                            )
+                            Text(text = itemRating ?: "15+", color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         }
 
-                        // 줄거리 정보를 2줄로 표시
                         if (!itemOverview.isNullOrBlank()) {
                             Spacer(Modifier.height(4.dp))
                             Text(

@@ -25,17 +25,6 @@ import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.common.MovieRow
 import org.nas.videoplayerandroidtv.*
 
-private object ThemeConfig {
-    val ACTION_ADVENTURE = listOf(28, 12, 10759, 10765)
-    val FANTASY_SCI_FI = listOf(14, 878)
-    val COMEDY_LIFE = listOf(35, 10762, 10763, 10767)
-    val MYSTERY_THRILLER = listOf(9648, 53, 27, 80)
-    val DRAMA_ROMANCE = listOf(18, 10749, 10766, 10764)
-    val FAMILY_ANIMATION = listOf(10751, 16)
-}
-
-private data class ThemeSection(val id: String, val title: String, val seriesList: List<Series>)
-
 @Composable
 fun ThemedCategoryScreen(
     categoryName: String,
@@ -43,6 +32,7 @@ fun ThemedCategoryScreen(
     repository: VideoRepository,
     selectedMode: Int,
     onModeChange: (Int) -> Unit,
+    cache: MutableMap<String, List<ThemeSection>>, 
     lazyListState: LazyListState = rememberLazyListState(),
     onSeriesClick: (Series) -> Unit
 ) {
@@ -61,14 +51,21 @@ fun ThemedCategoryScreen(
         else -> emptyList()
     }
 
-    var themedSections by remember { mutableStateOf(emptyList<ThemeSection>()) }
-    var isLoading by remember(selectedMode, categoryName) { mutableStateOf(true) }
+    val cacheKey = "category_${categoryName}_mode_${selectedMode}"
+    
+    var themedSections by remember(cacheKey) { 
+        mutableStateOf(cache[cacheKey] ?: emptyList()) 
+    }
+    var isLoading by remember(cacheKey) { mutableStateOf(themedSections.isEmpty()) }
 
-    LaunchedEffect(selectedMode, categoryName) {
+    LaunchedEffect(cacheKey) {
+        if (themedSections.isNotEmpty()) return@LaunchedEffect
+        
         isLoading = true
         try {
-            val result = withContext(Dispatchers.Default) {
-                val limit = 500 
+            // 1. 네트워크 로드 (IO 스레드)
+            val result = withContext(Dispatchers.IO) {
+                val limit = 150 // 개수 최적화
                 when {
                     isMovieScreen -> when (selectedMode) {
                         0 -> repository.getMoviesByTitle(limit, 0)
@@ -91,57 +88,13 @@ fun ThemedCategoryScreen(
                 }
             }
 
+            // 2. 데이터 분류 연산 (Default 스레드)
             val sections = withContext(Dispatchers.Default) {
-                val distinctResult = result.distinctBy { it.fullPath ?: it.title }
-                val sectionsList = mutableListOf<ThemeSection>()
-                if (distinctResult.isEmpty()) return@withContext emptyList<ThemeSection>()
-
-                val usedPaths = mutableSetOf<String>()
-
-                val newArrivals = distinctResult.take(15) 
-                if (newArrivals.isNotEmpty()) {
-                    sectionsList.add(ThemeSection("new_arrival", "방금 업데이트된 신작", newArrivals))
-                    usedPaths.addAll(newArrivals.map { it.fullPath ?: it.title ?: "" })
-                }
-
-                val poolAfterNew = distinctResult.filter { (it.fullPath ?: it.title ?: "") !in usedPaths }
-                val todayPicks = poolAfterNew.shuffled().take(15)
-                if (todayPicks.isNotEmpty()) {
-                    sectionsList.add(ThemeSection("today_pick", "실시간 인기 추천", todayPicks))
-                    usedPaths.addAll(todayPicks.map { it.fullPath ?: it.title ?: "" })
-                }
-
-                val remainingPool = distinctResult.filter { (it.fullPath ?: it.title ?: "") !in usedPaths }
-                
-                val tA = mutableListOf<Series>(); val tF = mutableListOf<Series>()
-                val tC = mutableListOf<Series>(); val tT = mutableListOf<Series>()
-                val tR = mutableListOf<Series>(); val tM = mutableListOf<Series>()
-                val tE = mutableListOf<Series>()
-
-                remainingPool.forEach { s ->
-                    val gIds = s.genreIds
-                    when {
-                        gIds.any { it in ThemeConfig.ACTION_ADVENTURE } -> tA.add(s)
-                        gIds.any { it in ThemeConfig.FANTASY_SCI_FI } -> tF.add(s)
-                        gIds.any { it in ThemeConfig.COMEDY_LIFE } -> tC.add(s)
-                        gIds.any { it in ThemeConfig.MYSTERY_THRILLER } -> tT.add(s)
-                        gIds.any { it in ThemeConfig.DRAMA_ROMANCE } -> tR.add(s)
-                        gIds.any { it in ThemeConfig.FAMILY_ANIMATION } -> tM.add(s)
-                        else -> tE.add(s)
-                    }
-                }
-                
-                if (tA.isNotEmpty()) sectionsList.add(ThemeSection("action", "박진감 넘치는 액션 & 어드벤처", tA))
-                if (tF.isNotEmpty()) sectionsList.add(ThemeSection("fantasy", "판타지 & SF", tF))
-                if (tC.isNotEmpty()) sectionsList.add(ThemeSection("comedy", "코미디 & 라이프", tC))
-                if (tT.isNotEmpty()) sectionsList.add(ThemeSection("thriller", "미스터리 & 스릴러", tT))
-                if (tR.isNotEmpty()) sectionsList.add(ThemeSection("romance", "로맨스 & 드라마", tR))
-                if (tM.isNotEmpty()) sectionsList.add(ThemeSection("family", "가족과 함께", tM))
-                if (tE.isNotEmpty()) sectionsList.add(ThemeSection("etc", "추천 콘텐츠", tE))
-                
-                sectionsList
+                processThemedSections(result)
             }
+
             themedSections = sections
+            cache[cacheKey] = sections
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
@@ -149,7 +102,6 @@ fun ThemedCategoryScreen(
         }
     }
 
-    // TopBar와 동일한 완전한 검은색으로 배경 통일
     Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         if (modes.isNotEmpty()) {
             LazyRow(
@@ -190,7 +142,6 @@ fun ThemedCategoryScreen(
 private fun CategoryTabItem(text: String, isSelected: Boolean, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     
-    // 선택되었을 때 원래의 흐릿한 회색 배경(0.15f)을 다시 적용
     val backgroundColor by animateColorAsState(targetValue = when { 
         isFocused -> Color.White 
         isSelected -> Color.White.copy(alpha = 0.15f)
