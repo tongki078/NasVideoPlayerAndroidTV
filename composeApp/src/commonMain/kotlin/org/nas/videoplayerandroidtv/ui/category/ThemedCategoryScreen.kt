@@ -68,7 +68,7 @@ fun ThemedCategoryScreen(
         isLoading = true
         try {
             val result = withContext(Dispatchers.Default) {
-                val limit = 500 // 1000개에서 500개로 축소
+                val limit = 500 
                 when {
                     isMovieScreen -> when (selectedMode) {
                         0 -> repository.getMoviesByTitle(limit, 0)
@@ -98,7 +98,7 @@ fun ThemedCategoryScreen(
 
                 val usedPaths = mutableSetOf<String>()
 
-                val newArrivals = distinctResult.take(15) // 섹션당 노출 개수도 약간 조정
+                val newArrivals = distinctResult.take(15) 
                 if (newArrivals.isNotEmpty()) {
                     sectionsList.add(ThemeSection("new_arrival", "방금 업데이트된 신작", newArrivals))
                     usedPaths.addAll(newArrivals.map { it.fullPath ?: it.title ?: "" })
@@ -172,7 +172,13 @@ fun ThemedCategoryScreen(
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(top = 8.dp, bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(themedSections, key = { it.id }) { section ->
-                        MovieRow(title = section.title, seriesList = section.seriesList, onSeriesClick = onSeriesClick)
+                        // MovieRow 호출 시 repository 전달
+                        MovieRow(
+                            title = section.title, 
+                            seriesList = section.seriesList, 
+                            repository = repository,
+                            onSeriesClick = onSeriesClick
+                        )
                     }
                 }
             }

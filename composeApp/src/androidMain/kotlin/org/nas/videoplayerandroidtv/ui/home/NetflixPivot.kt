@@ -56,7 +56,7 @@ fun <T> NetflixTvPivotRow(
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .height(360.dp) 
+            .height(280.dp) // 행 전체 높이를 360dp에서 280dp로 대폭 축소
             .focusProperties {
                 enter = {
                     val lastIdx = rowFocusIndices[rowKey] ?: 0
@@ -65,8 +65,8 @@ fun <T> NetflixTvPivotRow(
             },
         state = state,
         contentPadding = PaddingValues(start = marginValue, end = marginValue, bottom = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically // 행 전체 중앙 정렬
+        horizontalArrangement = Arrangement.spacedBy(10.dp), // 간격도 약간 좁힘
+        verticalAlignment = Alignment.CenterVertically 
     ) {
         itemsIndexed(items, key = { _, item -> keySelector(item) }) { index, item ->
             Box(modifier = Modifier.onFocusChanged {
@@ -115,7 +115,7 @@ fun NetflixPivotItem(
                 }
             }
             
-            delay(1500)
+            delay(600)
             if (previewUrl != null) {
                 showPreview = true
             }
@@ -124,9 +124,11 @@ fun NetflixPivotItem(
         }
     }
 
-    val itemWidth = if (isFocused) 435.dp else 150.dp
-    val posterMaxHeight = 245.dp
-    val infoAreaHeight = 80.dp // 정보 영역의 높이를 고정하여 아이템 전체 높이를 일정하게 유지
+    // 75인치 대형 TV를 고려하여 전체적인 DP 스케일 하향 조정
+    // 포커스 시 16:9 비율 유지 (높이 180dp 기준 너비 320dp)
+    val itemWidth = if (isFocused) 320.dp else 120.dp
+    val posterMaxHeight = 180.dp // 기존 245dp에서 180dp로 축소
+    val infoAreaHeight = 70.dp 
     val totalItemHeight = posterMaxHeight + infoAreaHeight
 
     val alpha = when {
@@ -135,7 +137,6 @@ fun NetflixPivotItem(
         else -> 1f 
     }
 
-    // 아이템의 전체 높이를 고정(325dp)하여 LazyRow에서 중앙 정렬 시 위치가 변하지 않게 함
     Box(
         modifier = Modifier
             .width(itemWidth)
@@ -148,12 +149,12 @@ fun NetflixPivotItem(
             modifier = Modifier
                 .fillMaxSize()
                 .focusRequester(focusRequester)
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(6.dp))
                 .background(Color.Transparent) 
                 .focusable(interactionSource = interactionSource)
                 .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
         ) {
-            // 영상/포스터 영역 (고정 높이 245dp 내부에서 중앙 정렬)
+            // 영상/포스터 영역
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -163,12 +164,12 @@ fun NetflixPivotItem(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (isFocused) 245.dp else 225.dp)
-                        .clip(RoundedCornerShape(8.dp))
+                        .height(if (isFocused) 180.dp else 165.dp) // 기본 165dp, 포커스 시 180dp
+                        .clip(RoundedCornerShape(6.dp))
                         .border(
-                            width = if (isFocused) 3.dp else 0.dp,
+                            width = if (isFocused) 2.dp else 0.dp,
                             color = if (isFocused) Color.White else Color.Transparent,
-                            shape = RoundedCornerShape(8.dp)
+                            shape = RoundedCornerShape(6.dp)
                         )
                 ) {
                     if (showPreview && previewUrl != null) {
@@ -184,7 +185,7 @@ fun NetflixPivotItem(
                 }
             }
             
-            // 정보 영역 (높이를 차지하고 있지만 포커스 시에만 컨텐츠 표시)
+            // 정보 영역
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -194,22 +195,22 @@ fun NetflixPivotItem(
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 4.dp, vertical = 8.dp)
+                            .padding(horizontal = 4.dp, vertical = 6.dp)
                     ) {
                         Text(
                             text = title.cleanTitle(),
                             color = Color.White,
-                            fontSize = 15.sp,
+                            fontSize = 13.sp, // 폰트 크기도 소폭 하향
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
 
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(2.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = rating, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Spacer(Modifier.width(8.dp))
-                            Text(text = "2024", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+                            Text(text = rating, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            Spacer(Modifier.width(6.dp))
+                            Text(text = "2024", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
                         }
                     }
                 }

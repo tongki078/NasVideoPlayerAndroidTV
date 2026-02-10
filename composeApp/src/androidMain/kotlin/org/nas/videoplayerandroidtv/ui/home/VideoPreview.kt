@@ -16,6 +16,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -28,10 +29,8 @@ import kotlin.OptIn
 @Composable
 fun VideoPreview(url: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    // 실제 영상 프레임이 렌더링되었는지 확인하는 상태
     var isVideoRendered by remember { mutableStateOf(false) }
     var hasSoughtToMiddle by remember { mutableStateOf(false) }
-    // 미리보기 재생 시간 제한 (20초)
     val previewDurationMillis = 20000L
     
     val exoPlayer = remember {
@@ -39,7 +38,18 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
 
+        // 로딩 속도 최적화를 위한 LoadControl 설정
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                5000,  // minBufferMs
+                15000, // maxBufferMs
+                500,   // bufferForPlaybackMs (재생 시작에 필요한 최소 버퍼 - 0.5초로 단축)
+                1000   // bufferForPlaybackAfterRebufferMs
+            )
+            .build()
+
         ExoPlayer.Builder(context)
+            .setLoadControl(loadControl) // 최적화된 로드 컨트롤 적용
             .setMediaSourceFactory(DefaultMediaSourceFactory(context).setDataSourceFactory(httpDataSourceFactory))
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -57,14 +67,12 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
                         if (state == Player.STATE_READY && !hasSoughtToMiddle) {
                             val duration = duration
                             if (duration > 0 && duration != C.TIME_UNSET) {
-                                // 영상의 1/3 지점으로 이동
                                 seekTo(duration / 3)
                                 hasSoughtToMiddle = true
                             }
                         }
                     }
 
-                    // 영상의 첫 프레임이 실제로 렌더링되었을 때 호출
                     override fun onRenderedFirstFrame() {
                         isVideoRendered = true
                     }
@@ -78,15 +86,16 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
 
     LaunchedEffect(url) {
         if (url.isBlank()) return@LaunchedEffect
-        // 새로운 URL이 오면 상태 리셋
         isVideoRendered = false
         hasSoughtToMiddle = false
 
         val mediaItem = MediaItem.Builder().setUri(url).build()
         exoPlayer.setMediaItem(mediaItem)
+        
+        // 중요: prepare() 전 미리 하이라이트 지점으로 추정되는 곳을 찍어두면 더 빨리 로딩될 수 있음
+        // (정확한 길이를 모를 경우 일단 prepare 후 seek 유지)
         exoPlayer.prepare()
         
-        // 일정 시간 재생 후 정지
         delay(previewDurationMillis)
         if (exoPlayer.isPlaying) {
             exoPlayer.pause()
@@ -105,14 +114,13 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
             PlayerView(ctx).apply {
                 player = exoPlayer
                 useController = false
-                // 영상을 16:9 영역에 꽉 채우도록 설정
                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 setShutterBackgroundColor(Color.TRANSPARENT)
             }
         },
         modifier = modifier
-            .alpha(if (isVideoRendered) 1f else 0f) // 프레임 렌더링 전까지는 투명하게 유지
+            .alpha(if (isVideoRendered) 1f else 0f)
             .fillMaxWidth()
-            .aspectRatio(16f / 9f) // 미리보기 화면을 16:9 비율로 고정
+            .aspectRatio(16f / 9f)
     )
 }
