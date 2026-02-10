@@ -56,7 +56,7 @@ fun <T> NetflixTvPivotRow(
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .height(300.dp) // 요청하신 대로 행 전체 높이를 300dp로 조정
+            .height(300.dp) 
             .focusProperties {
                 enter = {
                     val lastIdx = rowFocusIndices[rowKey] ?: 0
@@ -124,17 +124,13 @@ fun NetflixPivotItem(
         }
     }
 
-    // 행 높이 300dp에 맞춘 새로운 스케일 적용
     val itemWidth = if (isFocused) 330.dp else 135.dp
     val posterMaxHeight = 185.dp 
     val infoAreaHeight = 65.dp 
     val totalItemHeight = posterMaxHeight + infoAreaHeight
 
-    val alpha = when {
-        isFocused -> 1f
-        focusedIndex != -1 && index < focusedIndex -> 0.05f 
-        else -> 1f 
-    }
+    // 이전 아이템들이 검게 보이는 문제를 해결하기 위해 alpha 값을 항상 1f로 유지
+    val alpha = 1f 
 
     Box(
         modifier = Modifier
@@ -162,7 +158,7 @@ fun NetflixPivotItem(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (isFocused) 185.dp else 175.dp) // 기본 175dp, 포커스 시 185dp
+                        .height(if (isFocused) 185.dp else 175.dp)
                         .clip(RoundedCornerShape(6.dp))
                         .border(
                             width = if (isFocused) 2.dp else 0.dp,
