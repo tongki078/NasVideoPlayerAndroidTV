@@ -90,26 +90,35 @@ fun NetflixPivotItem(
     state: LazyListState,
     marginPx: Int,
     focusRequester: FocusRequester,
-    rating: String = "98% 일치",
+    rating: String? = null,
+    year: String? = null,
+    overview: String? = null,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     
     var previewUrl by remember { mutableStateOf(initialVideoUrl) }
+    var itemOverview by remember { mutableStateOf(overview) }
+    var itemYear by remember { mutableStateOf(year) }
+    var itemRating by remember { mutableStateOf(rating) }
     var showPreview by remember { mutableStateOf(false) }
     
     LaunchedEffect(isFocused) {
         if (isFocused) {
             state.animateScrollToItem(index, -marginPx)
             
-            if (previewUrl == null && categoryPath != null) {
+            // 정보가 부족하면 비동기로 보강
+            if ((previewUrl == null || itemOverview == null) && categoryPath != null) {
                 launch {
                     try {
                         val details = repository.getCategoryList(categoryPath, 1, 0)
-                        val videoUrl = details.firstOrNull()?.movies?.find { !it.videoUrl.isNullOrEmpty() }?.videoUrl
-                        if (videoUrl != null) {
-                            previewUrl = videoUrl
+                        val cat = details.firstOrNull()
+                        if (cat != null) {
+                            if (previewUrl == null) previewUrl = cat.movies?.find { !it.videoUrl.isNullOrEmpty() }?.videoUrl
+                            if (itemOverview == null) itemOverview = cat.overview
+                            if (itemYear == null) itemYear = cat.year
+                            if (itemRating == null) itemRating = cat.rating
                         }
                     } catch (_: Exception) {}
                 }
@@ -126,18 +135,15 @@ fun NetflixPivotItem(
 
     val itemWidth = if (isFocused) 330.dp else 135.dp
     val posterMaxHeight = 185.dp 
-    val infoAreaHeight = 65.dp 
+    val infoAreaHeight = 85.dp // 줄거리 표시를 위해 높이 확대
     val totalItemHeight = posterMaxHeight + infoAreaHeight
-
-    // 이전 아이템들이 검게 보이는 문제를 해결하기 위해 alpha 값을 항상 1f로 유지
-    val alpha = 1f 
 
     Box(
         modifier = Modifier
             .width(itemWidth)
             .height(totalItemHeight)
             .zIndex(if (isFocused) 10f else 1f)
-            .alpha(alpha),
+            .alpha(1f),
         contentAlignment = Alignment.TopStart
     ) {
         Column(
@@ -161,7 +167,7 @@ fun NetflixPivotItem(
                         .height(if (isFocused) 185.dp else 175.dp)
                         .clip(RoundedCornerShape(6.dp))
                         .border(
-                            width = if (isFocused) 2.dp else 0.dp,
+                            width = if (isFocused) 3.dp else 0.dp,
                             color = if (isFocused) Color.White else Color.Transparent,
                             shape = RoundedCornerShape(6.dp)
                         )
@@ -188,22 +194,35 @@ fun NetflixPivotItem(
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 6.dp, vertical = 6.dp)
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
                     ) {
                         Text(
                             text = title.cleanTitle(),
                             color = Color.White,
-                            fontSize = 13.sp, 
+                            fontSize = 14.sp, 
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
 
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(2.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = rating, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            Text(text = itemRating ?: "98% 일치", color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             Spacer(Modifier.width(8.dp))
-                            Text(text = "2024", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                            Text(text = itemYear ?: "2024", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                        }
+                        
+                        // 메인 줄거리 표시
+                        if (!itemOverview.isNullOrBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = itemOverview!!,
+                                color = Color.LightGray,
+                                fontSize = 11.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                lineHeight = 14.sp
+                            )
                         }
                     }
                 }

@@ -8,7 +8,10 @@ data class Category(
     val movies: List<Movie>? = emptyList(),
     val path: String? = null,
     val genreIds: List<Int>? = emptyList(), // 서버측 캐싱된 장르 정보
-    val posterPath: String? = null          // 서버측 캐싱된 TMDB 포스터 경로
+    val posterPath: String? = null,         // 서버측 캐싱된 TMDB 포스터 경로
+    val overview: String? = null,           // 추가: 메인 줄거리
+    val year: String? = null,               // 추가: 제작 년도
+    val rating: String? = null              // 추가: 연령 제한
 )
 
 @Serializable
@@ -16,7 +19,8 @@ data class Movie(
     val id: String? = "",
     val title: String? = "",
     val videoUrl: String? = "",
-    val thumbnailUrl: String? = null
+    val thumbnailUrl: String? = null,
+    val overview: String? = null            // 추가: 회차별 줄거리
 )
 
 @Serializable
@@ -30,10 +34,10 @@ data class Series(
     val episodes: List<Movie>,
     val thumbnailUrl: String? = null,
     val fullPath: String? = null,
-    val genreIds: List<Int> = emptyList(), // 즉각적인 분류에 사용
-    val posterPath: String? = null,        // TMDB 포스터 직접 경로
-    val year: String? = null,              // 개봉/방송 년도
-    val overview: String? = null,          // 줄거리
-    val rating: String? = null,            // 연령 제한 (예: 15+, 19+)
-    val seasonCount: Int? = null           // 시즌 개수
+    val genreIds: List<Int> = emptyList(), 
+    val posterPath: String? = null,        
+    val year: String? = null,              
+    val overview: String? = null,          
+    val rating: String? = null,            
+    val seasonCount: Int? = null
 )
