@@ -28,7 +28,9 @@ import kotlin.OptIn
 @Composable
 fun VideoPreview(url: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    var isVideoReady by remember { mutableStateOf(false) }
+    // 실제 영상 프레임이 렌더링되었는지 확인하는 상태
+    var isVideoRendered by remember { mutableStateOf(false) }
+    var hasSoughtToMiddle by remember { mutableStateOf(false) }
     // 미리보기 재생 시간 제한 (20초)
     val previewDurationMillis = 20000L
     
@@ -52,10 +54,21 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
                 repeatMode = Player.REPEAT_MODE_ONE
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(state: Int) {
-                        if (state == Player.STATE_READY) {
-                            isVideoReady = true
+                        if (state == Player.STATE_READY && !hasSoughtToMiddle) {
+                            val duration = duration
+                            if (duration > 0 && duration != C.TIME_UNSET) {
+                                // 영상의 1/3 지점으로 이동
+                                seekTo(duration / 3)
+                                hasSoughtToMiddle = true
+                            }
                         }
                     }
+
+                    // 영상의 첫 프레임이 실제로 렌더링되었을 때 호출
+                    override fun onRenderedFirstFrame() {
+                        isVideoRendered = true
+                    }
+
                     override fun onPlayerError(error: PlaybackException) {
                         Log.e("VideoPreview", "❌ 미리보기 에러: ${error.message} (URL: $url)")
                     }
@@ -65,6 +78,10 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
 
     LaunchedEffect(url) {
         if (url.isBlank()) return@LaunchedEffect
+        // 새로운 URL이 오면 상태 리셋
+        isVideoRendered = false
+        hasSoughtToMiddle = false
+
         val mediaItem = MediaItem.Builder().setUri(url).build()
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()
@@ -94,7 +111,7 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
             }
         },
         modifier = modifier
-            .alpha(if (isVideoReady) 1f else 0f)
+            .alpha(if (isVideoRendered) 1f else 0f) // 프레임 렌더링 전까지는 투명하게 유지
             .fillMaxWidth()
             .aspectRatio(16f / 9f) // 미리보기 화면을 16:9 비율로 고정
     )
