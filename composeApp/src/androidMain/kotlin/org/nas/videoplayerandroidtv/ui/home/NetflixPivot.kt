@@ -56,7 +56,7 @@ fun <T> NetflixTvPivotRow(
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .height(320.dp) // 행 높이 소폭 조정
+            .height(360.dp) 
             .focusProperties {
                 enter = {
                     val lastIdx = rowFocusIndices[rowKey] ?: 0
@@ -66,7 +66,7 @@ fun <T> NetflixTvPivotRow(
         state = state,
         contentPadding = PaddingValues(start = marginValue, end = marginValue, bottom = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.Top
+        verticalAlignment = Alignment.CenterVertically // 행 전체 중앙 정렬
     ) {
         itemsIndexed(items, key = { _, item -> keySelector(item) }) { index, item ->
             Box(modifier = Modifier.onFocusChanged {
@@ -124,10 +124,10 @@ fun NetflixPivotItem(
         }
     }
 
-    // 포커스 시 16:9 비율을 유지하는 너비 (높이 225dp 기준 400dp)
-    val itemWidth = if (isFocused) 400.dp else 150.dp
-    val posterHeight = 225.dp // 영상/포스터 영역 높이 고정
-    val totalHeight = 300.dp 
+    val itemWidth = if (isFocused) 435.dp else 150.dp
+    val posterMaxHeight = 245.dp
+    val infoAreaHeight = 80.dp // 정보 영역의 높이를 고정하여 아이템 전체 높이를 일정하게 유지
+    val totalItemHeight = posterMaxHeight + infoAreaHeight
 
     val alpha = when {
         isFocused -> 1f
@@ -135,10 +135,11 @@ fun NetflixPivotItem(
         else -> 1f 
     }
 
+    // 아이템의 전체 높이를 고정(325dp)하여 LazyRow에서 중앙 정렬 시 위치가 변하지 않게 함
     Box(
         modifier = Modifier
             .width(itemWidth)
-            .height(totalHeight)
+            .height(totalItemHeight)
             .zIndex(if (isFocused) 10f else 1f)
             .alpha(alpha),
         contentAlignment = Alignment.TopStart
@@ -148,53 +149,68 @@ fun NetflixPivotItem(
                 .fillMaxSize()
                 .focusRequester(focusRequester)
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color.Transparent) // 회색 배경 제거 및 투명 설정
+                .background(Color.Transparent) 
                 .focusable(interactionSource = interactionSource)
                 .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
         ) {
+            // 영상/포스터 영역 (고정 높이 245dp 내부에서 중앙 정렬)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(posterHeight)
-                    .clip(RoundedCornerShape(8.dp))
-                    .border(
-                        width = if (isFocused) 3.dp else 0.dp,
-                        color = if (isFocused) Color.White else Color.Transparent,
-                        shape = RoundedCornerShape(8.dp)
-                    )
+                    .height(posterMaxHeight),
+                contentAlignment = Alignment.Center
             ) {
-                if (showPreview && previewUrl != null) {
-                    VideoPreview(url = previewUrl!!, modifier = Modifier.fillMaxSize())
-                } else {
-                    TmdbAsyncImage(
-                        title = title, 
-                        posterPath = posterPath,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(if (isFocused) 245.dp else 225.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .border(
+                            width = if (isFocused) 3.dp else 0.dp,
+                            color = if (isFocused) Color.White else Color.Transparent,
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                ) {
+                    if (showPreview && previewUrl != null) {
+                        VideoPreview(url = previewUrl!!, modifier = Modifier.fillMaxSize())
+                    } else {
+                        TmdbAsyncImage(
+                            title = title, 
+                            posterPath = posterPath,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
                 }
             }
             
-            if (isFocused) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 8.dp) // 좌우 패딩을 줄여서 더 깔끔하게 조정
-                ) {
-                    Text(
-                        text = title.cleanTitle(),
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+            // 정보 영역 (높이를 차지하고 있지만 포커스 시에만 컨텐츠 표시)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(infoAreaHeight)
+            ) {
+                if (isFocused) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 4.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = title.cleanTitle(),
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
 
-                    Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = rating, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Spacer(Modifier.width(8.dp))
-                        Text(text = "2024", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(text = rating, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(text = "2024", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+                        }
                     }
                 }
             }
