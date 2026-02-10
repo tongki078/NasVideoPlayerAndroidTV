@@ -36,7 +36,6 @@ fun HomeScreen(
         ?: homeSections.firstOrNull()?.items?.firstOrNull()
     }
 
-    // 전체 배경을 완전한 검은색으로 변경
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -46,12 +45,21 @@ fun HomeScreen(
             item(key = "hero_section") {
                 if (heroItem != null) {
                     HeroSection(
-                        series = Series(title = heroItem.name ?: "", episodes = emptyList(), fullPath = heroItem.path, posterPath = heroItem.posterPath, genreIds = heroItem.genreIds ?: emptyList()),
+                        series = Series(
+                            title = heroItem.name ?: "", 
+                            episodes = emptyList(), 
+                            fullPath = heroItem.path, 
+                            posterPath = heroItem.posterPath, 
+                            genreIds = heroItem.genreIds ?: emptyList(),
+                            overview = heroItem.overview,
+                            year = heroItem.year,
+                            rating = heroItem.rating
+                        ),
                         onWatchClick = {
-                            onSeriesClick(Series(title = heroItem.name ?: "", episodes = emptyList(), fullPath = heroItem.path, posterPath = heroItem.posterPath, genreIds = heroItem.genreIds ?: emptyList()))
+                            onSeriesClick(Series(title = heroItem.name ?: "", episodes = emptyList(), fullPath = heroItem.path, posterPath = heroItem.posterPath, genreIds = heroItem.genreIds ?: emptyList(), overview = heroItem.overview, year = heroItem.year, rating = heroItem.rating))
                         },
                         onInfoClick = {
-                            onSeriesClick(Series(title = heroItem.name ?: "", episodes = emptyList(), fullPath = heroItem.path, posterPath = heroItem.posterPath, genreIds = heroItem.genreIds ?: emptyList()))
+                            onSeriesClick(Series(title = heroItem.name ?: "", episodes = emptyList(), fullPath = heroItem.path, posterPath = heroItem.posterPath, genreIds = heroItem.genreIds ?: emptyList(), overview = heroItem.overview, year = heroItem.year, rating = heroItem.rating))
                         },
                         horizontalPadding = standardMargin
                     )
@@ -127,8 +135,11 @@ fun HomeScreen(
                                 state = rowState,
                                 marginPx = marginPx,
                                 focusRequester = focusRequester,
+                                overview = item.overview, // 서버 데이터 전달
+                                year = item.year,         // 서버 데이터 전달
+                                rating = item.rating,     // 서버 데이터 전달
                                 onClick = { 
-                                    onSeriesClick(Series(title = item.name ?: "", episodes = emptyList(), fullPath = item.path, posterPath = item.posterPath, genreIds = item.genreIds ?: emptyList()))
+                                    onSeriesClick(Series(title = item.name ?: "", episodes = emptyList(), fullPath = item.path, posterPath = item.posterPath, genreIds = item.genreIds ?: emptyList(), overview = item.overview, year = item.year, rating = item.rating))
                                 }
                             )
                         }

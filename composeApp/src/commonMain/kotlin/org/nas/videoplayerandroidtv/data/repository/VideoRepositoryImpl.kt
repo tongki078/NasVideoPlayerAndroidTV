@@ -13,7 +13,7 @@ import kotlinx.coroutines.*
 
 // 시리즈 제목 추출을 위한 정밀 정규식
 private val REGEX_GROUP_BY_SERIES = Regex(
-    """(?i)[\s._-]*(?:s\d{1,2}e\d{1,3}|season\s*\d{1,2}|s\d{1,2}|ep\d{1,3}|e\d{1,3}|\d{1,3}화|\d{1,3}회|\d+기|part\s*\d|극장판|완결|special|extras|ova|720p|1080p|2160p|4k|h264|h265|x264|x265|bluray|web-dl|aac|mp4|mkv|avi|\([^)]*\)|\[[^\]]*\]).*|(?:\s+\d+\s*$)""", 
+    """(?i)[\s._-]*(?:s\d{1,2}e\d{1,3}|season\s*\d{1,2}|s\d{1,2} |ep\d{1,3}|e\d{1,3}|\d{1,3}화|\d{1,3}회|\d+기|part\s*\d|극장판|완결|special|extras|ova|720p|1080p|2160p|4k|h264|h265|x264|x265|bluray|web-dl|aac|mp4|mkv|avi|\([^)]*\)|\[[^\]]*\]).*|(?:\s+\d+\s*$)""", 
     RegexOption.IGNORE_CASE
 )
 private val REGEX_INDEX_FOLDER = Regex("""(?i)^\s*([0-9A-Z가-힣ㄱ-ㅎ]|0Z|0-Z|가-하|[0-9]-[0-9]|[A-Z]-[A-Z]|[가-힣]-[가-힣])\s*$""")
@@ -25,9 +25,7 @@ class VideoRepositoryImpl : VideoRepository {
     private val baseUrl = NasApiClient.BASE_URL
 
     override suspend fun getHomeRecommendations(): List<HomeSection> = try {
-        // lite=true를 제거하여 movies 목록을 포함하도록 수정
         val response = client.get("$baseUrl/home").body<List<HomeSection>>()
-        
         response.map { section ->
             section.copy(items = section.items.map { cat ->
                 val updatedMovies = cat.movies?.map { movie ->
@@ -48,7 +46,6 @@ class VideoRepositoryImpl : VideoRepository {
             parameter("path", path)
             parameter("limit", limit)
             parameter("offset", offset)
-            // 미리보기를 위해 상세 정보가 필요하므로 lite 파라미터를 제거함
         }.body()
         
         categories.distinctBy { it.name ?: it.path }.map { cat ->
@@ -99,7 +96,10 @@ class VideoRepositoryImpl : VideoRepository {
                         episodes = movies.distinctBy { it.id }.sortedBy { it.title ?: "" },
                         fullPath = cat.path,
                         posterPath = cat.posterPath,
-                        genreIds = cat.genreIds ?: emptyList()
+                        genreIds = cat.genreIds ?: emptyList(),
+                        overview = cat.overview,
+                        year = cat.year,
+                        rating = cat.rating
                     ))
                 } else {
                     finalSeriesList.addAll(movies.groupBySeriesInternal(null, cat.posterPath, cat.genreIds))
@@ -145,7 +145,7 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun getAnimations(): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val results: List<Category> = client.get("$baseUrl/animations") { parameter("lite", "true") }.body()
+            val results: List<Category> = client.get("$baseUrl/animations").body()
             results.flatMap { it.movies ?: emptyList() }.groupBySeriesInternal()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -155,7 +155,7 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun getAnimationsAll(): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val response = client.get("$baseUrl/animations_all") { parameter("lite", "true") }
+            val response = client.get("$baseUrl/animations_all")
             if (response.status == HttpStatusCode.OK) {
                 val categories: List<Category> = response.body()
                 categories.filter { cat -> 
@@ -171,7 +171,6 @@ class VideoRepositoryImpl : VideoRepository {
             val categories: List<Category> = client.get("$baseUrl/anim_raftel") {
                 parameter("limit", 500)
                 parameter("offset", offset)
-                parameter("lite", "true")
             }.body()
             categories.filter { cat -> 
                 val name = cat.name ?: ""
@@ -185,7 +184,6 @@ class VideoRepositoryImpl : VideoRepository {
             val categories: List<Category> = client.get("$baseUrl/anim_series") {
                 parameter("limit", 500)
                 parameter("offset", offset)
-                parameter("lite", "true")
             }.body()
             categories.filter { cat -> 
                 val name = cat.name ?: ""
@@ -196,7 +194,7 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun getDramas(): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val results: List<Category> = client.get("$baseUrl/dramas") { parameter("lite", "true") }.body()
+            val results: List<Category> = client.get("$baseUrl/dramas").body()
             results.flatMap { it.movies ?: emptyList() }.groupBySeriesInternal()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -230,7 +228,6 @@ class VideoRepositoryImpl : VideoRepository {
             val response = client.get("$baseUrl$endpoint") {
                 parameter("limit", limit)
                 parameter("offset", offset)
-                parameter("lite", "true")
             }
             if (response.status == HttpStatusCode.OK) {
                 val categories: List<Category> = response.body()
@@ -254,7 +251,6 @@ class VideoRepositoryImpl : VideoRepository {
             val response = client.get("$baseUrl$endpoint") {
                 parameter("limit", limit)
                 parameter("offset", offset)
-                parameter("lite", "true")
             }
             if (response.status == HttpStatusCode.OK) {
                 val categories: List<Category> = response.body()
@@ -267,7 +263,10 @@ class VideoRepositoryImpl : VideoRepository {
                         episodes = emptyList(),
                         fullPath = if (cat.path != null) "$prefix/${cat.path}" else null,
                         genreIds = cat.genreIds ?: emptyList(),
-                        posterPath = cat.posterPath
+                        posterPath = cat.posterPath,
+                        overview = cat.overview,
+                        year = cat.year,
+                        rating = cat.rating
                     )
                 }
             } else emptyList()
@@ -276,7 +275,7 @@ class VideoRepositoryImpl : VideoRepository {
 
     private suspend fun getAirDataInternal(filterKeyword: String? = null): List<Series> = withContext(Dispatchers.Default) {
         try {
-            val response = client.get("$baseUrl/air") { parameter("lite", "true") }
+            val response = client.get("$baseUrl/air")
             if (response.status != HttpStatusCode.OK) return@withContext emptyList()
             
             val categories: List<Category> = response.body()
@@ -299,7 +298,10 @@ class VideoRepositoryImpl : VideoRepository {
                     episodes = emptyList(),
                     fullPath = if (cat.path != null) "방송중/${cat.path}" else null,
                     genreIds = cat.genreIds ?: emptyList(),
-                    posterPath = cat.posterPath
+                    posterPath = cat.posterPath,
+                    overview = cat.overview,
+                    year = cat.year,
+                    rating = cat.rating
                 )
             }
         } catch (e: Exception) { emptyList() }
@@ -363,7 +365,10 @@ class VideoRepositoryImpl : VideoRepository {
                 episodes = emptyList(), 
                 fullPath = fullPath,
                 genreIds = bestCat.genreIds ?: emptyList(),
-                posterPath = bestCat.posterPath
+                posterPath = bestCat.posterPath,
+                overview = bestCat.overview,
+                year = bestCat.year,
+                rating = bestCat.rating
             )
         }
         .filter { !REGEX_INDEX_FOLDER.matches(it.title) && !REGEX_YEAR_FOLDER.matches(it.title) }

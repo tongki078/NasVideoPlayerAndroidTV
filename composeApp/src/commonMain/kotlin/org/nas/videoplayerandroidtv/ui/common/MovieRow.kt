@@ -32,16 +32,16 @@ fun MovieRow(
     val rowFocusIndices = remember { mutableStateMapOf<String, Int>() }
     val rowKey = remember(title) { "row_$title" }
     
-    Column(modifier = Modifier.padding(top = 0.dp)) { // 상단 여백 제거
+    Column(modifier = Modifier.padding(top = 0.dp)) { 
         Text(
             text = title,
             style = MaterialTheme.typography.titleMedium.copy(
                 fontWeight = FontWeight.Bold,
-                fontSize = 16.sp, // 폰트 크기 통일
+                fontSize = 16.sp, 
                 letterSpacing = 0.5.sp
             ),
             color = Color(0xFFE0E0E0),
-            modifier = Modifier.padding(start = standardMargin, bottom = 4.dp) // 간격 4dp로 축소
+            modifier = Modifier.padding(start = standardMargin, bottom = 4.dp) 
         )
         
         NetflixTvPivotRow(
@@ -52,6 +52,7 @@ fun MovieRow(
             rowFocusIndices = rowFocusIndices,
             keySelector = { it.title + (it.fullPath ?: "") }
         ) { series, index, rowState, focusRequester, marginPx, focusedIndex ->
+            // series 객체에 담긴 상세 정보를 NetflixPivotItem에 전달
             NetflixPivotItem(
                 title = series.title,
                 posterPath = series.posterPath,
@@ -63,6 +64,9 @@ fun MovieRow(
                 state = rowState,
                 marginPx = marginPx,
                 focusRequester = focusRequester,
+                overview = series.overview,
+                year = series.year,
+                rating = series.rating,
                 onClick = { onSeriesClick(series) }
             )
         }

@@ -382,7 +382,9 @@ def get_list():
     for entry in sorted(os.listdir(real_path)):
         fe = os.path.join(real_path, entry)
         if any(ex in entry for ex in EXCLUDE_FOLDERS): continue
-        if os.path.isdir(fe): res.append({"name": nfc(entry), "path": nfc(os.path.relpath(fe, base_dir)), "movies": []})
+        if os.path.isdir(fe):
+            # 폴더인 경우 TMDB 정보를 붙여서 반환
+            res.append(attach_tmdb_info({"name": nfc(entry), "path": nfc(os.path.relpath(fe, base_dir)), "movies": []}))
         elif entry.lower().endswith(exts): movies.append(get_movie_info(fe, base_dir, type_code))
     if movies: res.append({"name": nfc(os.path.basename(real_path)), "path": nfc(os.path.relpath(real_path, base_dir)), "movies": movies})
     return jsonify(res)
