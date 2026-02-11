@@ -124,10 +124,8 @@ private val REGEX_SPACES = Regex("""\s+""")
 
 private val REGEX_HANGUL_NUMBER = Regex("""([가-힣])(\d+)(?=[.\s_]|$)""")
 
-// [추가] 에피소드 및 날짜 마커 제거 (검색어 정화용)
-private val REGEX_SEARCH_NOISE = Regex("""(?i)(?:E\d+|[.\s]\d{6}|[.\s]\d{8}|[.\s]\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))""")
+private val REGEX_SEARCH_NOISE = Regex("""(?i)(?:E\d+|[.\s]\d{6}|[.\s]\d{8}|[.\s]\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])|시즌\s*\d+|파트\s*\d+|\d+\s*기|\d+\s*화)""")
 
-// 관리용 폴더 필터링 정규식
 private val REGEX_INDEX_FOLDER = Regex("""(?i)^\s*([0-9A-Z가-힣ㄱ-ㅎ]|0Z|0-Z|가-하|[0-9]-[0-9]|[A-Z]-[A-Z]|[가-힣]-[가-힣])\s*$""")
 private val REGEX_YEAR_FOLDER = Regex("""(?i)^\s*(?:\(\d{4}\)|\d{4}|\d{4}\s*년)\s*$""") 
 private val REGEX_SEASON_FOLDER = Regex("""(?i)^\s*(?:Season\s*\d+|시즌\s*\d+(?:\s*년)?|Part\s*\d+|파트\s*\d+|S\d+|\d+기|\d+화|\d+회|특집|Special|Extras|Bonus|미분류|기타|새\s*폴더)\s*$""")
@@ -145,24 +143,19 @@ fun isGenericTitle(name: String?): Boolean {
 fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = true, preserveSubtitle: Boolean = false): String {
     val normalized = this.toNfc()
     var cleaned = normalized
-    
     cleaned = cleaned.replace("×", "x").replace("✕", "x")
     cleaned = REGEX_TMDB_HINT.replace(cleaned, "")
     cleaned = REGEX_EXT.replace(cleaned, "")
-    
     val yearMatch = REGEX_YEAR.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     cleaned = REGEX_YEAR.replace(cleaned, " ")
-    
     cleaned = REGEX_HANGUL_LETTER.replace(cleaned, "$1 $2")
     cleaned = REGEX_LETTER_HANGUL.replace(cleaned, "$1 $2")
     cleaned = REGEX_HANGUL_NUMBER.replace(cleaned, "$1 $2")
-    
     cleaned = cleaned.replace("(자막)", "").replace("(더빙)", "").replace("[자막]", "").replace("[더빙]", "")
     cleaned = REGEX_JUNK_KEYWORDS.replace(cleaned, " ")
     cleaned = REGEX_BRACKETS.replace(cleaned, " ")
     cleaned = REGEX_TECHNICAL_TAGS.replace(cleaned, "")
-    
     if (!keepAfterHyphen && cleaned.contains("-")) {
         val parts = cleaned.split("-")
         val afterHyphen = parts.getOrNull(1)?.trim() ?: ""
@@ -170,16 +163,13 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
             cleaned = parts[0]
         }
     }
-    
     cleaned = cleaned.replace(":", " ")
     cleaned = REGEX_SPECIAL_CHARS.replace(cleaned, " ")
     cleaned = REGEX_SPACES.replace(cleaned, " ").trim()
-    
     if (cleaned.length < 2) {
         val backup = normalized.replace(REGEX_TMDB_HINT, "").replace(REGEX_EXT, "").trim()
         return if (backup.length >= 2) backup else normalized
     }
-    
     return if (includeYear && yearStr != null) "$cleaned ($yearStr)" else cleaned
 }
 
@@ -215,13 +205,11 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimati
     if (TMDB_API_KEY.isBlank()) return TmdbMetadata()
     val normalizedTitle = title.toNfc()
     val cacheKey = if (isAnimation) "ani_$normalizedTitle" else normalizedTitle
-    
     tmdbCache[cacheKey]?.let { return it }
     persistentCache?.getCache(cacheKey)?.let {
         tmdbCache[cacheKey] = it
         return it
     }
-
     val deferred = synchronized(tmdbInFlightRequests) {
         tmdbInFlightRequests.getOrPut(cacheKey) {
             @OptIn(DelicateCoroutinesApi::class)
@@ -236,7 +224,6 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimati
                         }
                     }
                 } catch (e: Exception) { null }
-                
                 if (result != null && result.posterUrl != null) {
                     withContext(Dispatchers.Main) { tmdbCache[cacheKey] = result }
                     persistentCache?.saveCache(cacheKey, result)
@@ -246,7 +233,6 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimati
             }
         }
     }
-    
     return deferred.await() ?: TmdbMetadata()
 }
 
@@ -258,19 +244,9 @@ private suspend fun fetchByIdDirectly(tmdbId: Int): TmdbMetadata? {
             parameter("language", "ko-KR")
         }.body<TmdbDetailsResponse>()
     } catch (e: Exception) { null }
-
     if (movieRes != null && movieRes.posterPath != null) {
-        return TmdbMetadata(
-            tmdbId = movieRes.id,
-            mediaType = "movie",
-            posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${movieRes.posterPath}",
-            backdropUrl = movieRes.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" },
-            overview = movieRes.overview,
-            genreIds = movieRes.genres?.map { it.id } ?: emptyList(),
-            title = movieRes.title ?: movieRes.name
-        )
+        return TmdbMetadata(tmdbId = movieRes.id, mediaType = "movie", posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${movieRes.posterPath}", backdropUrl = movieRes.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" }, overview = movieRes.overview, genreIds = movieRes.genres?.map { it.id } ?: emptyList(), title = movieRes.title ?: movieRes.name)
     }
-
     val tvRes = try {
         tmdbClient.get("$TMDB_BASE_URL/tv/$tmdbId") {
             if (TMDB_API_KEY.startsWith("eyJ")) header("Authorization", "Bearer $TMDB_API_KEY")
@@ -278,49 +254,46 @@ private suspend fun fetchByIdDirectly(tmdbId: Int): TmdbMetadata? {
             parameter("language", "ko-KR")
         }.body<TmdbDetailsResponse>()
     } catch (e: Exception) { null }
-
     if (tvRes != null && tvRes.posterPath != null) {
-        return TmdbMetadata(
-            tmdbId = tvRes.id,
-            mediaType = "tv",
-            posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${tvRes.posterPath}",
-            backdropUrl = tvRes.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" },
-            overview = tvRes.overview,
-            genreIds = tvRes.genres?.map { it.id } ?: emptyList(),
-            title = tvRes.title ?: tvRes.name
-        )
+        return TmdbMetadata(tmdbId = tvRes.id, mediaType = "tv", posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${tvRes.posterPath}", backdropUrl = tvRes.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" }, overview = tvRes.overview, genreIds = tvRes.genres?.map { it.id } ?: emptyList(), title = tvRes.title ?: tvRes.name)
     }
-    
     return null
 }
 
 private suspend fun performMultiStepSearch(originalTitle: String, typeHint: String?, isAnimation: Boolean): TmdbMetadata? {
     val year = originalTitle.extractYear()
-    
-    // 1단계: 검색 방해 요소(E01, 날짜 등) 제거
     val cleanedForSearch = originalTitle.replace(REGEX_SEARCH_NOISE, "").trim()
-    
-    // 2단계: Part -> Season 자동 치환
-    val seasonSubTitle = cleanedForSearch.replace(Regex("(?i)part"), "Season").toNfc()
-    
     val fullCleanQuery = cleanedForSearch.cleanTitle(includeYear = false)
-    val seasonCleanQuery = seasonSubTitle.cleanTitle(includeYear = false)
     
-    // [전략 1] 연도 + 치환된 시즌명 검색 (가장 강력)
-    if (year != null && seasonCleanQuery != fullCleanQuery) {
-        searchTmdbCore(seasonCleanQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+    // 핵심 제목 (숫자 제거): '갤럭시 키즈 2' -> '갤럭시 키즈'
+    val noNumberQuery = fullCleanQuery.replace(Regex("""\s+\d+$"""), "").trim()
+
+    // 1. 핵심 제목(숫자 제거)으로 검색 (연도 포함)
+    if (noNumberQuery != fullCleanQuery && noNumberQuery.length >= 2) {
+        searchTmdbCore(noNumberQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
     }
 
-    // [전략 2] 연도 + 원본 청소된 제목 검색
-    if (year != null) {
-        searchTmdbCore(fullCleanQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+    // 2. 기본 전체 제목 검색 (연도 포함)
+    searchTmdbCore(fullCleanQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+
+    // 3. Part -> Season 치환 검색
+    if (fullCleanQuery.contains("part", ignoreCase = true)) {
+        val seasonQuery = fullCleanQuery.replace(Regex("(?i)part"), "Season")
+        searchTmdbCore(seasonQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
     }
 
-    // [전략 3] 연도 없이 검색
+    // 4. 연도 없이 검색
     searchTmdbCore(fullCleanQuery, "ko-KR", typeHint ?: "multi", null, isAnimation).first?.let { return it }
 
-    // [전략 4] 'SPY FAMILY' 같은 핵심 키워드만 추출해서 재시도
-    val coreQuery = fullCleanQuery.replace(Regex("""(?i)Season\s*\d+|Part\s*\d+"""), "").trim()
+    // 5. 단어 단위 분할 검색 (은애는 도적님아 -> 도적님아)
+    val words = fullCleanQuery.split(" ").filter { it.length >= 2 }
+    if (words.size >= 2) {
+        searchTmdbCore(words.last(), "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+        searchTmdbCore(words.first(), "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+    }
+
+    // 6. 모든 숫자와 시즌 정보를 떼어낸 최종 핵심 단어 검색
+    val coreQuery = fullCleanQuery.replace(Regex("""(?i)Season\s*\d+|Part\s*\d+|\d+"""), "").trim()
     if (coreQuery.length >= 2 && coreQuery != fullCleanQuery) {
         searchTmdbCore(coreQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
     }
@@ -342,7 +315,6 @@ private suspend fun searchTmdbCore(query: String, language: String?, endpoint: S
             }
             parameter("include_adult", "false")
         }.body()
-        
         val results = response.results.filter { it.mediaType != "person" }
         if (results.isEmpty()) return null to null
         
@@ -353,12 +325,13 @@ private suspend fun searchTmdbCore(query: String, language: String?, endpoint: S
                     resYear == year
                 } else false
             }.thenByDescending { 
+                // 애니메이션 가중치 조정
                 val hasAniGenre = it.genreIds?.contains(16) == true
-                if (isAnimation) hasAniGenre else !hasAniGenre
+                if (isAnimation) hasAniGenre else true
             }.thenByDescending { 
                 val matchTitle = (it.name ?: it.title ?: "").lowercase().toNfc().replace("×", "x").replace(" ", "").replace(":", "").replace("-", "")
                 val searchTitle = nfcQuery.lowercase().replace("×", "x").replace(" ", "").replace(":", "").replace("-", "")
-                matchTitle.equals(searchTitle, ignoreCase = true) || matchTitle.contains(searchTitle) || searchTitle.contains(matchTitle)
+                matchTitle.contains(searchTitle) || searchTitle.contains(matchTitle)
             }.thenByDescending { it.posterPath != null }
             .thenByDescending { it.popularity ?: 0.0 }
         ).firstOrNull()
