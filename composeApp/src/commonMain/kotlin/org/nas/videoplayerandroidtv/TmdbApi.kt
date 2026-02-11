@@ -149,9 +149,12 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     val yearMatch = REGEX_YEAR.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     cleaned = REGEX_YEAR.replace(cleaned, " ")
+    
+    // '낭랑18' -> '낭랑 18' 분리 처리를 cleanTitle 내부에 적용하여 기본 검색어 품질 향상
+    cleaned = REGEX_HANGUL_NUMBER.replace(cleaned, "$1 $2")
+    
     cleaned = REGEX_HANGUL_LETTER.replace(cleaned, "$1 $2")
     cleaned = REGEX_LETTER_HANGUL.replace(cleaned, "$1 $2")
-    cleaned = REGEX_HANGUL_NUMBER.replace(cleaned, "$1 $2")
     cleaned = cleaned.replace("(자막)", "").replace("(더빙)", "").replace("[자막]", "").replace("[더빙]", "")
     cleaned = REGEX_JUNK_KEYWORDS.replace(cleaned, " ")
     cleaned = REGEX_BRACKETS.replace(cleaned, " ")
@@ -255,7 +258,15 @@ private suspend fun fetchByIdDirectly(tmdbId: Int): TmdbMetadata? {
         }.body<TmdbDetailsResponse>()
     } catch (e: Exception) { null }
     if (tvRes != null && tvRes.posterPath != null) {
-        return TmdbMetadata(tmdbId = tvRes.id, mediaType = "tv", posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${tvRes.posterPath}", backdropUrl = tvRes.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" }, overview = tvRes.overview, genreIds = tvRes.genres?.map { it.id } ?: emptyList(), title = tvRes.title ?: tvRes.name)
+        return TmdbMetadata(
+            tmdbId = tvRes.id,
+            mediaType = "tv",
+            posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${tvRes.posterPath}",
+            backdropUrl = tvRes.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" },
+            overview = tvRes.overview,
+            genreIds = tvRes.genres?.map { it.id } ?: emptyList(),
+            title = tvRes.title ?: tvRes.name
+        )
     }
     return null
 }
@@ -265,38 +276,25 @@ private suspend fun performMultiStepSearch(originalTitle: String, typeHint: Stri
     val cleanedForSearch = originalTitle.replace(REGEX_SEARCH_NOISE, "").trim()
     val fullCleanQuery = cleanedForSearch.cleanTitle(includeYear = false)
     
-    // 핵심 제목 (숫자 제거): '갤럭시 키즈 2' -> '갤럭시 키즈'
-    val noNumberQuery = fullCleanQuery.replace(Regex("""\s+\d+$"""), "").trim()
+    // [보강] 공백을 모두 제거한 쿼리 (예: '001 리튬 X' -> '001리튬X')
+    val tightQuery = fullCleanQuery.replace(" ", "")
 
-    // 1. 핵심 제목(숫자 제거)으로 검색 (연도 포함)
+    // 1. 공백 제거 쿼리 + 연도 조합 (001리튬X 2020 대응)
+    if (tightQuery != fullCleanQuery && tightQuery.length >= 2) {
+        searchTmdbCore(tightQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+    }
+
+    // 2. 기본 검색 (연도 포함)
+    searchTmdbCore(fullCleanQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
+
+    // 3. 핵심 제목 (숫자 제거) 검색
+    val noNumberQuery = fullCleanQuery.replace(Regex("""\s+\d+$"""), "").trim()
     if (noNumberQuery != fullCleanQuery && noNumberQuery.length >= 2) {
         searchTmdbCore(noNumberQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
     }
 
-    // 2. 기본 전체 제목 검색 (연도 포함)
-    searchTmdbCore(fullCleanQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
-
-    // 3. Part -> Season 치환 검색
-    if (fullCleanQuery.contains("part", ignoreCase = true)) {
-        val seasonQuery = fullCleanQuery.replace(Regex("(?i)part"), "Season")
-        searchTmdbCore(seasonQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
-    }
-
     // 4. 연도 없이 검색
     searchTmdbCore(fullCleanQuery, "ko-KR", typeHint ?: "multi", null, isAnimation).first?.let { return it }
-
-    // 5. 단어 단위 분할 검색 (은애는 도적님아 -> 도적님아)
-    val words = fullCleanQuery.split(" ").filter { it.length >= 2 }
-    if (words.size >= 2) {
-        searchTmdbCore(words.last(), "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
-        searchTmdbCore(words.first(), "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
-    }
-
-    // 6. 모든 숫자와 시즌 정보를 떼어낸 최종 핵심 단어 검색
-    val coreQuery = fullCleanQuery.replace(Regex("""(?i)Season\s*\d+|Part\s*\d+|\d+"""), "").trim()
-    if (coreQuery.length >= 2 && coreQuery != fullCleanQuery) {
-        searchTmdbCore(coreQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
-    }
 
     return null
 }
@@ -325,13 +323,12 @@ private suspend fun searchTmdbCore(query: String, language: String?, endpoint: S
                     resYear == year
                 } else false
             }.thenByDescending { 
-                // 애니메이션 가중치 조정
                 val hasAniGenre = it.genreIds?.contains(16) == true
                 if (isAnimation) hasAniGenre else true
             }.thenByDescending { 
                 val matchTitle = (it.name ?: it.title ?: "").lowercase().toNfc().replace("×", "x").replace(" ", "").replace(":", "").replace("-", "")
                 val searchTitle = nfcQuery.lowercase().replace("×", "x").replace(" ", "").replace(":", "").replace("-", "")
-                matchTitle.contains(searchTitle) || searchTitle.contains(matchTitle)
+                matchTitle.equals(searchTitle, ignoreCase = true) || matchTitle.contains(searchTitle) || matchTitle.contains(searchTitle)
             }.thenByDescending { it.posterPath != null }
             .thenByDescending { it.popularity ?: 0.0 }
         ).firstOrNull()
@@ -368,11 +365,12 @@ suspend fun fetchTmdbSeasonDetails(tmdbId: Int, season: Int): List<TmdbEpisode> 
 
 suspend fun fetchTmdbEpisodeDetails(tmdbId: Int, season: Int, episodeNum: Int): TmdbEpisode? {
     return try {
-        tmdbClient.get("$TMDB_BASE_URL/tv/$tmdbId/season/$season/episode/$episodeNum") {
+        val response: TmdbEpisode = tmdbClient.get("$TMDB_BASE_URL/tv/$tmdbId/season/$season/episode/$episodeNum") {
             if (TMDB_API_KEY.startsWith("eyJ")) header("Authorization", "Bearer $TMDB_API_KEY")
             else parameter("api_key", TMDB_API_KEY)
             parameter("language", "ko-KR")
         }.body()
+        response
     } catch (e: Exception) { null }
 }
 
