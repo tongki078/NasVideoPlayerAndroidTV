@@ -150,7 +150,7 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     cleaned = REGEX_YEAR.replace(cleaned, " ")
     
-    // '낭랑18' -> '낭랑 18' 분리 처리를 cleanTitle 내부에 적용하여 기본 검색어 품질 향상
+    // '낭랑18' -> '낭랑 18' 분리
     cleaned = REGEX_HANGUL_NUMBER.replace(cleaned, "$1 $2")
     
     cleaned = REGEX_HANGUL_LETTER.replace(cleaned, "$1 $2")
@@ -276,10 +276,9 @@ private suspend fun performMultiStepSearch(originalTitle: String, typeHint: Stri
     val cleanedForSearch = originalTitle.replace(REGEX_SEARCH_NOISE, "").trim()
     val fullCleanQuery = cleanedForSearch.cleanTitle(includeYear = false)
     
-    // [보강] 공백을 모두 제거한 쿼리 (예: '001 리튬 X' -> '001리튬X')
     val tightQuery = fullCleanQuery.replace(" ", "")
 
-    // 1. 공백 제거 쿼리 + 연도 조합 (001리튬X 2020 대응)
+    // 1. 공백 제거 쿼리 + 연도 조합
     if (tightQuery != fullCleanQuery && tightQuery.length >= 2) {
         searchTmdbCore(tightQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
     }
@@ -328,7 +327,7 @@ private suspend fun searchTmdbCore(query: String, language: String?, endpoint: S
             }.thenByDescending { 
                 val matchTitle = (it.name ?: it.title ?: "").lowercase().toNfc().replace("×", "x").replace(" ", "").replace(":", "").replace("-", "")
                 val searchTitle = nfcQuery.lowercase().replace("×", "x").replace(" ", "").replace(":", "").replace("-", "")
-                matchTitle.equals(searchTitle, ignoreCase = true) || matchTitle.contains(searchTitle) || matchTitle.contains(searchTitle)
+                matchTitle.contains(searchTitle) || searchTitle.contains(matchTitle)
             }.thenByDescending { it.posterPath != null }
             .thenByDescending { it.popularity ?: 0.0 }
         ).firstOrNull()

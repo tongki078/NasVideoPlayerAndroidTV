@@ -9,8 +9,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import org.nas.videoplayerandroidtv.data.WatchHistory
 import org.nas.videoplayerandroidtv.data.repository.VideoRepositoryImpl
+import org.nas.videoplayerandroidtv.domain.model.Category
 import org.nas.videoplayerandroidtv.domain.model.HomeSection
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.Series
@@ -32,16 +35,62 @@ fun HomeScreen(
     val rowStates = remember { mutableMapOf<String, LazyListState>() }
     val rowFocusIndices = remember { mutableStateMapOf<String, Int>() }
 
-    // 홈 화면 섹션 데이터 필터링 (시즌 xxxx 년 등 관리용 폴더 제거)
-    val filteredSections = remember(homeSections) {
-        homeSections.map { section ->
-            section.copy(items = section.items.filter { !isGenericTitle(it.name) })
+    // [추가] 외국TV / 국내드라마 데이터를 담을 상태
+    var extraSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
+
+    LaunchedEffect(Unit) {
+        coroutineScope {
+            // 외국TV와 국내 드라마(KtvDrama)를 로딩
+            val foreignTvDeferred = async { repository.getLatestForeignTV() }
+            val koreanDramaDeferred = async { repository.getKtvDrama(20, 0) }
+            
+            val foreignTv = try { foreignTvDeferred.await().take(20) } catch(e: Exception) { emptyList() }
+            val koreanDrama = try { koreanDramaDeferred.await().take(20) } catch(e: Exception) { emptyList() }
+            
+            val newSections = mutableListOf<HomeSection>()
+            
+            if (foreignTv.isNotEmpty()) {
+                newSections.add(HomeSection(
+                    title = "인기 외국 TV 시리즈",
+                    items = foreignTv.toCategories()
+                ))
+            }
+            
+            if (koreanDrama.isNotEmpty()) {
+                newSections.add(HomeSection(
+                    title = "화제의 국내 드라마",
+                    items = koreanDrama.toCategories()
+                ))
+            }
+            
+            extraSections = newSections
+        }
+    }
+
+    // 모든 섹션을 합치고 필터링 적용
+    val combinedSections = remember(homeSections, extraSections) {
+        (homeSections + extraSections).map { section ->
+            section.copy(
+                items = section.items.filter { item ->
+                    val name = (item.name ?: "").trim()
+                    val path = (item.path ?: "").trim()
+                    
+                    // 1. 관리용 폴더 제외 (시즌 xxxx 등)
+                    if (isGenericTitle(name)) return@filter false
+                    
+                    // 2. 다큐/교양 폴더 제외 (단, 제목에 포함된 경우는 허용하도록 경로 위주 체크)
+                    val lowerPath = path.lowercase()
+                    val isDokuOrEduFolder = lowerPath.contains("/다큐") || lowerPath.contains("/교양")
+                    
+                    !isDokuOrEduFolder
+                }
+            )
         }.filter { it.items.isNotEmpty() }
     }
 
-    val heroItem = remember(filteredSections) { 
-        filteredSections.find { it.title.contains("인기작") }?.items?.firstOrNull() 
-        ?: filteredSections.firstOrNull()?.items?.firstOrNull()
+    val heroItem = remember(combinedSections) { 
+        combinedSections.find { it.title.contains("인기작") }?.items?.firstOrNull() 
+        ?: combinedSections.firstOrNull()?.items?.firstOrNull()
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -76,7 +125,7 @@ fun HomeScreen(
                 }
             }
 
-            if (isLoading && filteredSections.isEmpty()) {
+            if (isLoading && combinedSections.isEmpty()) {
                 items(3) { 
                     SkeletonRow(standardMargin)
                 }
@@ -115,7 +164,7 @@ fun HomeScreen(
                     }
                 }
 
-                itemsIndexed(filteredSections, key = { _, s -> "row_${s.title}" }) { _, section ->
+                itemsIndexed(combinedSections, key = { _, s -> "row_${s.title}_${s.items.size}" }) { _, section ->
                     val rowKey = "row_${section.title}"
                     val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
 
@@ -147,7 +196,7 @@ fun HomeScreen(
                                 year = item.year,
                                 rating = item.rating,
                                 onClick = { 
-                                    onSeriesClick(Series(title = item.name ?: "", episodes = emptyList(), fullPath = item.path, posterPath = item.posterPath, genreIds = item.genreIds ?: emptyList(), overview = item.overview, year = item.year, rating = item.rating))
+                                    onSeriesClick(Series(title = item.name ?: "", episodes = item.movies ?: emptyList(), fullPath = item.path, posterPath = item.posterPath, genreIds = item.genreIds ?: emptyList(), overview = item.overview, year = item.year, rating = item.rating))
                                 }
                             )
                         }
@@ -155,5 +204,20 @@ fun HomeScreen(
                 }
             }
         }
+    }
+}
+
+private fun List<Series>.toCategories(): List<Category> {
+    return this.map { series ->
+        Category(
+            name = series.title,
+            path = series.fullPath,
+            posterPath = series.posterPath,
+            genreIds = series.genreIds,
+            overview = series.overview,
+            year = series.year,
+            rating = series.rating,
+            movies = series.episodes
+        )
     }
 }
