@@ -42,6 +42,7 @@ import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.cleanTitle
 import org.nas.videoplayerandroidtv.extractEpisode
+import org.nas.videoplayerandroidtv.extractSeason
 
 /**
  * 직접 정의한 Pause 아이콘
@@ -267,9 +268,9 @@ fun VideoPlayerScreen(
                 ) {
                     val titleText = currentMovie.title ?: ""
                     val cleanBase = titleText.cleanTitle(keepAfterHyphen = true, includeYear = false)
+                    val season = titleText.extractSeason()
                     val episode = titleText.extractEpisode()
 
-                    // 제목 (더 작게 수정: 20.sp)
                     Text(
                         text = cleanBase,
                         color = Color.White,
@@ -282,30 +283,32 @@ fun VideoPlayerScreen(
                         modifier = Modifier.widthIn(max = 400.dp)
                     )
                     
-                    // 회차 정보 (더 작게 수정: 16.sp)
-                    if (episode != null) {
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = episode,
-                            color = Color.White.copy(alpha = 0.8f),
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Normal,
-                            textAlign = TextAlign.End,
-                            style = LocalTextStyle.current.copy(
-                                shadow = Shadow(Color.Black.copy(alpha = 0.8f), androidx.compose.ui.geometry.Offset(2f, 2f), 4f)
-                            )
-                        )
+                    val infoText = buildString {
+                        append("시즌 $season")
+                        if (episode != null) {
+                            append(" : $episode")
+                        }
                     }
+                    
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = infoText,
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Normal,
+                        textAlign = TextAlign.End,
+                        style = LocalTextStyle.current.copy(
+                            shadow = Shadow(Color.Black.copy(alpha = 0.8f), androidx.compose.ui.geometry.Offset(2f, 2f), 4f)
+                        )
+                    )
                 }
             }
 
-            // --- [플레이어 버튼 레이어] ---
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(48.dp)
             ) {
-                // 1. 다음 회차 보기 (좌측 상단)
                 AnimatedVisibility(
                     visible = isControllerVisible && nextMovie != null && !isSeeking,
                     enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
@@ -329,7 +332,6 @@ fun VideoPlayerScreen(
                     )
                 }
 
-                // 2. 오프닝 건너뛰기 (좌측 하단)
                 AnimatedVisibility(
                     visible = isControllerVisible && isDuringOpening && !isSeeking,
                     enter = fadeIn() + slideInHorizontally(initialOffsetX = { -it }),
@@ -352,7 +354,6 @@ fun VideoPlayerScreen(
                 }
             }
 
-            // 하단 시크바 및 썸네일 탐색
             AnimatedVisibility(
                 visible = isControllerVisible || isSeeking,
                 enter = fadeIn(), exit = fadeOut(),

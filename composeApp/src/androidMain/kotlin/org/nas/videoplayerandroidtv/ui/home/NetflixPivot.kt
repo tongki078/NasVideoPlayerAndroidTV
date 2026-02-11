@@ -47,7 +47,6 @@ fun <T> NetflixTvPivotRow(
     keySelector: (T) -> Any,
     itemContent: @Composable (item: T, index: Int, state: LazyListState, focusRequester: FocusRequester, marginPx: Int, focusedIndex: Int) -> Unit
 ) {
-    // 5만개 데이터를 대비하여 FocusRequester 관리를 더 안전하게 처리
     val focusRequesters = remember(items.size) { List(items.size) { FocusRequester() } }
     val density = LocalDensity.current
     val marginPx = with(density) { marginValue.roundToPx() }
@@ -61,14 +60,11 @@ fun <T> NetflixTvPivotRow(
                 enter = {
                     val lastIdx = rowFocusIndices[rowKey] ?: 0
                     val visibleItems = state.layoutInfo.visibleItemsInfo
-                    
-                    // 현재 화면에 보이는 아이템들 중 마지막 포커스된 인덱스가 있는지 확인
                     val isLastItemVisible = visibleItems.any { it.index == lastIdx }
                     
                     if (isLastItemVisible && lastIdx in focusRequesters.indices) {
                         focusRequesters[lastIdx]
                     } else {
-                        // 마지막 포커스 대상이 화면 밖에 있다면, 현재 보이는 첫 번째 아이템으로 안전하게 포커스 유도
                         visibleItems.firstOrNull()?.let { 
                             if (it.index in focusRequesters.indices) focusRequesters[it.index] 
                             else FocusRequester.Default
@@ -124,12 +120,10 @@ fun NetflixPivotItem(
 
     LaunchedEffect(isFocused) {
         if (isFocused) {
-            // 빠른 스크롤 시 스크롤 애니메이션 에러 방지 (IllegalStateException 방어)
             try {
                 state.animateScrollToItem(index, -marginPx)
             } catch (_: Exception) {}
             
-            // 상세 정보 로딩 지연 (사용자가 잠시 머물 때만 로딩하여 부하 감소)
             delay(500)
             if (isFocused && (previewUrl == null || itemOverview == null) && categoryPath != null) {
                 coroutineScope.launch {
@@ -146,7 +140,6 @@ fun NetflixPivotItem(
                 }
             }
             
-            // 프리뷰 재생 지연
             delay(300)
             if (previewUrl != null && isFocused) {
                 showPreview = true
@@ -172,7 +165,8 @@ fun NetflixPivotItem(
                 .fillMaxSize()
                 .focusRequester(focusRequester)
                 .clip(RoundedCornerShape(6.dp))
-                .background(if (isFocused) Color(0xFF1F1F1F) else Color.Transparent) 
+                // 포커스 시 배경색을 투명(Transparent)으로 변경하여 회색 배경 제거
+                .background(Color.Transparent) 
                 .focusable(interactionSource = interactionSource)
                 .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
         ) {
@@ -206,7 +200,6 @@ fun NetflixPivotItem(
                 }
             }
             
-            // 정보 영역 (포커스 시에만 렌더링)
             if (isFocused) {
                 Column(
                     modifier = Modifier

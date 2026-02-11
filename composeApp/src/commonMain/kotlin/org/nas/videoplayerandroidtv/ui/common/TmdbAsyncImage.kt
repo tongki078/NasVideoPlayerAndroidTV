@@ -37,16 +37,23 @@ fun TmdbAsyncImage(
     val cacheKey = remember(title, isAnimation) { if (isAnimation) "ani_$title" else title }
     val metadata = tmdbCache[cacheKey]
     
-    // 메타데이터가 아직 로딩 중인지 여부 (캐시에도 없고, 아직 요청 중일 때)
     val isFetchingMetadata = remember(metadata, posterPath) { 
         posterPath == null && metadata == null 
     }
 
     val finalImageUrl = remember(metadata, posterPath, isLarge) {
+        // 1. 이미 완성된 posterUrl이 있다면 그대로 사용
+        if (metadata?.posterUrl != null && metadata.posterUrl.startsWith("http")) {
+            return@remember metadata.posterUrl
+        }
+        
+        // 2. posterPath(경로만)가 있는 경우 안전하게 조합
         val path = posterPath ?: metadata?.posterUrl?.substringAfterLast("/")
         if (path != null && path != "null" && path.isNotEmpty()) {
             val size = if (isLarge) TMDB_POSTER_SIZE_LARGE else TMDB_POSTER_SIZE_MEDIUM
-            "$TMDB_IMAGE_BASE$size/$path"
+            // TMDB_IMAGE_BASE에 슬래시가 포함되어 있으므로 경로 앞의 슬래시 제거 후 조합
+            val cleanPath = path.removePrefix("/")
+            "$TMDB_IMAGE_BASE$size/$cleanPath"
         } else null
     }
 
@@ -74,7 +81,7 @@ fun TmdbAsyncImage(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF1A1A1A)) // 더 어두운 배경으로 로딩 시 이질감 감소
+            .background(Color(0xFF1A1A1A)) 
     ) {
         if (isSuccess) {
             Image(
@@ -84,15 +91,11 @@ fun TmdbAsyncImage(
                 contentScale = contentScale
             )
         } else {
-            // 아래 조건이 모두 만족될 때만 텍스트를 노출함:
-            // 1. 메타데이터 조회가 끝났는데 이미지 URL이 없을 때 (또는 조회 실패가 확정되었을 때)
-            // 2. 이미지를 불러오다가 에러가 났을 때
-            // 3. 현재 이미지를 로딩 중이 아닐 때
             val showPlaceholderText = when {
-                isError -> true // 이미지 로드 실패 시
-                isFetchingMetadata -> false // 메타데이터 조회 중에는 절대 안 보여줌
-                isLoadingImage -> false // 이미지 로드 중에는 절대 안 보여줌
-                finalImageUrl == null -> true // 조회가 끝났는데 URL이 없으면 보여줌
+                isError -> true
+                isFetchingMetadata -> false
+                isLoadingImage -> false
+                finalImageUrl == null -> true
                 else -> false
             }
 
