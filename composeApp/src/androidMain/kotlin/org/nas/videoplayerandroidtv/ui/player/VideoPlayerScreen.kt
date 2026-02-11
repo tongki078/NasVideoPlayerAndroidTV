@@ -23,23 +23,28 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import kotlinx.coroutines.delay
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
+import org.nas.videoplayerandroidtv.cleanTitle
+import org.nas.videoplayerandroidtv.extractEpisode
 
 /**
- * 직접 정의한 Pause 아이콘 (라이브러리 오류 방지 및 시인성 개선)
+ * 직접 정의한 Pause 아이콘
  */
 val MyPauseIcon: ImageVector
     get() = ImageVector.Builder(
@@ -63,9 +68,6 @@ val MyPauseIcon: ImageVector
         close()
     }.build()
 
-/**
- * Android TV 전용 넷플릭스 스타일 플레이어 스크린
- */
 @Composable
 fun VideoPlayerScreen(
     movie: Movie,
@@ -76,7 +78,6 @@ fun VideoPlayerScreen(
 ) {
     var currentMovie by remember(movie) { mutableStateOf(movie) }
     
-    // 영상 변경 시 상태 초기화
     var isSeeking by remember(currentMovie.id) { mutableStateOf(false) }
     var userPaused by remember { mutableStateOf(false) }
     var seekTime by remember(currentMovie.id) { mutableLongStateOf(0L) }
@@ -124,7 +125,6 @@ fun VideoPlayerScreen(
         mainBoxFocusRequester.requestFocus()
     }
 
-    // 영상 로드 시 오프닝 구간이면 자동으로 UI 표시
     LaunchedEffect(currentMovie.id, isDuringOpening) {
         delay(1000)
         if (isDuringOpening && currentPosition < 5000L) {
@@ -133,10 +133,9 @@ fun VideoPlayerScreen(
         }
     }
 
-    // 자동 숨김 로직 (재생 중일 때만 작동, 대기 시간을 3초로 단축하여 더 자연스럽게 함)
     LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused, isSkipOpeningFocused, userPaused) {
         if (isControllerVisible && !isSeeking && !isNextButtonFocused && !isSkipOpeningFocused && !userPaused) {
-            delay(3000) // 3초 후 자동으로 사라짐
+            delay(3000)
             isControllerVisible = false
         }
     }
@@ -196,13 +195,11 @@ fun VideoPlayerScreen(
                         if (isSeeking) {
                             finalSeekPosition = seekTime
                             isSeeking = false
-                            // 탐색 완료 시 자연스러운 숨김을 위해 interactionTime 갱신
                             lastInteractionTime = System.currentTimeMillis()
                             true
                         } else if (isNextButtonFocused || isSkipOpeningFocused) {
                             false
                         } else {
-                            // 확인 버튼으로 일시정지/재생 토글
                             userPaused = !userPaused
                             isControllerVisible = true
                             lastInteractionTime = System.currentTimeMillis()
@@ -223,7 +220,7 @@ fun VideoPlayerScreen(
             modifier = Modifier.fillMaxSize(),
             initialPosition = startPosition,
             seekToPosition = finalSeekPosition,
-            isPlaying = !isSeeking && !userPaused, // 탐색 중이거나 사용자가 직접 멈춘 경우 일시정지
+            isPlaying = !isSeeking && !userPaused,
             onPositionUpdate = { pos ->
                 currentPosition = pos
                 onPositionUpdate(pos)
@@ -243,7 +240,6 @@ fun VideoPlayerScreen(
             }
         )
 
-        // 탐색 시 전체 화면 불투명 처리 (넷플릭스 스타일)
         AnimatedVisibility(
             visible = isSeeking,
             enter = fadeIn(),
@@ -258,6 +254,51 @@ fun VideoPlayerScreen(
 
         Box(modifier = Modifier.fillMaxSize()) {
             
+            // --- [우측 상단 제목 및 회차 정보] ---
+            AnimatedVisibility(
+                visible = isControllerVisible && !isSeeking,
+                enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+                modifier = Modifier.align(Alignment.TopEnd).zIndex(2f)
+            ) {
+                Column(
+                    modifier = Modifier.padding(top = 32.dp, end = 48.dp),
+                    horizontalAlignment = Alignment.End
+                ) {
+                    val titleText = currentMovie.title ?: ""
+                    val cleanBase = titleText.cleanTitle(keepAfterHyphen = true, includeYear = false)
+                    val episode = titleText.extractEpisode()
+
+                    // 제목 (더 작게 수정: 20.sp)
+                    Text(
+                        text = cleanBase,
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.End,
+                        style = LocalTextStyle.current.copy(
+                            shadow = Shadow(Color.Black.copy(alpha = 0.8f), androidx.compose.ui.geometry.Offset(2f, 2f), 4f)
+                        ),
+                        modifier = Modifier.widthIn(max = 400.dp)
+                    )
+                    
+                    // 회차 정보 (더 작게 수정: 16.sp)
+                    if (episode != null) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = episode,
+                            color = Color.White.copy(alpha = 0.8f),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Normal,
+                            textAlign = TextAlign.End,
+                            style = LocalTextStyle.current.copy(
+                                shadow = Shadow(Color.Black.copy(alpha = 0.8f), androidx.compose.ui.geometry.Offset(2f, 2f), 4f)
+                            )
+                        )
+                    }
+                }
+            }
+
             // --- [플레이어 버튼 레이어] ---
             Box(
                 modifier = Modifier
@@ -328,7 +369,7 @@ fun VideoPlayerScreen(
                         LazyRow(
                             state = thumbListState,
                             contentPadding = PaddingValues(horizontal = 100.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp), // 썸네일 간격 8dp 유지
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             userScrollEnabled = false,
                             modifier = Modifier.fillMaxWidth().height(140.dp).padding(bottom = 16.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -363,7 +404,6 @@ fun VideoPlayerScreen(
                             .padding(bottom = 48.dp, start = 48.dp, end = 60.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 일시정지/재생 아이콘 (시크바 왼쪽 배치, 64dp 크기 유지)
                         Icon(
                             imageVector = if (userPaused) Icons.Default.PlayArrow else MyPauseIcon,
                             contentDescription = null,
@@ -393,9 +433,6 @@ fun VideoPlayerScreen(
     }
 }
 
-/**
- * 넷플릭스 스타일 원형 아이콘 버튼
- */
 @Composable
 fun NetflixIconButton(
     icon: ImageVector,
@@ -423,9 +460,6 @@ fun NetflixIconButton(
     }
 }
 
-/**
- * 넷플릭스 스타일 플레이어 버튼
- */
 @Composable
 fun NetflixPlayerButton(
     text: String,
