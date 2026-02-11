@@ -23,6 +23,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -31,10 +33,35 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
-import coil3.request.crossfade
+import coil3.request.crossfade // 수정된 임포트
 import kotlinx.coroutines.delay
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
+
+/**
+ * 직접 정의한 Pause 아이콘 (라이브러리 오류 방지)
+ */
+val MyPauseIcon: ImageVector
+    get() = ImageVector.Builder(
+        name = "Pause",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).path(fill = androidx.compose.ui.graphics.SolidColor(Color.Black)) {
+        moveTo(6f, 19f)
+        horizontalLineToRelative(4f)
+        verticalLineTo(5f)
+        horizontalLineTo(6f)
+        verticalLineToRelative(14f)
+        close()
+        moveTo(14f, 5f)
+        verticalLineToRelative(14f)
+        horizontalLineToRelative(4f)
+        verticalLineTo(5f)
+        horizontalLineToRelative(-4f)
+        close()
+    }.build()
 
 /**
  * Android TV 전용 넷플릭스 스타일 플레이어 스크린
@@ -51,6 +78,7 @@ fun VideoPlayerScreen(
     
     // 영상 변경 시 상태 초기화
     var isSeeking by remember(currentMovie.id) { mutableStateOf(false) }
+    var userPaused by remember { mutableStateOf(false) }
     var seekTime by remember(currentMovie.id) { mutableLongStateOf(0L) }
     var finalSeekPosition by remember(currentMovie.id) { mutableLongStateOf(-1L) }
     var currentPosition by remember(currentMovie.id) { mutableLongStateOf(0L) }
@@ -105,9 +133,9 @@ fun VideoPlayerScreen(
         }
     }
 
-    // 자동 숨김 로직
-    LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused, isSkipOpeningFocused) {
-        if (isControllerVisible && !isSeeking && !isNextButtonFocused && !isSkipOpeningFocused) {
+    // 자동 숨김 로직 (일시정지 중이거나 탐색 중, 버튼 포커스 시에는 유지)
+    LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused, isSkipOpeningFocused, userPaused) {
+        if (isControllerVisible && !isSeeking && !isNextButtonFocused && !isSkipOpeningFocused && !userPaused) {
             delay(5000)
             isControllerVisible = false
         }
@@ -172,7 +200,9 @@ fun VideoPlayerScreen(
                         } else if (isNextButtonFocused || isSkipOpeningFocused) {
                             false
                         } else {
-                            isControllerVisible = !isControllerVisible
+                            // 확인 버튼으로 일시정지/재생 토글
+                            userPaused = !userPaused
+                            isControllerVisible = true
                             true
                         }
                     }
@@ -190,7 +220,7 @@ fun VideoPlayerScreen(
             modifier = Modifier.fillMaxSize(),
             initialPosition = startPosition,
             seekToPosition = finalSeekPosition,
-            isPlaying = !isSeeking, // 탐색 중에는 영상 일시정지
+            isPlaying = !isSeeking && !userPaused, // 탐색 중이거나 사용자가 직접 멈춘 경우 일시정지
             onPositionUpdate = { pos ->
                 currentPosition = pos
                 onPositionUpdate(pos)
@@ -202,6 +232,7 @@ fun VideoPlayerScreen(
                 nextMovie?.let { 
                     currentMovie = it 
                     isControllerVisible = true
+                    userPaused = false
                 } 
             },
             onSeekFinished = {
@@ -244,6 +275,7 @@ fun VideoPlayerScreen(
                             if (nextMovie != null) {
                                 currentMovie = nextMovie
                                 isControllerVisible = true
+                                userPaused = false
                                 try { mainBoxFocusRequester.requestFocus() } catch(_: Exception) {}
                             }
                         },
@@ -293,7 +325,7 @@ fun VideoPlayerScreen(
                         LazyRow(
                             state = thumbListState,
                             contentPadding = PaddingValues(horizontal = 100.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp), // 썸네일 간격 축소
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             userScrollEnabled = false,
                             modifier = Modifier.fillMaxWidth().height(140.dp).padding(bottom = 16.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -327,9 +359,21 @@ fun VideoPlayerScreen(
                         Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(Color.White.copy(alpha = 0.3f))) {
                             Box(modifier = Modifier.fillMaxWidth(progress).fillMaxHeight().background(Color.Red))
                         }
-                        Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(formatTime(if (isSeeking) seekTime else currentPosition), color = Color.White, fontSize = 14.sp)
-                            Text(formatTime(totalDuration), color = Color.White, fontSize = 14.sp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 일시정지/재생 상태 아이콘 추가
+                            Icon(
+                                imageVector = if (userPaused) Icons.Default.PlayArrow else MyPauseIcon,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(Modifier.width(16.dp))
+                            Text(formatTime(if (isSeeking) seekTime else currentPosition), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.weight(1f))
+                            Text(formatTime(totalDuration), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -343,7 +387,7 @@ fun VideoPlayerScreen(
  */
 @Composable
 fun NetflixIconButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     isFocused: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -374,7 +418,7 @@ fun NetflixIconButton(
 @Composable
 fun NetflixPlayerButton(
     text: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     isFocused: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
