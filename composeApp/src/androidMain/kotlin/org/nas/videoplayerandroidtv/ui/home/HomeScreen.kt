@@ -15,6 +15,7 @@ import org.nas.videoplayerandroidtv.domain.model.HomeSection
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
+import org.nas.videoplayerandroidtv.isGenericTitle
 
 @Composable
 fun HomeScreen(
@@ -31,9 +32,16 @@ fun HomeScreen(
     val rowStates = remember { mutableMapOf<String, LazyListState>() }
     val rowFocusIndices = remember { mutableStateMapOf<String, Int>() }
 
-    val heroItem = remember(homeSections) { 
-        homeSections.find { it.title.contains("인기작") }?.items?.firstOrNull() 
-        ?: homeSections.firstOrNull()?.items?.firstOrNull()
+    // 홈 화면 섹션 데이터 필터링 (시즌 xxxx 년 등 관리용 폴더 제거)
+    val filteredSections = remember(homeSections) {
+        homeSections.map { section ->
+            section.copy(items = section.items.filter { !isGenericTitle(it.name) })
+        }.filter { it.items.isNotEmpty() }
+    }
+
+    val heroItem = remember(filteredSections) { 
+        filteredSections.find { it.title.contains("인기작") }?.items?.firstOrNull() 
+        ?: filteredSections.firstOrNull()?.items?.firstOrNull()
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -68,7 +76,7 @@ fun HomeScreen(
                 }
             }
 
-            if (isLoading && homeSections.isEmpty()) {
+            if (isLoading && filteredSections.isEmpty()) {
                 items(3) { 
                     SkeletonRow(standardMargin)
                 }
@@ -107,7 +115,7 @@ fun HomeScreen(
                     }
                 }
 
-                itemsIndexed(homeSections, key = { _, s -> "row_${s.title}" }) { _, section ->
+                itemsIndexed(filteredSections, key = { _, s -> "row_${s.title}" }) { _, section ->
                     val rowKey = "row_${section.title}"
                     val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
 
@@ -135,9 +143,9 @@ fun HomeScreen(
                                 state = rowState,
                                 marginPx = marginPx,
                                 focusRequester = focusRequester,
-                                overview = item.overview, // 서버 데이터 전달
-                                year = item.year,         // 서버 데이터 전달
-                                rating = item.rating,     // 서버 데이터 전달
+                                overview = item.overview,
+                                year = item.year,
+                                rating = item.rating,
                                 onClick = { 
                                     onSeriesClick(Series(title = item.name ?: "", episodes = emptyList(), fullPath = item.path, posterPath = item.posterPath, genreIds = item.genreIds ?: emptyList(), overview = item.overview, year = item.year, rating = item.rating))
                                 }
