@@ -105,7 +105,7 @@ fun VideoPlayerScreen(
         }
     }
 
-    // 5초 후 자동 숨김
+    // 자동 숨김 로직 (버튼 포커스 시 유지)
     LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused, isSkipOpeningFocused) {
         if (isControllerVisible && !isSeeking && !isNextButtonFocused && !isSkipOpeningFocused) {
             delay(5000)
@@ -127,31 +127,29 @@ fun VideoPlayerScreen(
             .focusRequester(mainBoxFocusRequester)
             .focusable()
             .onKeyEvent { keyEvent ->
-                val keyCode = keyEvent.nativeKeyEvent.keyCode
                 if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
                 
                 lastInteractionTime = System.currentTimeMillis()
+                val keyCode = keyEvent.nativeKeyEvent.keyCode
                 
                 when (keyCode) {
                     android.view.KeyEvent.KEYCODE_DPAD_UP -> {
                         if (!isControllerVisible) {
                             isControllerVisible = true
-                        } else {
-                            if (nextMovie != null) {
-                                try { nextButtonFocusRequester.requestFocus() } catch(_: Exception) {}
-                            }
-                        }
-                        true
+                            true
+                        } else if (nextMovie != null) {
+                            try { nextButtonFocusRequester.requestFocus() } catch(_: Exception) {}
+                            true
+                        } else false
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
                         if (!isControllerVisible) {
                             isControllerVisible = true
-                        } else {
-                            if (isDuringOpening) {
-                                try { skipOpeningFocusRequester.requestFocus() } catch(_: Exception) {}
-                            }
-                        }
-                        true
+                            true
+                        } else if (isDuringOpening) {
+                            try { skipOpeningFocusRequester.requestFocus() } catch(_: Exception) {}
+                            true
+                        } else false
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                         isControllerVisible = true
@@ -170,10 +168,14 @@ fun VideoPlayerScreen(
                         if (isSeeking) {
                             finalSeekPosition = seekTime
                             isSeeking = false
+                            true
+                        } else if (isNextButtonFocused || isSkipOpeningFocused) {
+                            // 버튼 포커스 시 시스템이 onClick을 처리하도록 false 반환
+                            false
                         } else {
                             isControllerVisible = !isControllerVisible
+                            true
                         }
-                        true
                     }
                     android.view.KeyEvent.KEYCODE_BACK -> {
                         if (isSeeking) { isSeeking = false; true }
@@ -196,7 +198,12 @@ fun VideoPlayerScreen(
             },
             onDurationDetermined = { dur -> totalDuration = dur },
             onControllerVisibilityChanged = { visible -> isControllerVisible = visible },
-            onVideoEnded = { nextMovie?.let { currentMovie = it } },
+            onVideoEnded = { 
+                nextMovie?.let { 
+                    currentMovie = it 
+                    isControllerVisible = true
+                } 
+            },
             onSeekFinished = {
                 finalSeekPosition = -1L
             }
@@ -221,9 +228,11 @@ fun VideoPlayerScreen(
                         icon = Icons.AutoMirrored.Filled.ArrowForward,
                         isFocused = isNextButtonFocused,
                         onClick = { 
-                            if (nextMovie != null) currentMovie = nextMovie
-                            isControllerVisible = true
-                            try { mainBoxFocusRequester.requestFocus() } catch(_: Exception) {}
+                            if (nextMovie != null) {
+                                currentMovie = nextMovie
+                                isControllerVisible = true
+                                try { mainBoxFocusRequester.requestFocus() } catch(_: Exception) {}
+                            }
                         },
                         modifier = Modifier
                             .focusRequester(nextButtonFocusRequester)
@@ -231,7 +240,7 @@ fun VideoPlayerScreen(
                     )
                 }
 
-                // 2. 오프닝 건너뛰기 (좌측 하단) - 넷플릭스 스타일 (사이즈 축소)
+                // 2. 오프닝 건너뛰기 (좌측 하단) - 넷플릭스 스타일 (콤팩트)
                 AnimatedVisibility(
                     visible = isControllerVisible && isDuringOpening && !isSeeking,
                     enter = fadeIn() + slideInHorizontally(initialOffsetX = { -it }),
@@ -245,7 +254,6 @@ fun VideoPlayerScreen(
                         compact = true,
                         onClick = { 
                             finalSeekPosition = introEnd
-                            isControllerVisible = false
                             try { mainBoxFocusRequester.requestFocus() } catch(_: Exception) {}
                         },
                         modifier = Modifier
