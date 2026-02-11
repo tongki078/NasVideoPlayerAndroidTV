@@ -105,7 +105,7 @@ fun VideoPlayerScreen(
         }
     }
 
-    // 자동 숨김 로직 (버튼 포커스 시 유지)
+    // 자동 숨김 로직
     LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused, isSkipOpeningFocused) {
         if (isControllerVisible && !isSeeking && !isNextButtonFocused && !isSkipOpeningFocused) {
             delay(5000)
@@ -170,7 +170,6 @@ fun VideoPlayerScreen(
                             isSeeking = false
                             true
                         } else if (isNextButtonFocused || isSkipOpeningFocused) {
-                            // 버튼 포커스 시 시스템이 onClick을 처리하도록 false 반환
                             false
                         } else {
                             isControllerVisible = !isControllerVisible
@@ -191,6 +190,7 @@ fun VideoPlayerScreen(
             modifier = Modifier.fillMaxSize(),
             initialPosition = startPosition,
             seekToPosition = finalSeekPosition,
+            isPlaying = !isSeeking, // 탐색 중에는 영상 일시정지
             onPositionUpdate = { pos ->
                 currentPosition = pos
                 onPositionUpdate(pos)
@@ -209,6 +209,19 @@ fun VideoPlayerScreen(
             }
         )
 
+        // 탐색 시 전체 화면 불투명 처리 (넷플릭스 스타일)
+        AnimatedVisibility(
+            visible = isSeeking,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.7f))
+            )
+        }
+
         Box(modifier = Modifier.fillMaxSize()) {
             
             // --- [플레이어 버튼 레이어] ---
@@ -217,7 +230,7 @@ fun VideoPlayerScreen(
                     .fillMaxSize()
                     .padding(48.dp)
             ) {
-                // 1. 다음 회차 보기 (좌측 상단) - 넷플릭스 스타일 아이콘 버튼
+                // 1. 다음 회차 보기 (좌측 상단)
                 AnimatedVisibility(
                     visible = isControllerVisible && nextMovie != null && !isSeeking,
                     enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
@@ -240,7 +253,7 @@ fun VideoPlayerScreen(
                     )
                 }
 
-                // 2. 오프닝 건너뛰기 (좌측 하단) - 넷플릭스 스타일 (콤팩트)
+                // 2. 오프닝 건너뛰기 (좌측 하단)
                 AnimatedVisibility(
                     visible = isControllerVisible && isDuringOpening && !isSeeking,
                     enter = fadeIn() + slideInHorizontally(initialOffsetX = { -it }),
@@ -270,7 +283,9 @@ fun VideoPlayerScreen(
                 modifier = Modifier.align(Alignment.BottomCenter)
             ) {
                 Column(
-                    modifier = Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth().then(
+                        if (isSeeking) Modifier else Modifier.background(Color.Black.copy(alpha = 0.4f))
+                    ),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     if (isSeeking && totalDuration > 0) {
@@ -278,9 +293,9 @@ fun VideoPlayerScreen(
                         LazyRow(
                             state = thumbListState,
                             contentPadding = PaddingValues(horizontal = 100.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp), // 썸네일 간격 축소
                             userScrollEnabled = false,
-                            modifier = Modifier.fillMaxWidth().height(120.dp).padding(bottom = 16.dp),
+                            modifier = Modifier.fillMaxWidth().height(140.dp).padding(bottom = 16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             items(seekThumbnails, key = { it }) { timestamp ->
@@ -295,8 +310,8 @@ fun VideoPlayerScreen(
                                 }
                                 Box(
                                     modifier = Modifier
-                                        .width(if (isCenter) 200.dp else 160.dp)
-                                        .fillMaxHeight(if (isCenter) 1f else 0.8f)
+                                        .width(if (isCenter) 220.dp else 160.dp)
+                                        .fillMaxHeight(if (isCenter) 1f else 0.7f)
                                         .clip(RoundedCornerShape(8.dp))
                                         .border(width = if (isCenter) 3.dp else 1.dp, color = if (isCenter) Color.White else Color.Gray.copy(alpha = 0.5f), shape = RoundedCornerShape(8.dp))
                                         .background(Color.DarkGray)

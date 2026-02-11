@@ -9,6 +9,7 @@ expect fun VideoPlayer(
     modifier: Modifier = Modifier,
     initialPosition: Long = 0L,
     seekToPosition: Long = -1L,
+    isPlaying: Boolean = true,
     onPositionUpdate: ((Long) -> Unit)? = null,
     onDurationDetermined: ((Long) -> Unit)? = null,
     onControllerVisibilityChanged: ((Boolean) -> Unit)? = null,

@@ -32,6 +32,7 @@ actual fun VideoPlayer(
     modifier: Modifier,
     initialPosition: Long,
     seekToPosition: Long,
+    isPlaying: Boolean,
     onPositionUpdate: ((Long) -> Unit)?,
     onDurationDetermined: ((Long) -> Unit)?,
     onControllerVisibilityChanged: ((Boolean) -> Unit)?,
@@ -97,11 +98,15 @@ actual fun VideoPlayer(
         }
     }
 
+    LaunchedEffect(isPlaying) {
+        if (isPlaying) exoPlayer.play() else exoPlayer.pause()
+    }
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> exoPlayer.pause()
-                Lifecycle.Event.ON_RESUME -> exoPlayer.play()
+                Lifecycle.Event.ON_RESUME -> if (isPlaying) exoPlayer.play()
                 else -> {}
             }
         }
