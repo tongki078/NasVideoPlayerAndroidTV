@@ -33,13 +33,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
-import coil3.request.crossfade // 수정된 임포트
+import coil3.request.crossfade
 import kotlinx.coroutines.delay
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 
 /**
- * 직접 정의한 Pause 아이콘 (라이브러리 오류 방지)
+ * 직접 정의한 Pause 아이콘 (라이브러리 오류 방지용 및 시인성 개선)
  */
 val MyPauseIcon: ImageVector
     get() = ImageVector.Builder(
@@ -48,7 +48,7 @@ val MyPauseIcon: ImageVector
         defaultHeight = 24.dp,
         viewportWidth = 24f,
         viewportHeight = 24f
-    ).path(fill = androidx.compose.ui.graphics.SolidColor(Color.Black)) {
+    ).path(fill = androidx.compose.ui.graphics.SolidColor(Color.White)) {
         moveTo(6f, 19f)
         horizontalLineToRelative(4f)
         verticalLineTo(5f)
@@ -334,7 +334,7 @@ fun VideoPlayerScreen(
                                 val isCenter = (timestamp == seekTime)
                                 val baseUrl = NasApiClient.BASE_URL
                                 val timeSec = timestamp / 1000
-                                val thumbRequest = remember(currentMovie.id, timestamp) {
+                                val thumbRequest = remember<ImageRequest>(currentMovie.id, timestamp) {
                                     val originalThumb = currentMovie.thumbnailUrl ?: ""
                                     val finalUrl = if (originalThumb.contains("?")) "$baseUrl$originalThumb&t=$timeSec"
                                                   else "$baseUrl$originalThumb?t=$timeSec"
@@ -354,26 +354,34 @@ fun VideoPlayerScreen(
                         }
                     }
 
-                    Column(modifier = Modifier.padding(bottom = 48.dp, start = 60.dp, end = 60.dp)) {
-                        val progress = if (totalDuration > 0) (if(isSeeking) seekTime else currentPosition).toFloat() / totalDuration else 0f
-                        Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(Color.White.copy(alpha = 0.3f))) {
-                            Box(modifier = Modifier.fillMaxWidth(progress).fillMaxHeight().background(Color.Red))
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // 일시정지/재생 상태 아이콘 추가
-                            Icon(
-                                imageVector = if (userPaused) Icons.Default.PlayArrow else MyPauseIcon,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(Modifier.width(16.dp))
-                            Text(formatTime(if (isSeeking) seekTime else currentPosition), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.weight(1f))
-                            Text(formatTime(totalDuration), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 48.dp, start = 48.dp, end = 60.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 일시정지/재생 아이콘 (시크바 왼쪽 배치, 크기 대폭 확대)
+                        Icon(
+                            imageVector = if (userPaused) Icons.Default.PlayArrow else MyPauseIcon,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(64.dp)
+                        )
+                        
+                        Spacer(Modifier.width(24.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            val progress = if (totalDuration > 0) (if(isSeeking) seekTime else currentPosition).toFloat() / totalDuration else 0f
+                            Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(Color.White.copy(alpha = 0.3f))) {
+                                Box(modifier = Modifier.fillMaxWidth(progress).fillMaxHeight().background(Color.Red))
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(formatTime(if (isSeeking) seekTime else currentPosition), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                Text(formatTime(totalDuration), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
