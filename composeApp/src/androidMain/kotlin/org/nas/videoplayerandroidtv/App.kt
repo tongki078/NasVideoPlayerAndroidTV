@@ -30,7 +30,7 @@ import org.nas.videoplayerandroidtv.ui.category.ThemedCategoryScreen
 import org.nas.videoplayerandroidtv.ui.common.NetflixTopBar
 import org.nas.videoplayerandroidtv.ui.detail.SeriesDetailScreen
 import org.nas.videoplayerandroidtv.ui.home.HomeScreen
-import org.nas.videoplayerandroidtv.ui.player.tv.VideoPlayerScreen
+import org.nas.videoplayerandroidtv.ui.player.VideoPlayerScreen
 import org.nas.videoplayerandroidtv.ui.search.SearchScreen
 import org.nas.videoplayerandroidtv.ui.category.processThemedSections
 import org.nas.videoplayerandroidtv.ui.category.ThemeSection
@@ -229,7 +229,7 @@ fun App(driver: SqlDriver) {
                                 initialPlaybackPosition = lastPlaybackPosition,
                                 onPositionUpdate = { pos -> lastPlaybackPosition = pos },
                                 onBack = { selectedSeries = null }, 
-                                onPlay = { movie, playlist, pos -> 
+                                onPlay = { movie: Movie, playlist: List<Movie>, pos: Long ->
                                     selectedMovie = movie
                                     moviePlaylist = playlist
                                     lastPlaybackPosition = pos

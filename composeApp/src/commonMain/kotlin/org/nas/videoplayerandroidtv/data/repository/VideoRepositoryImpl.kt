@@ -18,7 +18,7 @@ private val REGEX_GROUP_BY_SERIES = Regex(
 )
 private val REGEX_INDEX_FOLDER = Regex("""(?i)^\s*([0-9A-Z가-힣ㄱ-ㅎ]|0Z|0-Z|가-하|[0-9]-[0-9]|[A-Z]-[A-Z]|[가-힣]-[가-힣])\s*$""")
 private val REGEX_YEAR_FOLDER = Regex("""(?i)^\s*(\(\d{4}\)|\d{4})\s*$""") 
-private val REGEX_SEASON_FOLDER = Regex("""(?i)Season\s*\d+|시즌\s*\d+|Part\s*\d+|파트\s*\d+|\d+기""")
+private val REGEX_SEASON_FOLDER = Regex("""(?i)^\s*(?:Season\s*\d+|시즌\s*\d+|Part\s*\d+|파트\s*\d+|\d+기|\d+화|\d+회|특집|Special|Extras|Bonus|미분류|기타)\s*$""")
 
 class VideoRepositoryImpl : VideoRepository {
     private val client = NasApiClient.client
@@ -76,7 +76,7 @@ class VideoRepositoryImpl : VideoRepository {
         try {
             val response = client.get("$baseUrl/search") {
                 parameter("q", query)
-                parameter("lite", "true") // 서버에서 검색어 매칭된 영상은 movies에 담아줌
+                parameter("lite", "true") 
                 if (category != "전체") parameter("category", category)
             }
             
@@ -88,11 +88,9 @@ class VideoRepositoryImpl : VideoRepository {
                 val catName = cat.name ?: ""
                 val isGenericFolder = REGEX_INDEX_FOLDER.matches(catName) || REGEX_YEAR_FOLDER.matches(catName) || catName == "Search Results"
                 
-                // 검색 결과 UI에 맞게 Series 객체 생성
                 if (!isGenericFolder && catName.length >= 2) {
                     val title = catName.cleanTitle(true).replace(REGEX_GROUP_BY_SERIES, "").trim()
                     
-                    // 서버에서 보내준 검색된 영상 정보를 episodes에 담음
                     val episodes = movies.map { movie ->
                         if (movie.videoUrl != null && !movie.videoUrl.startsWith("http")) {
                             movie.copy(videoUrl = "$baseUrl${if (movie.videoUrl.startsWith("/")) "" else "/"}${movie.videoUrl}")
@@ -147,22 +145,14 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun getAnimations(): List<Series> = withContext(Dispatchers.Default) {
         try {
-            // 방송중 애니메이션
             val results: List<Category> = client.get("$baseUrl/air_animations") {
                 parameter("lite", "true")
             }.body()
-            results.map { cat ->
-                Series(
-                    title = cat.name ?: "Unknown",
-                    episodes = emptyList(),
-                    fullPath = "방송중/${cat.path}",
-                    genreIds = cat.genreIds ?: emptyList(),
-                    posterPath = cat.posterPath,
-                    overview = cat.overview,
-                    year = cat.year,
-                    rating = cat.rating
-                )
-            }
+            results.filter { cat ->
+                val path = cat.path ?: ""
+                val name = cat.name ?: ""
+                !path.contains("OTT") && !name.contains("OTT")
+            }.groupCategoriesToSeries("방송중")
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
@@ -215,22 +205,14 @@ class VideoRepositoryImpl : VideoRepository {
 
     override suspend fun getDramas(): List<Series> = withContext(Dispatchers.Default) {
         try {
-            // 방송중 드라마
             val results: List<Category> = client.get("$baseUrl/air_dramas") {
                 parameter("lite", "true")
             }.body()
-            results.map { cat ->
-                Series(
-                    title = cat.name ?: "Unknown",
-                    episodes = emptyList(),
-                    fullPath = "방송중/${cat.path}",
-                    genreIds = cat.genreIds ?: emptyList(),
-                    posterPath = cat.posterPath,
-                    overview = cat.overview,
-                    year = cat.year,
-                    rating = cat.rating
-                )
-            }
+            results.filter { cat ->
+                val path = cat.path ?: ""
+                val name = cat.name ?: ""
+                !path.contains("OTT") && !name.contains("OTT")
+            }.groupCategoriesToSeries("방송중")
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
@@ -293,7 +275,7 @@ class VideoRepositoryImpl : VideoRepository {
                 val categories: List<Category> = response.body()
                 categories.filter { cat -> 
                     val name = cat.name ?: ""
-                    !REGEX_INDEX_FOLDER.matches(name) && !REGEX_YEAR_FOLDER.matches(name)
+                    !REGEX_INDEX_FOLDER.matches(name) && !REGEX_YEAR_FOLDER.matches(name) && !REGEX_SEASON_FOLDER.matches(name)
                 }.map { cat ->
                     Series(
                         title = cat.name ?: "Unknown",
@@ -313,26 +295,26 @@ class VideoRepositoryImpl : VideoRepository {
     private suspend fun getAirDataInternal(filterKeyword: String? = null): List<Series> = withContext(Dispatchers.Default) {
         try {
             val endpoint = if (filterKeyword == "라프텔") "/air_animations" else if (filterKeyword == "드라마") "/air_dramas" else "/air"
+            
             val response = client.get("$baseUrl$endpoint") {
                 parameter("lite", "true")
             }
+            
             if (response.status != HttpStatusCode.OK) return@withContext emptyList()
             
             val categories: List<Category> = response.body()
             
-            categories.map { cat ->
-                Series(
-                    title = cat.name ?: "Unknown",
-                    episodes = emptyList(),
-                    fullPath = if (cat.path != null) "방송중/${cat.path}" else null,
-                    genreIds = cat.genreIds ?: emptyList(),
-                    posterPath = cat.posterPath,
-                    overview = cat.overview,
-                    year = cat.year,
-                    rating = cat.rating
-                )
+            val filteredCategories = categories.filter { cat ->
+                val path = cat.path ?: ""
+                val name = cat.name ?: ""
+                val matchesKeyword = filterKeyword == null || path.contains(filterKeyword) || name.contains(filterKeyword)
+                matchesKeyword && !path.contains("OTT") && !name.contains("OTT")
             }
-        } catch (e: Exception) { emptyList() }
+            
+            filteredCategories.groupCategoriesToSeries("방송중")
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     private fun List<Category>.groupCategoriesToSeries(basePathPrefix: String = ""): List<Series> {
@@ -348,7 +330,8 @@ class VideoRepositoryImpl : VideoRepository {
             
             val skipFolders = listOf(
                 "미국 드라마", "중국 드라마", "일본 드라마", "기타국가 드라마", "다큐", "드라마", "시트콤", "예능", "교양", "다큐멘터리",
-                "라프텔", "시리즈", "애니메이션", "국내TV", "외국TV", "영화", "방송중"
+                "라프텔", "시리즈", "애니메이션", "국내TV", "외국TV", "영화", "방송중", "라프텔 애니메이션", "OTT 애니메이션",
+                "volume1", "volume2", "video", "GDS3", "GDRIVE", "VIDEO", "NAS", "share"
             )
             
             var found = false
@@ -356,7 +339,7 @@ class VideoRepositoryImpl : VideoRepository {
             for (part in parts) {
                 currentPathParts.add(part)
                 if (!found) {
-                    if (part in skipFolders || REGEX_INDEX_FOLDER.matches(part) || REGEX_YEAR_FOLDER.matches(part) || REGEX_SEASON_FOLDER.containsMatchIn(part)) {
+                    if (part in skipFolders || REGEX_INDEX_FOLDER.matches(part) || REGEX_YEAR_FOLDER.matches(part) || REGEX_SEASON_FOLDER.matches(part)) {
                         continue
                     }
                     showTitle = part
@@ -365,9 +348,20 @@ class VideoRepositoryImpl : VideoRepository {
                 }
             }
             
+            if (showTitle.isEmpty() || REGEX_SEASON_FOLDER.matches(showTitle)) {
+                val movieTitle = cat.movies?.firstOrNull()?.title
+                if (movieTitle != null) {
+                    val extracted = movieTitle.cleanTitle(false).replace(REGEX_GROUP_BY_SERIES, "").trim()
+                    if (extracted.isNotBlank() && extracted.length >= 2) {
+                        showTitle = extracted
+                        if (showPath.isEmpty()) showPath = path
+                    }
+                }
+            }
+
             if (showTitle.isEmpty()) {
                 showTitle = cat.name ?: "Unknown"
-                showPath = path
+                if (showPath.isEmpty()) showPath = path
             }
             
             val groupKey = titleCache.getOrPut(showTitle) {
@@ -399,7 +393,7 @@ class VideoRepositoryImpl : VideoRepository {
                 rating = bestCat.rating
             )
         }
-        .filter { !REGEX_INDEX_FOLDER.matches(it.title) && !REGEX_YEAR_FOLDER.matches(it.title) }
+        .filter { !REGEX_INDEX_FOLDER.matches(it.title) && !REGEX_YEAR_FOLDER.matches(it.title) && !REGEX_SEASON_FOLDER.matches(it.title) }
         .sortedBy { it.title }
     }
 }
