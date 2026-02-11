@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -24,18 +23,19 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import kotlinx.coroutines.delay
-import org.nas.videoplayerandroidtv.ui.player.VideoPlayer
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 
 /**
  * Android TV 전용 넷플릭스 스타일 플레이어 스크린
- * 팅김 방지를 위해 모든 방향키 이벤트를 앱 내에서 완전히 소비함
  */
 @Composable
 fun VideoPlayerScreen(
@@ -46,15 +46,20 @@ fun VideoPlayerScreen(
     onBack: () -> Unit
 ) {
     var currentMovie by remember(movie) { mutableStateOf(movie) }
+    
+    // 영상 변경 시 상태 초기화
+    var isSeeking by remember(currentMovie.id) { mutableStateOf(false) }
+    var seekTime by remember(currentMovie.id) { mutableLongStateOf(0L) }
+    var finalSeekPosition by remember(currentMovie.id) { mutableLongStateOf(-1L) }
+    var currentPosition by remember(currentMovie.id) { mutableLongStateOf(0L) }
+    var totalDuration by remember(currentMovie.id) { mutableLongStateOf(0L) }
+    
+    val startPosition = remember(currentMovie.id) { 
+        if (currentMovie.id == movie.id) initialPosition else 0L 
+    }
+    
     var isControllerVisible by remember { mutableStateOf(true) }
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    
-    // Seek 탐색 상태
-    var isSeeking by remember { mutableStateOf(false) }
-    var seekTime by remember { mutableLongStateOf(0L) }
-    var finalSeekPosition by remember { mutableLongStateOf(-1L) }
-    var currentPosition by remember { mutableLongStateOf(0L) }
-    var totalDuration by remember { mutableLongStateOf(0L) }
 
     val mainBoxFocusRequester = remember { FocusRequester() }
     val nextButtonFocusRequester = remember { FocusRequester() }
@@ -71,13 +76,12 @@ fun VideoPlayerScreen(
         } else null
     }
 
-    // --- [정교한 오프닝 구간 설정] ---
-    val introStart = currentMovie.introStart ?: 5000L
+    val introStart = currentMovie.introStart ?: 0L
     val introEnd = currentMovie.introEnd ?: 90000L
     val isDuringOpening = currentPosition in introStart..introEnd
 
     val seekThumbnails = remember(seekTime, totalDuration) {
-        if (totalDuration <= 0) emptyList<Long>()
+        if (totalDuration <= 0) emptyList()
         else {
             val interval = 30000L 
             (-3..3).map { i ->
@@ -86,12 +90,20 @@ fun VideoPlayerScreen(
         }
     }
 
-    // 초기 포커스 요청
     LaunchedEffect(Unit) {
         mainBoxFocusRequester.requestFocus()
     }
 
-    // 컨트롤러 자동 숨김 타이머 (버튼에 포커스가 없을 때만 작동)
+    // 영상 로드 시 오프닝 구간이면 자동으로 UI 표시
+    LaunchedEffect(currentMovie.id, isDuringOpening) {
+        delay(1000)
+        if (isDuringOpening && currentPosition < 5000L) {
+            isControllerVisible = true
+            lastInteractionTime = System.currentTimeMillis()
+        }
+    }
+
+    // 5초 후 자동 숨김
     LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused, isSkipOpeningFocused) {
         if (isControllerVisible && !isSeeking && !isNextButtonFocused && !isSkipOpeningFocused) {
             delay(5000)
@@ -99,11 +111,10 @@ fun VideoPlayerScreen(
         }
     }
 
-    // 탐색 시 썸네일 리스트 중앙 정렬 유지
     LaunchedEffect(seekThumbnails) {
         if (isSeeking && seekThumbnails.isNotEmpty()) {
             val centerIndex = seekThumbnails.size / 2
-            thumbListState.animateScrollToItem(centerIndex)
+            thumbListState.scrollToItem(centerIndex)
         }
     }
 
@@ -115,79 +126,63 @@ fun VideoPlayerScreen(
             .focusable()
             .onKeyEvent { keyEvent ->
                 val keyCode = keyEvent.nativeKeyEvent.keyCode
+                if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
                 
-                // --- [팅김 방지 핵심 로직] ---
-                // 리모컨 신호가 앱 밖(시스템 검색 UI 등)으로 나가지 않도록 차단
-                if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP || 
-                    keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
-                    
-                    if (keyEvent.type == KeyEventType.KeyDown) {
-                        lastInteractionTime = System.currentTimeMillis()
+                lastInteractionTime = System.currentTimeMillis()
+                
+                when (keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_UP,
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
                         if (!isControllerVisible) {
                             isControllerVisible = true
-                        } else if (!isSeeking) {
-                            if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP && nextMovie != null) {
-                                nextButtonFocusRequester.requestFocus()
-                            } else if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN && isDuringOpening) {
-                                skipOpeningFocusRequester.requestFocus()
+                        } else {
+                            if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
+                                if (isDuringOpening) {
+                                    try { skipOpeningFocusRequester.requestFocus() } catch(e: Exception) {}
+                                }
+                            } else {
+                                if (nextMovie != null) {
+                                    try { nextButtonFocusRequester.requestFocus() } catch(e: Exception) {}
+                                }
                             }
                         }
+                        true
                     }
-                    return@onKeyEvent true // KeyDown, KeyUp 모두 true 반환하여 시스템 UI 트리거 완전 차단
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        isControllerVisible = true
+                        if (!isSeeking) { seekTime = currentPosition; isSeeking = true }
+                        seekTime = (seekTime - 10000).coerceAtLeast(0L)
+                        true
+                    }
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        isControllerVisible = true
+                        if (!isSeeking) { seekTime = currentPosition; isSeeking = true }
+                        seekTime = (seekTime + 10000).coerceAtMost(totalDuration)
+                        true
+                    }
+                    android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                    android.view.KeyEvent.KEYCODE_ENTER -> {
+                        if (isSeeking) {
+                            finalSeekPosition = seekTime
+                            isSeeking = false
+                        } else {
+                            isControllerVisible = !isControllerVisible
+                        }
+                        true
+                    }
+                    android.view.KeyEvent.KEYCODE_BACK -> {
+                        if (isSeeking) { isSeeking = false; true }
+                        else if (isControllerVisible) { isControllerVisible = false; true }
+                        else { onBack(); true }
+                    }
+                    else -> false
                 }
-
-                if (keyEvent.type == KeyEventType.KeyDown) {
-                    lastInteractionTime = System.currentTimeMillis()
-                    when (keyCode) {
-                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                        android.view.KeyEvent.KEYCODE_ENTER -> {
-                            if (isSeeking) {
-                                finalSeekPosition = seekTime
-                                isSeeking = false
-                            } else {
-                                isControllerVisible = !isControllerVisible
-                            }
-                            true
-                        }
-                        android.view.KeyEvent.KEYCODE_BACK -> {
-                            if (isSeeking) {
-                                isSeeking = false
-                                true
-                            } else if (isControllerVisible) {
-                                isControllerVisible = false
-                                true
-                            } else {
-                                onBack()
-                                true
-                            }
-                        }
-                        android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                            if (!isSeeking) {
-                                seekTime = currentPosition
-                                isSeeking = true
-                            }
-                            isControllerVisible = true
-                            seekTime = (seekTime - 10000).coerceAtLeast(0L)
-                            true
-                        }
-                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            if (!isSeeking) {
-                                seekTime = currentPosition
-                                isSeeking = true
-                            }
-                            isControllerVisible = true
-                            seekTime = (seekTime + 10000).coerceAtMost(totalDuration)
-                            true
-                        }
-                        else -> false
-                    }
-                } else false
             }
     ) {
         VideoPlayer(
             url = currentMovie.videoUrl ?: "",
             modifier = Modifier.fillMaxSize(),
-            initialPosition = initialPosition,
+            initialPosition = startPosition,
             seekToPosition = finalSeekPosition,
             onPositionUpdate = { pos ->
                 currentPosition = pos
@@ -199,97 +194,89 @@ fun VideoPlayerScreen(
             onVideoEnded = { nextMovie?.let { currentMovie = it } }
         )
 
-        // UI 오버레이
         Box(modifier = Modifier.fillMaxSize()) {
             
-            // --- [좌측 상단: 다음 회차 버튼] ---
-            AnimatedVisibility(
-                visible = isControllerVisible && nextMovie != null && !isSeeking,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.align(Alignment.TopStart)
+            // --- [버튼 레이어: 시크바 위쪽 좌/우 배치] ---
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 120.dp, start = 48.dp, end = 48.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(48.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                // 오프닝 건너뛰기 (좌측 하단)
+                AnimatedVisibility(
+                    visible = isControllerVisible && isDuringOpening && !isSeeking,
+                    enter = fadeIn() + slideInHorizontally(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomStart)
                 ) {
                     Surface(
                         onClick = { 
-                            nextMovie?.let { 
-                                currentMovie = it
-                                isControllerVisible = true
-                                mainBoxFocusRequester.requestFocus() 
-                            }
+                            finalSeekPosition = introEnd
+                            isControllerVisible = false
+                            try { mainBoxFocusRequester.requestFocus() } catch(e: Exception) {}
                         },
                         modifier = Modifier
-                            .size(50.dp) 
-                            .focusRequester(nextButtonFocusRequester)
-                            .onFocusChanged { isNextButtonFocused = it.isFocused }
-                            .focusable()
-                            .onKeyEvent { 
-                                // 버튼 내부에서도 방향키 시스템 유출 차단
-                                val k = it.nativeKeyEvent.keyCode
-                                k == android.view.KeyEvent.KEYCODE_DPAD_UP || k == android.view.KeyEvent.KEYCODE_DPAD_DOWN 
-                            },
-                        shape = CircleShape,
-                        color = if (isNextButtonFocused) Color.White else Color.Black.copy(alpha = 0.5f),
-                        border = if (isNextButtonFocused) null else BorderStroke(2.dp, Color.White.copy(alpha = 0.7f))
+                            .height(56.dp)
+                            .widthIn(min = 180.dp)
+                            .focusRequester(skipOpeningFocusRequester)
+                            .onFocusChanged { isSkipOpeningFocused = it.isFocused }
+                            .focusable(),
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (isSkipOpeningFocused) Color.White else Color.Black.copy(alpha = 0.6f),
+                        border = if (isSkipOpeningFocused) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.6f))
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.PlayArrow, "Next", tint = if (isNextButtonFocused) Color.Black else Color.White, modifier = Modifier.size(28.dp))
+                        Row(modifier = Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.PlayArrow, null, tint = if (isSkipOpeningFocused) Color.Black else Color.White)
+                            Spacer(Modifier.width(12.dp))
+                            Text("오프닝 건너뛰기", color = if (isSkipOpeningFocused) Color.Black else Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("다음 회차", color = if (isNextButtonFocused) Color.White else Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
                 }
-            }
 
-            // --- [우측 하단: 오프닝 건너뛰기 버튼] ---
-            AnimatedVisibility(
-                visible = isDuringOpening && !isSeeking,
-                enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
-                exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
-                modifier = Modifier.align(Alignment.BottomEnd)
-            ) {
-                Surface(
-                    onClick = { 
-                        finalSeekPosition = introEnd // 정확한 오프닝 종료 지점으로 점프
-                        mainBoxFocusRequester.requestFocus()
-                    },
-                    modifier = Modifier
-                        .padding(bottom = 120.dp, end = 48.dp)
-                        .focusRequester(skipOpeningFocusRequester)
-                        .onFocusChanged { isSkipOpeningFocused = it.isFocused }
-                        .focusable()
-                        .onKeyEvent { 
-                            val k = it.nativeKeyEvent.keyCode
-                            k == android.view.KeyEvent.KEYCODE_DPAD_UP || k == android.view.KeyEvent.KEYCODE_DPAD_DOWN 
-                        },
-                    shape = RoundedCornerShape(4.dp),
-                    color = if (isSkipOpeningFocused) Color.White else Color.Black.copy(alpha = 0.6f),
-                    border = if (isSkipOpeningFocused) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.6f))
+                // 다음 회차 (우측 하단)
+                AnimatedVisibility(
+                    visible = isControllerVisible && nextMovie != null && !isSeeking,
+                    enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomEnd)
                 ) {
-                    Row(modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.PlayArrow, "Skip", tint = if (isSkipOpeningFocused) Color.Black else Color.White, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(12.dp))
-                        Text("오프닝 건너뛰기", color = if (isSkipOpeningFocused) Color.Black else Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Surface(
+                        onClick = { 
+                            if (nextMovie != null) currentMovie = nextMovie
+                            isControllerVisible = true
+                            try { mainBoxFocusRequester.requestFocus() } catch(e: Exception) {}
+                        },
+                        modifier = Modifier
+                            .height(56.dp)
+                            .widthIn(min = 160.dp)
+                            .focusRequester(nextButtonFocusRequester)
+                            .onFocusChanged { isNextButtonFocused = it.isFocused }
+                            .focusable(),
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (isNextButtonFocused) Color.White else Color.Black.copy(alpha = 0.6f),
+                        border = if (isNextButtonFocused) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.6f))
+                    ) {
+                        Row(modifier = Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.ArrowForward, null, tint = if (isNextButtonFocused) Color.Black else Color.White)
+                            Spacer(Modifier.width(12.dp))
+                            Text("다음 회차", color = if (isNextButtonFocused) Color.Black else Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
 
-            // --- [하단 영역: 시크바 및 썸네일 탐색창] ---
+            // 하단 시크바 및 썸네일 탐색
             AnimatedVisibility(
                 visible = isControllerVisible || isSeeking,
-                enter = fadeIn(),
-                exit = fadeOut(),
+                enter = fadeIn(), exit = fadeOut(),
                 modifier = Modifier.align(Alignment.BottomCenter)
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.4f)),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // 넷플릭스 스타일 가로 썸네일 리스트 (isSeeking일 때만 표시)
                     if (isSeeking && totalDuration > 0) {
+                        val context = LocalContext.current
                         LazyRow(
                             state = thumbListState,
                             contentPadding = PaddingValues(horizontal = 100.dp),
@@ -298,14 +285,15 @@ fun VideoPlayerScreen(
                             modifier = Modifier.fillMaxWidth().height(120.dp).padding(bottom = 16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            items(seekThumbnails) { timestamp ->
+                            items(seekThumbnails, key = { it }) { timestamp ->
                                 val isCenter = (timestamp == seekTime)
                                 val baseUrl = NasApiClient.BASE_URL
                                 val timeSec = timestamp / 1000
-                                val thumbUrl = remember(currentMovie.id, timestamp) {
+                                val thumbRequest = remember(currentMovie.id, timestamp) {
                                     val originalThumb = currentMovie.thumbnailUrl ?: ""
-                                    if (originalThumb.contains("?")) "$baseUrl$originalThumb&t=$timeSec"
-                                    else "$baseUrl$originalThumb?t=$timeSec"
+                                    val finalUrl = if (originalThumb.contains("?")) "$baseUrl$originalThumb&t=$timeSec"
+                                                  else "$baseUrl$originalThumb?t=$timeSec"
+                                    ImageRequest.Builder(context).data(finalUrl).crossfade(true).build()
                                 }
                                 Box(
                                     modifier = Modifier
@@ -315,14 +303,14 @@ fun VideoPlayerScreen(
                                         .border(width = if (isCenter) 3.dp else 1.dp, color = if (isCenter) Color.White else Color.Gray.copy(alpha = 0.5f), shape = RoundedCornerShape(8.dp))
                                         .background(Color.DarkGray)
                                 ) {
-                                    AsyncImage(model = thumbUrl, contentDescription = "Seek", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                    AsyncImage(model = thumbRequest, contentDescription = "Seek", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                                 }
                             }
                         }
                     }
 
                     Column(modifier = Modifier.padding(bottom = 48.dp, start = 60.dp, end = 60.dp)) {
-                        val progress = if (totalDuration > 0) seekTime.toFloat() / totalDuration else 0f
+                        val progress = if (totalDuration > 0) (if(isSeeking) seekTime else currentPosition).toFloat() / totalDuration else 0f
                         Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(Color.White.copy(alpha = 0.3f))) {
                             Box(modifier = Modifier.fillMaxWidth(progress).fillMaxHeight().background(Color.Red))
                         }

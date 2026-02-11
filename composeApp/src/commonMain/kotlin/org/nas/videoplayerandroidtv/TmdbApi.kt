@@ -79,7 +79,8 @@ data class TmdbEpisode(
     @SerialName("episode_number") val episodeNumber: Int,
     var overview: String? = null,
     @SerialName("still_path") val stillPath: String? = null,
-    val name: String? = null
+    val name: String? = null,
+    val runtime: Int? = null // 추가: 에피소드 길이 (분 단위)
 )
 
 @Serializable
@@ -335,12 +336,11 @@ suspend fun fetchTmdbSeasonDetails(tmdbId: Int, season: Int): List<TmdbEpisode> 
 
 suspend fun fetchTmdbEpisodeDetails(tmdbId: Int, season: Int, episodeNum: Int): TmdbEpisode? {
     return try {
-        val response: TmdbSeasonResponse = tmdbClient.get("$TMDB_BASE_URL/tv/$tmdbId/season/$season") {
+        tmdbClient.get("$TMDB_BASE_URL/tv/$tmdbId/season/$season/episode/$episodeNum") {
             if (TMDB_API_KEY.startsWith("eyJ")) header("Authorization", "Bearer $TMDB_API_KEY")
             else parameter("api_key", TMDB_API_KEY)
             parameter("language", "ko-KR")
         }.body()
-        response.episodes.find { it.episodeNumber == episodeNum }
     } catch (e: Exception) { null }
 }
 

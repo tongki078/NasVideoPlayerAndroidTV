@@ -138,10 +138,10 @@ class VideoRepositoryImpl : VideoRepository {
         }
     }
 
-    override suspend fun getLatestMovies(limit: Int, offset: Int): List<Series> = getGenericData("/movies_latest", 500, offset, "영화")
+    override suspend fun getLatestMovies(limit: Int, offset: Int): List<Series> = getGenericData("/movies_latest", 600, offset, "영화")
     override suspend fun getPopularMovies(limit: Int, offset: Int): List<Series> = getLatestMovies(limit, offset)
-    override suspend fun getUhdMovies(limit: Int, offset: Int): List<Series> = getGenericData("/movies_uhd", 500, offset, "영화")
-    override suspend fun getMoviesByTitle(limit: Int, offset: Int): List<Series> = getGenericData("/movies_title", 500, offset, "영화")
+    override suspend fun getUhdMovies(limit: Int, offset: Int): List<Series> = getGenericData("/movies_uhd", 600, offset, "영화")
+    override suspend fun getMoviesByTitle(limit: Int, offset: Int): List<Series> = getGenericData("/movies_title", 600, offset, "영화")
 
     override suspend fun getAnimations(): List<Series> = withContext(Dispatchers.Default) {
         try {
@@ -163,7 +163,7 @@ class VideoRepositoryImpl : VideoRepository {
         try {
             val response = client.get("$baseUrl/animations_all") {
                 parameter("lite", "true")
-                parameter("limit", 1000)
+                parameter("limit", 600)
             }
             if (response.status == HttpStatusCode.OK) {
                 val categories: List<Category> = response.body()
@@ -178,7 +178,7 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getAnimationsRaftel(limit: Int, offset: Int): List<Series> = withContext(Dispatchers.Default) {
         try {
             val categories: List<Category> = client.get("$baseUrl/anim_raftel") {
-                parameter("limit", 500)
+                parameter("limit", 600)
                 parameter("offset", offset)
                 parameter("lite", "true")
             }.body()
@@ -192,7 +192,7 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getAnimationsSeries(limit: Int, offset: Int): List<Series> = withContext(Dispatchers.Default) {
         try {
             val categories: List<Category> = client.get("$baseUrl/anim_series") {
-                parameter("limit", 500)
+                parameter("limit", 600)
                 parameter("offset", offset)
                 parameter("lite", "true")
             }.body()
@@ -222,23 +222,23 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getAnimationsAir(): List<Series> = getAirDataInternal("라프텔")
     override suspend fun getDramasAir(): List<Series> = getAirDataInternal("드라마")
     
-    override suspend fun getLatestForeignTV(): List<Series> = getGroupedData("/foreigntv", 500, 0, "외국TV")
+    override suspend fun getLatestForeignTV(): List<Series> = getGroupedData("/foreigntv", 600, 0, "외국TV")
     override suspend fun getPopularForeignTV(): List<Series> = getLatestForeignTV()
 
-    override suspend fun getFtvUs(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_us", 500, offset, "외국TV", "미국 드라마")
-    override suspend fun getFtvCn(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_cn", 500, offset, "외국TV", "중국 드라마")
-    override suspend fun getFtvJp(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_jp", 500, offset, "외국TV", "일본 드라마")
-    override suspend fun getFtvDocu(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_docu", 500, offset, "외국TV", "다큐")
-    override suspend fun getFtvEtc(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_etc", 500, offset, "외국TV", "기타국가 드라마")
+    override suspend fun getFtvUs(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_us", 600, offset, "외국TV", "미국 드라마")
+    override suspend fun getFtvCn(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_cn", 600, offset, "외국TV", "중국 드라마")
+    override suspend fun getFtvJp(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_jp", 600, offset, "외국TV", "일본 드라마")
+    override suspend fun getFtvDocu(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_docu", 600, offset, "외국TV", "다큐")
+    override suspend fun getFtvEtc(limit: Int, offset: Int): List<Series> = getGroupedData("/ftv_etc", 600, offset, "외국TV", "기타국가 드라마")
 
-    override suspend fun getLatestKoreanTV(): List<Series> = getGroupedData("/koreantv", 500, 0, "국내TV")
+    override suspend fun getLatestKoreanTV(): List<Series> = getGroupedData("/koreantv", 600, 0, "국내TV")
     override suspend fun getPopularKoreanTV(): List<Series> = getLatestKoreanTV()
 
-    override suspend fun getKtvDrama(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_drama", 500, offset, "국내TV", "드라마")
-    override suspend fun getKtvSitcom(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_sitcom", 500, offset, "국내TV", "시트콤")
-    override suspend fun getKtvVariety(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_variety", 500, offset, "국내TV", "예능")
-    override suspend fun getKtvEdu(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_edu", 500, offset, "국내TV", "교양")
-    override suspend fun getKtvDocu(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_docu", 500, offset, "국내TV", "다큐멘터리")
+    override suspend fun getKtvDrama(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_drama", 600, offset, "국내TV", "드라마")
+    override suspend fun getKtvSitcom(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_sitcom", 600, offset, "국내TV", "시트콤")
+    override suspend fun getKtvVariety(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_variety", 600, offset, "국내TV", "예능")
+    override suspend fun getKtvEdu(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_edu", 600, offset, "국내TV", "교양")
+    override suspend fun getKtvDocu(limit: Int, offset: Int): List<Series> = getGroupedData("/ktv_docu", 600, offset, "국내TV", "다큐멘터리")
 
     private suspend fun getGroupedData(endpoint: String, limit: Int, offset: Int, prefix: String, filterKeyword: String? = null): List<Series> = withContext(Dispatchers.Default) {
         try {
@@ -307,8 +307,12 @@ class VideoRepositoryImpl : VideoRepository {
             val filteredCategories = categories.filter { cat ->
                 val path = cat.path ?: ""
                 val name = cat.name ?: ""
-                val matchesKeyword = filterKeyword == null || path.contains(filterKeyword) || name.contains(filterKeyword)
-                matchesKeyword && !path.contains("OTT") && !name.contains("OTT")
+                val isOtt = path.contains("OTT") || name.contains("OTT")
+                if (isOtt) return@filter false
+                
+                if (filterKeyword != null) {
+                    path.contains(filterKeyword) || name.contains(filterKeyword)
+                } else true
             }
             
             filteredCategories.groupCategoriesToSeries("방송중")
@@ -373,6 +377,13 @@ class VideoRepositoryImpl : VideoRepository {
         }
         
         return showGroups.map { (title, cats) ->
+            // 모든 카테고리에 흩어져 있는 에피소드들을 하나로 합침
+            val allEpisodes = cats.flatMap { it.movies ?: emptyList() }.map { movie ->
+                if (movie.videoUrl != null && !movie.videoUrl.startsWith("http")) {
+                    movie.copy(videoUrl = "$baseUrl${if (movie.videoUrl.startsWith("/")) "" else "/"}${movie.videoUrl}")
+                } else movie
+            }.distinctBy { it.id }.sortedBy { it.title ?: "" }
+
             val bestCat = cats.maxByOrNull { 
                 (if (it.posterPath != null) 2 else 0) + (if (!it.genreIds.isNullOrEmpty()) 1 else 0)
             } ?: cats.first()
@@ -384,7 +395,7 @@ class VideoRepositoryImpl : VideoRepository {
 
             Series(
                 title = title, 
-                episodes = emptyList(), 
+                episodes = allEpisodes,
                 fullPath = fullPath,
                 genreIds = bestCat.genreIds ?: emptyList(),
                 posterPath = bestCat.posterPath,
