@@ -1,6 +1,7 @@
 package org.nas.videoplayerandroidtv.ui.player.tv
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -25,6 +27,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
 import org.nas.videoplayerandroidtv.ui.player.VideoPlayer
@@ -44,6 +47,7 @@ fun VideoPlayerScreen(
 ) {
     var currentMovie by remember(movie) { mutableStateOf(movie) }
     var isControllerVisible by remember { mutableStateOf(true) }
+    var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
     
     // Seek 탐색 상태
     var isSeeking by remember { mutableStateOf(false) }
@@ -52,8 +56,11 @@ fun VideoPlayerScreen(
     var currentPosition by remember { mutableLongStateOf(0L) }
     var totalDuration by remember { mutableLongStateOf(0L) }
 
-    val focusRequester = remember { FocusRequester() }
+    val mainBoxFocusRequester = remember { FocusRequester() }
+    val nextButtonFocusRequester = remember { FocusRequester() }
     val thumbListState = rememberLazyListState()
+
+    var isNextButtonFocused by remember { mutableStateOf(false) }
 
     val nextMovie = remember(currentMovie, playlist) {
         val currentIndex = playlist.indexOfFirst { it.id == currentMovie.id }
@@ -72,12 +79,14 @@ fun VideoPlayerScreen(
         }
     }
 
+    // 초기 포커스 요청
     LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+        mainBoxFocusRequester.requestFocus()
     }
 
-    LaunchedEffect(isControllerVisible, isSeeking) {
-        if (isControllerVisible && !isSeeking) {
+    // 컨트롤러 자동 숨김 타이머 (사용자 상호작용 없으면 5초 후 숨김)
+    LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused) {
+        if (isControllerVisible && !isSeeking && !isNextButtonFocused) {
             delay(5000)
             isControllerVisible = false
         }
@@ -94,10 +103,11 @@ fun VideoPlayerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .focusRequester(focusRequester)
+            .focusRequester(mainBoxFocusRequester)
             .focusable()
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyDown) {
+                    lastInteractionTime = System.currentTimeMillis() // 상호작용 시간 갱신
                     when (keyEvent.nativeKeyEvent.keyCode) {
                         android.view.KeyEvent.KEYCODE_DPAD_CENTER,
                         android.view.KeyEvent.KEYCODE_ENTER -> {
@@ -139,6 +149,16 @@ fun VideoPlayerScreen(
                             seekTime = (seekTime + 10000).coerceAtMost(totalDuration)
                             true
                         }
+                        android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                            if (!isControllerVisible) {
+                                isControllerVisible = true
+                                true
+                            } else if (nextMovie != null) {
+                                // 컨트롤러가 켜져있을 때 위를 누르면 다음회차 버튼으로 포커스 이동
+                                nextButtonFocusRequester.requestFocus()
+                                true
+                            } else false
+                        }
                         else -> false
                     }
                 } else false
@@ -158,6 +178,7 @@ fun VideoPlayerScreen(
             onVideoEnded = { nextMovie?.let { currentMovie = it } }
         )
 
+        // 넷플릭스 스타일 UI 오버레이
         AnimatedVisibility(
             visible = isControllerVisible,
             enter = fadeIn(),
@@ -165,6 +186,50 @@ fun VideoPlayerScreen(
         ) {
             Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f))) {
                 
+                // --- [좌측 상단: 다음 회차 버튼] ---
+                if (nextMovie != null && !isSeeking) {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(48.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Surface(
+                            onClick = { 
+                                currentMovie = nextMovie 
+                                isControllerVisible = true
+                                mainBoxFocusRequester.requestFocus()
+                            },
+                            modifier = Modifier
+                                .size(50.dp) 
+                                .focusRequester(nextButtonFocusRequester)
+                                .onFocusChanged { isNextButtonFocused = it.isFocused },
+                            shape = CircleShape,
+                            color = if (isNextButtonFocused) Color.White else Color.Black.copy(alpha = 0.5f),
+                            border = if (isNextButtonFocused) null else BorderStroke(2.dp, Color.White.copy(alpha = 0.7f))
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = "Next Episode",
+                                    tint = if (isNextButtonFocused) Color.Black else Color.White,
+                                    modifier = Modifier.size(28.dp) 
+                                )
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        Text(
+                            "다음 회차",
+                            color = if (isNextButtonFocused) Color.White else Color.White.copy(alpha = 0.7f),
+                            fontSize = 14.sp,
+                            fontWeight = if (isNextButtonFocused) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
+
+                // 넷플릭스 스타일 가로 썸네일 리스트 (탐색 시)
                 if (isSeeking && totalDuration > 0) {
                     Column(
                         modifier = Modifier
@@ -214,6 +279,7 @@ fun VideoPlayerScreen(
                     }
                 }
 
+                // 하단 탐색 바
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -242,29 +308,6 @@ fun VideoPlayerScreen(
                     ) {
                         Text(formatTime(if (isSeeking) seekTime else currentPosition), color = Color.White, fontSize = 14.sp)
                         Text(formatTime(totalDuration), color = Color.White, fontSize = 14.sp)
-                    }
-                }
-
-                if (nextMovie != null && !isSeeking) {
-                    var isNextFocused by remember { mutableStateOf(false) }
-                    Button(
-                        onClick = { 
-                            currentMovie = nextMovie 
-                            isControllerVisible = true
-                        },
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(bottom = 96.dp)
-                            .padding(end = 32.dp)
-                            .onFocusChanged { isNextFocused = it.isFocused },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isNextFocused) Color.Red else Color.White.copy(alpha = 0.9f)
-                        ),
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Icon(Icons.Default.PlayArrow, null, tint = if (isNextFocused) Color.White else Color.Black)
-                        Spacer(Modifier.width(8.dp))
-                        Text("다음 회차 보기", color = if (isNextFocused) Color.White else Color.Black, fontWeight = FontWeight.Bold)
                     }
                 }
             }
