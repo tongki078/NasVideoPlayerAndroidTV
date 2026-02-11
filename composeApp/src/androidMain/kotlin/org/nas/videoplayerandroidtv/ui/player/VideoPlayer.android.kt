@@ -36,13 +36,15 @@ actual fun VideoPlayer(
     onDurationDetermined: ((Long) -> Unit)?,
     onControllerVisibilityChanged: ((Boolean) -> Unit)?,
     onFullscreenClick: (() -> Unit)?,
-    onVideoEnded: (() -> Unit)?
+    onVideoEnded: (() -> Unit)?,
+    onSeekFinished: (() -> Unit)?
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnVideoEnded by rememberUpdatedState(onVideoEnded)
     val currentOnPositionUpdate by rememberUpdatedState(onPositionUpdate)
     val currentOnDurationDetermined by rememberUpdatedState(onDurationDetermined)
+    val currentOnSeekFinished by rememberUpdatedState(onSeekFinished)
 
     val exoPlayer = remember {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
@@ -72,6 +74,16 @@ actual fun VideoPlayer(
                         }
                         if (playbackState == Player.STATE_READY) {
                             currentOnDurationDetermined?.invoke(duration)
+                        }
+                    }
+                    
+                    override fun onPositionDiscontinuity(
+                        oldPosition: Player.PositionInfo,
+                        newPosition: Player.PositionInfo,
+                        reason: Int
+                    ) {
+                        if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                            currentOnSeekFinished?.invoke()
                         }
                     }
                 })

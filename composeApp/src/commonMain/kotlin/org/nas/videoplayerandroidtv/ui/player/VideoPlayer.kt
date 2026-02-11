@@ -13,5 +13,6 @@ expect fun VideoPlayer(
     onDurationDetermined: ((Long) -> Unit)? = null,
     onControllerVisibilityChanged: ((Boolean) -> Unit)? = null,
     onFullscreenClick: (() -> Unit)? = null,
-    onVideoEnded: (() -> Unit)? = null
+    onVideoEnded: (() -> Unit)? = null,
+    onSeekFinished: (() -> Unit)? = null
 )

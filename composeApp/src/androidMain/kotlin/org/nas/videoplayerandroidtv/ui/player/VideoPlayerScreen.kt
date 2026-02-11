@@ -9,8 +9,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -131,19 +133,22 @@ fun VideoPlayerScreen(
                 lastInteractionTime = System.currentTimeMillis()
                 
                 when (keyCode) {
-                    android.view.KeyEvent.KEYCODE_DPAD_UP,
+                    android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                        if (!isControllerVisible) {
+                            isControllerVisible = true
+                        } else {
+                            if (nextMovie != null) {
+                                try { nextButtonFocusRequester.requestFocus() } catch(_: Exception) {}
+                            }
+                        }
+                        true
+                    }
                     android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
                         if (!isControllerVisible) {
                             isControllerVisible = true
                         } else {
-                            if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
-                                if (isDuringOpening) {
-                                    try { skipOpeningFocusRequester.requestFocus() } catch(e: Exception) {}
-                                }
-                            } else {
-                                if (nextMovie != null) {
-                                    try { nextButtonFocusRequester.requestFocus() } catch(e: Exception) {}
-                                }
+                            if (isDuringOpening) {
+                                try { skipOpeningFocusRequester.requestFocus() } catch(_: Exception) {}
                             }
                         }
                         true
@@ -191,77 +196,62 @@ fun VideoPlayerScreen(
             },
             onDurationDetermined = { dur -> totalDuration = dur },
             onControllerVisibilityChanged = { visible -> isControllerVisible = visible },
-            onVideoEnded = { nextMovie?.let { currentMovie = it } }
+            onVideoEnded = { nextMovie?.let { currentMovie = it } },
+            onSeekFinished = {
+                finalSeekPosition = -1L
+            }
         )
 
         Box(modifier = Modifier.fillMaxSize()) {
             
-            // --- [버튼 레이어: 시크바 위쪽 좌/우 배치] ---
+            // --- [플레이어 버튼 레이어] ---
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(bottom = 120.dp, start = 48.dp, end = 48.dp)
+                    .padding(48.dp)
             ) {
-                // 오프닝 건너뛰기 (좌측 하단)
-                AnimatedVisibility(
-                    visible = isControllerVisible && isDuringOpening && !isSeeking,
-                    enter = fadeIn() + slideInHorizontally(),
-                    exit = fadeOut(),
-                    modifier = Modifier.align(Alignment.BottomStart)
-                ) {
-                    Surface(
-                        onClick = { 
-                            finalSeekPosition = introEnd
-                            isControllerVisible = false
-                            try { mainBoxFocusRequester.requestFocus() } catch(e: Exception) {}
-                        },
-                        modifier = Modifier
-                            .height(56.dp)
-                            .widthIn(min = 180.dp)
-                            .focusRequester(skipOpeningFocusRequester)
-                            .onFocusChanged { isSkipOpeningFocused = it.isFocused }
-                            .focusable(),
-                        shape = RoundedCornerShape(4.dp),
-                        color = if (isSkipOpeningFocused) Color.White else Color.Black.copy(alpha = 0.6f),
-                        border = if (isSkipOpeningFocused) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.6f))
-                    ) {
-                        Row(modifier = Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.PlayArrow, null, tint = if (isSkipOpeningFocused) Color.Black else Color.White)
-                            Spacer(Modifier.width(12.dp))
-                            Text("오프닝 건너뛰기", color = if (isSkipOpeningFocused) Color.Black else Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-
-                // 다음 회차 (우측 하단)
+                // 1. 다음 회차 보기 (좌측 상단) - 넷플릭스 스타일 아이콘 버튼
                 AnimatedVisibility(
                     visible = isControllerVisible && nextMovie != null && !isSeeking,
-                    enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
                     exit = fadeOut(),
-                    modifier = Modifier.align(Alignment.BottomEnd)
+                    modifier = Modifier.align(Alignment.TopStart)
                 ) {
-                    Surface(
+                    NetflixIconButton(
+                        icon = Icons.AutoMirrored.Filled.ArrowForward,
+                        isFocused = isNextButtonFocused,
                         onClick = { 
                             if (nextMovie != null) currentMovie = nextMovie
                             isControllerVisible = true
-                            try { mainBoxFocusRequester.requestFocus() } catch(e: Exception) {}
+                            try { mainBoxFocusRequester.requestFocus() } catch(_: Exception) {}
                         },
                         modifier = Modifier
-                            .height(56.dp)
-                            .widthIn(min = 160.dp)
                             .focusRequester(nextButtonFocusRequester)
                             .onFocusChanged { isNextButtonFocused = it.isFocused }
-                            .focusable(),
-                        shape = RoundedCornerShape(4.dp),
-                        color = if (isNextButtonFocused) Color.White else Color.Black.copy(alpha = 0.6f),
-                        border = if (isNextButtonFocused) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.6f))
-                    ) {
-                        Row(modifier = Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.ArrowForward, null, tint = if (isNextButtonFocused) Color.Black else Color.White)
-                            Spacer(Modifier.width(12.dp))
-                            Text("다음 회차", color = if (isNextButtonFocused) Color.Black else Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
+                    )
+                }
+
+                // 2. 오프닝 건너뛰기 (좌측 하단) - 넷플릭스 스타일 (사이즈 축소)
+                AnimatedVisibility(
+                    visible = isControllerVisible && isDuringOpening && !isSeeking,
+                    enter = fadeIn() + slideInHorizontally(initialOffsetX = { -it }),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 80.dp)
+                ) {
+                    NetflixPlayerButton(
+                        text = "오프닝 건너뛰기",
+                        icon = Icons.AutoMirrored.Filled.ArrowForward,
+                        isFocused = isSkipOpeningFocused,
+                        compact = true,
+                        onClick = { 
+                            finalSeekPosition = introEnd
+                            isControllerVisible = false
+                            try { mainBoxFocusRequester.requestFocus() } catch(_: Exception) {}
+                        },
+                        modifier = Modifier
+                            .focusRequester(skipOpeningFocusRequester)
+                            .onFocusChanged { isSkipOpeningFocused = it.isFocused }
+                    )
                 }
             }
 
@@ -321,6 +311,80 @@ fun VideoPlayerScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * 넷플릭스 스타일 원형 아이콘 버튼
+ */
+@Composable
+fun NetflixIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    isFocused: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier
+            .size(44.dp)
+            .focusable(),
+        shape = CircleShape,
+        color = if (isFocused) Color.White else Color.Black.copy(alpha = 0.6f),
+        border = if (isFocused) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.8f))
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (isFocused) Color.Black else Color.White,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+    }
+}
+
+/**
+ * 넷플릭스 스타일 플레이어 버튼
+ */
+@Composable
+fun NetflixPlayerButton(
+    text: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    isFocused: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier
+            .height(if (compact) 40.dp else 48.dp)
+            .widthIn(min = if (compact) 100.dp else 160.dp)
+            .focusable(),
+        shape = RoundedCornerShape(4.dp),
+        color = if (isFocused) Color.White else Color.Black.copy(alpha = 0.6f),
+        border = if (isFocused) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.8f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = if (compact) 16.dp else 24.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (isFocused) Color.Black else Color.White,
+                modifier = Modifier.size(if (compact) 20.dp else 24.dp)
+            )
+            Spacer(Modifier.width(if (compact) 8.dp else 12.dp))
+            Text(
+                text = text,
+                color = if (isFocused) Color.Black else Color.White,
+                fontSize = if (compact) 14.sp else 16.sp,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
