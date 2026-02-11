@@ -1,4 +1,4 @@
-package org.nas.videoplayerandroidtv.ui.player
+package org.nas.videoplayerandroidtv.ui.player.tv
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -31,6 +31,9 @@ import org.nas.videoplayerandroidtv.ui.player.VideoPlayer
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 
+/**
+ * Android TV 전용 넷플릭스 스타일 플레이어 스크린
+ */
 @Composable
 fun VideoPlayerScreen(
     movie: Movie,
@@ -49,7 +52,6 @@ fun VideoPlayerScreen(
     var currentPosition by remember { mutableLongStateOf(0L) }
     var totalDuration by remember { mutableLongStateOf(0L) }
 
-    // 포커스 제어를 위한 Requester
     val focusRequester = remember { FocusRequester() }
     val thumbListState = rememberLazyListState()
 
@@ -60,18 +62,16 @@ fun VideoPlayerScreen(
         } else null
     }
 
-    // 넷플릭스 스타일: 현재 seekTime 주변의 타임스탬프 리스트 생성 (전후 30초 간격으로 7개)
     val seekThumbnails = remember(seekTime, totalDuration) {
         if (totalDuration <= 0) emptyList<Long>()
         else {
-            val interval = 30000L // 30초 간격
+            val interval = 30000L 
             (-3..3).map { i ->
                 (seekTime + (i * interval)).coerceIn(0L, totalDuration)
             }.distinct()
         }
     }
 
-    // 화면 진입 시 포커스 강제 획득
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
     }
@@ -83,7 +83,6 @@ fun VideoPlayerScreen(
         }
     }
 
-    // 탐색 시 리스트 중앙 정렬 유지
     LaunchedEffect(seekThumbnails) {
         if (isSeeking && seekThumbnails.isNotEmpty()) {
             val centerIndex = seekThumbnails.size / 2
@@ -96,14 +95,13 @@ fun VideoPlayerScreen(
             .fillMaxSize()
             .background(Color.Black)
             .focusRequester(focusRequester)
-            .focusable() // 이 수정자가 있어야 onKeyEvent가 작동함
+            .focusable()
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyDown) {
                     when (keyEvent.nativeKeyEvent.keyCode) {
                         android.view.KeyEvent.KEYCODE_DPAD_CENTER,
                         android.view.KeyEvent.KEYCODE_ENTER -> {
                             if (isSeeking) {
-                                // 탐색 확정
                                 finalSeekPosition = seekTime
                                 isSeeking = false
                             } else {
@@ -160,7 +158,6 @@ fun VideoPlayerScreen(
             onVideoEnded = { nextMovie?.let { currentMovie = it } }
         )
 
-        // 넷플릭스 스타일 탐색 UI
         AnimatedVisibility(
             visible = isControllerVisible,
             enter = fadeIn(),
@@ -168,12 +165,11 @@ fun VideoPlayerScreen(
         ) {
             Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f))) {
                 
-                // 넷플릭스 스타일 가로 썸네일 리스트
                 if (isSeeking && totalDuration > 0) {
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = 128.dp), // 하단 시크바(48dp)로부터 80dp를 띄우기 위해 128dp로 설정
+                            .padding(bottom = 128.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         LazyRow(
@@ -218,7 +214,6 @@ fun VideoPlayerScreen(
                     }
                 }
 
-                // 하단 탐색 바
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)

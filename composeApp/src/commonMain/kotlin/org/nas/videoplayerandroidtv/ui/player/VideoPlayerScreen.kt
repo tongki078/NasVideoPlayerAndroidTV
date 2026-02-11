@@ -15,13 +15,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
-import org.nas.videoplayerandroidtv.VideoPlayer
+import org.nas.videoplayerandroidtv.ui.player.VideoPlayer
 import org.nas.videoplayerandroidtv.domain.model.Movie
-import androidx.compose.ui.input.key.*
-import androidx.compose.ui.focus.onFocusChanged
 
+/**
+ * 기본 비디오 플레이어 스크린 (플랫폼 공통)
+ * Android TV 버전과 충돌을 피하기 위해 이름을 BaseVideoPlayerScreen으로 변경함
+ */
 @Composable
-fun VideoPlayerScreen(
+fun BaseVideoPlayerScreen(
     movie: Movie,
     playlist: List<Movie> = emptyList(),
     initialPosition: Long = 0L,
@@ -45,39 +47,7 @@ fun VideoPlayerScreen(
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .onKeyEvent { keyEvent ->
-                if (keyEvent.type == KeyEventType.KeyDown) {
-                    when (keyEvent.nativeKeyEvent.keyCode) {
-                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                        android.view.KeyEvent.KEYCODE_ENTER -> {
-                            isControllerVisible = !isControllerVisible
-                            true
-                        }
-                        android.view.KeyEvent.KEYCODE_BACK -> {
-                            if (isControllerVisible) {
-                                isControllerVisible = false
-                                true
-                            } else {
-                                onBack()
-                                true
-                            }
-                        }
-                        android.view.KeyEvent.KEYCODE_DPAD_UP,
-                        android.view.KeyEvent.KEYCODE_DPAD_DOWN,
-                        android.view.KeyEvent.KEYCODE_DPAD_LEFT,
-                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            isControllerVisible = true
-                            false 
-                        }
-                        else -> false
-                    }
-                } else false
-            }
-    ) {
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         VideoPlayer(
             url = currentMovie.videoUrl ?: "",
             modifier = Modifier.fillMaxSize(),
@@ -97,32 +67,21 @@ fun VideoPlayerScreen(
             exit = fadeOut()
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // TV 환경에서는 리모컨 뒤로가기 버튼을 주로 사용하므로 상단 닫기 아이콘 제거
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier.align(Alignment.TopStart).padding(16.dp)
+                ) {
+                    Icon(Icons.Default.ArrowBack, null, tint = Color.White)
+                }
 
                 if (nextMovie != null) {
-                    var isNextFocused by remember { mutableStateOf(false) }
                     Button(
-                        onClick = { 
-                            currentMovie = nextMovie 
-                            isControllerVisible = true
-                        },
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(bottom = 96.dp, end = 32.dp)
-                            .onFocusChanged { isNextFocused = it.isFocused },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isNextFocused) Color.Red else Color.White.copy(alpha = 0.9f)
-                        ),
-                        shape = RoundedCornerShape(4.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        onClick = { currentMovie = nextMovie },
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(32.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
+                        shape = RoundedCornerShape(4.dp)
                     ) {
-                        Icon(Icons.Default.PlayArrow, null, tint = if (isNextFocused) Color.White else Color.Black)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "다음 회차 보기", 
-                            color = if (isNextFocused) Color.White else Color.Black, 
-                            fontWeight = FontWeight.Bold
-                        )
+                        Text("다음 회차", color = Color.White, fontWeight = FontWeight.Bold)
                     }
                 }
             }

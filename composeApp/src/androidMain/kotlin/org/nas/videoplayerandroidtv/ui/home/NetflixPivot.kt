@@ -56,7 +56,7 @@ fun <T> NetflixTvPivotRow(
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .height(300.dp) // 요청하신 높이 300dp로 조정
+            .height(300.dp) 
             .focusProperties {
                 enter = {
                     val lastIdx = rowFocusIndices[rowKey] ?: 0
@@ -108,7 +108,8 @@ fun NetflixPivotItem(
         if (isFocused) {
             state.animateScrollToItem(index, -marginPx)
             
-            if ((previewUrl == null || itemOverview == null) && categoryPath != null) {
+            // 데이터가 비어있을 때만 서버에 상세 정보 요청
+            if ((previewUrl == null || itemOverview == null || itemYear == null) && categoryPath != null) {
                 launch {
                     try {
                         val details = repository.getCategoryList(categoryPath, 1, 0)
@@ -205,10 +206,17 @@ fun NetflixPivotItem(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false)
                             )
-                            Spacer(Modifier.width(8.dp))
-                            Text(text = itemYear ?: "2024", color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
-                            Spacer(Modifier.width(6.dp))
-                            Text(text = itemRating ?: "15+", color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            
+                            // 실제 데이터가 있을 때만 표시하도록 수정
+                            if (!itemYear.isNullOrBlank()) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(text = itemYear!!, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+                            }
+                            
+                            if (!itemRating.isNullOrBlank()) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(text = itemRating!!, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
                         }
 
                         if (!itemOverview.isNullOrBlank()) {

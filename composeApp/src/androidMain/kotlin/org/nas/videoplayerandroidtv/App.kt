@@ -30,7 +30,7 @@ import org.nas.videoplayerandroidtv.ui.category.ThemedCategoryScreen
 import org.nas.videoplayerandroidtv.ui.common.NetflixTopBar
 import org.nas.videoplayerandroidtv.ui.detail.SeriesDetailScreen
 import org.nas.videoplayerandroidtv.ui.home.HomeScreen
-import org.nas.videoplayerandroidtv.ui.player.VideoPlayerScreen
+import org.nas.videoplayerandroidtv.ui.player.tv.VideoPlayerScreen
 import org.nas.videoplayerandroidtv.ui.search.SearchScreen
 import org.nas.videoplayerandroidtv.ui.category.processThemedSections
 import org.nas.videoplayerandroidtv.ui.category.ThemeSection
@@ -218,7 +218,7 @@ fun App(driver: SqlDriver) {
                                 movie = selectedMovie!!, 
                                 playlist = moviePlaylist,
                                 initialPosition = lastPlaybackPosition,
-                                onPositionUpdate = { lastPlaybackPosition = it },
+                                onPositionUpdate = { pos -> lastPlaybackPosition = pos },
                                 onBack = { selectedMovie = null }
                             )
                         }
@@ -227,7 +227,7 @@ fun App(driver: SqlDriver) {
                                 series = selectedSeries!!, 
                                 repository = repository, 
                                 initialPlaybackPosition = lastPlaybackPosition,
-                                onPositionUpdate = { lastPlaybackPosition = it },
+                                onPositionUpdate = { pos -> lastPlaybackPosition = pos },
                                 onBack = { selectedSeries = null }, 
                                 onPlay = { movie, playlist, pos -> 
                                     selectedMovie = movie
@@ -245,13 +245,13 @@ fun App(driver: SqlDriver) {
                                 recentQueries = recentQueries, 
                                 searchResults = searchResultSeries, 
                                 isLoading = isSearchLoading,
-                                onSaveQuery = { 
+                                onSaveQuery = { queryText -> 
                                     scope.launch { 
-                                        searchHistoryDataSource.insertQuery(it, currentTimeMillis())
-                                        performSearch(it, searchCategory)
+                                        searchHistoryDataSource.insertQuery(queryText, currentTimeMillis())
+                                        performSearch(queryText, searchCategory)
                                     }
                                 },
-                                onDeleteQuery = { scope.launch { searchHistoryDataSource.deleteQuery(it) } },
+                                onDeleteQuery = { queryToDelete -> scope.launch { searchHistoryDataSource.deleteQuery(queryToDelete) } },
                                 onSeriesClick = { selectedSeries = it }
                             )
                         }

@@ -101,7 +101,7 @@ def resolve_nas_path(app_path):
         return resolved, type_code
     return None, None
 
-def get_tmdb_info_server(title, ignore_cache=False):
+def get_tmdb_info_server(title, ignore_cache=False, log_path=None):
     if not title: return {"failed": True}
     title_pure = nfc(title).split('/')[-1]
     cp = os.path.join(TMDB_CACHE_DIR, f"{hashlib.md5(title_pure.encode()).hexdigest()}.json")
@@ -116,7 +116,9 @@ def get_tmdb_info_server(title, ignore_cache=False):
         with open(cp, 'w', encoding='utf-8') as f: json.dump(info, f, ensure_ascii=False)
         return info
 
-    log(f"  [TMDB-SEARCH] '{title_pure}' -> '{ct}' ({year})")
+    path_info = f" (경로: {log_path})" if log_path else ""
+    log(f"  [TMDB-SEARCH] '{title_pure}' -> '{ct}' ({year}){path_info}")
+
     params = {"query": ct, "language": "ko-KR", "include_adult": "false", "region": "KR"}
     if year: params["year"] = year
     headers = {"Authorization": f"Bearer {TMDB_API_KEY}"} if TMDB_API_KEY.startswith("eyJ") else {}
@@ -145,22 +147,25 @@ def get_tmdb_info_server(title, ignore_cache=False):
 def attach_tmdb_info(cat):
     name = cat.get('name')
     if name:
-        info = get_tmdb_info_server(name)
+        info = get_tmdb_info_server(name, log_path=cat.get('path'))
         cat.update(info)
     return cat
 
 def fetch_metadata_async(force_all=False):
     log("🚀 [METADATA] 백그라운드 매칭 시작")
     tasks = []
-    for k in ["foreigntv", "koreantv", "air", "animations_all", "movies"]:
+    # 데이터 수집 (어떤 카테고리의 어떤 경로인지 정보를 유지)
+    for k in ["animations_all", "foreigntv", "koreantv", "movies", "air"]:
         for cat in GLOBAL_CACHE.get(k, []):
-            if force_all or (not cat.get('posterPath') and not cat.get('failed')): tasks.append(cat)
+            if force_all or (not cat.get('posterPath') and not cat.get('failed')):
+                tasks.append((cat, k))
 
     total = len(tasks)
     log(f"  📋 총 {total}개의 메타데이터 업데이트 필요")
     count = 0
-    for cat in tasks:
-        info = get_tmdb_info_server(cat['name'], ignore_cache=force_all)
+    for cat, cat_key in tasks:
+        # 검색 시 경로 정보를 넘겨서 로그에 찍히게 함
+        info = get_tmdb_info_server(cat['name'], ignore_cache=force_all, log_path=f"{cat_key}/{cat.get('path')}")
         cat.update(info)
         count += 1
         if count % 10 == 0:
@@ -184,7 +189,6 @@ def scan_recursive(bp, prefix, rb=None):
     all_f = []
     file_count = 0
 
-    # 반복문 기반 os.scandir 고속 탐색 (심층 폴더 지원)
     def fast_walk_iterative(target_path):
         nonlocal file_count
         stack = [target_path]
@@ -259,7 +263,6 @@ def perform_full_scan(reason="필요"):
         ("방송중", AIR_DIR, "air", "air")
     ]
     for label, path, prefix, cache_key in t:
-        # 이미 데이터가 1개라도 로드되었다면 다시 스캔하지 않음
         if GLOBAL_CACHE.get(cache_key) and len(GLOBAL_CACHE[cache_key]) > 0:
              log(f"  ⏭️ [{label}] 이미 로드된 데이터가 있음. 건너뜁니다.")
              continue
@@ -298,7 +301,7 @@ def init_server():
     has_cache = load_cache()
     if has_cache: build_home_recommend()
 
-    # 서버 응답을 위해 탐색은 무조건 백그라운드 스레드로 실행 (비차단 방식)
+    # 서버 응답을 위해 탐색은 무조건 백그라운드 스레드로 실행
     threading.Thread(target=perform_full_scan, args=("시스템 시작",), daemon=True).start()
 
 init_server()
@@ -352,7 +355,7 @@ def process_data(data, lite=False, is_search=False):
 
 def filter_by_path(pool, keyword):
     target = nfc(keyword).replace(" ", "").lower()
-    return [c for c in pool if target in c.get('path', '').replace(" ", "").lower()]
+    return [c for c in pool if target in nfc(c.get('path', '')).replace(" ", "").lower()]
 
 # 방송중 카테고리 관련 라우터
 @app.route('/air')
