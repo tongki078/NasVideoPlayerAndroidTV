@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 배경색 (ic_launcher_background 재사용 또는 검정색) -->
+    <item android:drawable="@drawable/ic_launcher_background" />
+
+    <!-- 중앙 플레이 로고 이미지 -->
+    <item
+        android:drawable="@drawable/ic_nas_play_foreground"
+        android:gravity="center"
+        android:width="120dp"
+        android:height="120dp" />
+</layer-list>

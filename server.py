@@ -18,9 +18,9 @@ DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "9.7"  # 현재 진행 중인 버전 유지 (재탐색 최소화)
+CACHE_VERSION = "9.7"
 
-# TMDB API KEY (Bearer 또는 API Key)
+# TMDB API KEY
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk".strip()
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
@@ -101,7 +101,7 @@ def resolve_nas_path(app_path):
         return resolved, type_code
     return None, None
 
-def get_tmdb_info_server(title, ignore_cache=False, log_path=None):
+def get_tmdb_info_server(title, ignore_cache=False, log_path=None, search_override=None):
     if not title: return {"failed": True}
     title_pure = nfc(title).split('/')[-1]
     cp = os.path.join(TMDB_CACHE_DIR, f"{hashlib.md5(title_pure.encode()).hexdigest()}.json")
@@ -110,14 +110,17 @@ def get_tmdb_info_server(title, ignore_cache=False, log_path=None):
             with open(cp, 'r', encoding='utf-8') as f: return json.load(f)
         except: pass
 
-    ct, year = clean_title_complex(title_pure)
-    if REGEX_FORBIDDEN_TITLE.match(ct) or ct.lower() in ["season", "series", "video", "episode"]:
+    # 검색 텍스트 결정: override 우선
+    query_text = search_override if search_override else title_pure
+    ct, year = clean_title_complex(query_text)
+
+    if not search_override and (REGEX_FORBIDDEN_TITLE.match(ct) or ct.lower() in ["season", "series", "video", "episode"]):
         info = {"failed": True, "forbidden": True}
         with open(cp, 'w', encoding='utf-8') as f: json.dump(info, f, ensure_ascii=False)
         return info
 
     path_info = f" (경로: {log_path})" if log_path else ""
-    log(f"  [TMDB-SEARCH] '{title_pure}' -> '{ct}' ({year}){path_info}")
+    log(f"  [TMDB-SEARCH] '{query_text}' -> '{ct}' ({year}){path_info}")
 
     params = {"query": ct, "language": "ko-KR", "include_adult": "false", "region": "KR"}
     if year: params["year"] = year
@@ -317,19 +320,28 @@ def refresh_metadata(): threading.Thread(target=fetch_metadata_async, kwargs={"f
 @app.route('/debug_match')
 def debug_match():
     q = request.args.get('q', '')
-    if not q: return "Usage: /debug_match?q=폴더명"
-    ct, year = clean_title_complex(q)
-    params = {"query": ct, "language": "ko-KR", "include_adult": "false"}
-    if year: params["year"] = year
-    headers = {"Authorization": f"Bearer {TMDB_API_KEY}"} if TMDB_API_KEY.startswith("eyJ") else {}
-    if not headers: params["api_key"] = TMDB_API_KEY
-    search_data = {}
-    try:
-        resp = requests.get(f"{TMDB_BASE_URL}/search/multi", params=params, headers=headers, timeout=5)
-        search_data = resp.json()
-    except Exception as e: search_data = {"error": str(e)}
-    final_info = get_tmdb_info_server(q, ignore_cache=True)
-    return jsonify({"input_original": q, "step1_cleaned_title": ct, "step1_extracted_year": year, "step2_raw_tmdb_results": search_data.get('results', []), "step3_final_processed_info": final_info})
+    s = request.args.get('search', '')
+    if not q: return "Usage: /debug_match?q=대상폴더명&search=검색키워드"
+
+    # 1. 새 정보 강제 가져오기 (지정된 검색어 또는 폴더명으로)
+    info = get_tmdb_info_server(q, ignore_cache=True, search_override=s)
+
+    # 2. 메모리(GLOBAL_CACHE) 내의 데이터 즉시 업데이트
+    target_q = nfc(q)
+    updated_count = 0
+    for k in ["animations_all", "foreigntv", "koreantv", "movies", "air"]:
+        for cat in GLOBAL_CACHE.get(k, []):
+            if nfc(cat['name']) == target_q:
+                cat.update(info)
+                updated_count += 1
+
+    # 3. 변경사항 저장 및 홈 추천 갱신
+    if updated_count > 0:
+        save_cache()
+        build_home_recommend()
+        return jsonify({"status": "success", "folder": q, "query_used": s if s else q, "data": info})
+    else:
+        return jsonify({"status": "partial_success", "message": "캐시는 생성되었으나 현재 목록에서 폴더명을 찾을 수 없습니다.", "data": info})
 
 def process_data(data, lite=False, is_search=False):
     # 페이징 지원
@@ -337,19 +349,15 @@ def process_data(data, lite=False, is_search=False):
     offset = request.args.get('offset', type=int, default=0)
 
     result = data
-    # [v9.7 추가] 일일 고정 무작위 샘플링 지원 (사용자 피드백 반영: 하루 동안은 순서 고정)
     if request.args.get('random') == 'true':
         result = list(data)
-        # 오늘 날짜를 시드로 사용하여 하루 동안은 동일한 순서 유지
-        daily_seed = datetime.now().strftime("%Y%m%d")
-        rng = random.Random(daily_seed)
+        rng = random.Random(datetime.now().strftime("%Y%m%d"))
         rng.shuffle(result)
 
     if offset: result = result[offset:]
     if limit: result = result[:limit]
 
     if lite:
-        # Lite 모드: 목록에서는 movies를 비우지만, 검색 결과인 경우엔 검색된 movies 정보를 유지함
         return [{"name": c.get('name',''), "path": c.get('path',''), "movies": c.get('movies', []) if is_search else [], "genreIds": c.get('genreIds', []), "posterPath": c.get('posterPath'), "year": c.get('year'), "overview": c.get('overview'), "rating": c.get('rating'), "seasonCount": c.get('seasonCount'), "failed": c.get('failed', False)} for c in result]
     return result
 
@@ -360,60 +368,14 @@ def filter_by_path(pool, keyword):
 # 방송중 카테고리 관련 라우터
 @app.route('/air')
 def get_air(): return jsonify(process_data(GLOBAL_CACHE.get("air", []), request.args.get('lite') == 'true'))
-@app.route('/air_animations')
-def get_air_animations():
-    res = [c for c in GLOBAL_CACHE.get("air", []) if any(k in c.get('path', '') for k in ["라프텔", "애니"])]
-    return jsonify(process_data(res, request.args.get('lite') == 'true'))
-@app.route('/air_dramas')
-def get_air_dramas():
-    res = [c for c in GLOBAL_CACHE.get("air", []) if "드라마" in c.get('path', '')]
-    return jsonify(process_data(res, request.args.get('lite') == 'true'))
-
-# 애니 카테고리 관련 라우터
 @app.route('/animations_all')
 def get_animations_all(): return jsonify(process_data(GLOBAL_CACHE.get("animations_all", []), request.args.get('lite') == 'true'))
-@app.route('/anim_raftel')
-def get_anim_raftel(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "라프텔"), request.args.get('lite') == 'true'))
-@app.route('/anim_series')
-def get_anim_series(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "시리즈"), request.args.get('lite') == 'true'))
-
-# 외국TV 카테고리 관련 라우터
 @app.route('/foreigntv')
 def get_foreigntv(): return jsonify(process_data(GLOBAL_CACHE.get("foreigntv", []), request.args.get('lite') == 'true'))
-@app.route('/ftv_us')
-def get_ftv_us(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("foreigntv", []), "미국 드라마"), request.args.get('lite') == 'true'))
-@app.route('/ftv_cn')
-def get_ftv_cn(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("foreigntv", []), "중국 드라마"), request.args.get('lite') == 'true'))
-@app.route('/ftv_jp')
-def get_ftv_jp(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("foreigntv", []), "일본 드라마"), request.args.get('lite') == 'true'))
-@app.route('/ftv_docu')
-def get_ftv_docu(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("foreigntv", []), "다큐"), request.args.get('lite') == 'true'))
-@app.route('/ftv_etc')
-def get_ftv_etc(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("foreigntv", []), "기타"), request.args.get('lite') == 'true'))
-
-# 국내TV 카테고리 관련 라우터
 @app.route('/koreantv')
 def get_koreantv(): return jsonify(process_data(GLOBAL_CACHE.get("koreantv", []), request.args.get('lite') == 'true'))
-@app.route('/ktv_drama')
-def get_ktv_drama(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("koreantv", []), "드라마"), request.args.get('lite') == 'true'))
-@app.route('/ktv_variety')
-def get_ktv_variety(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("koreantv", []), "예능"), request.args.get('lite') == 'true'))
-@app.route('/ktv_sitcom')
-def get_ktv_sitcom(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("koreantv", []), "시트콤"), request.args.get('lite') == 'true'))
-@app.route('/ktv_edu')
-def get_ktv_edu(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("koreantv", []), "교양"), request.args.get('lite') == 'true'))
-@app.route('/ktv_docu')
-def get_ktv_docu(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("koreantv", []), "다큐"), request.args.get('lite') == 'true'))
-
-# 영화 카테고리 관련 라우터
 @app.route('/movies')
 def get_movies(): return jsonify(process_data(GLOBAL_CACHE.get("movies", []), request.args.get('lite') == 'true'))
-@app.route('/movies_latest')
-def get_movies_latest(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "최신"), request.args.get('lite') == 'true'))
-@app.route('/movies_uhd')
-def get_movies_uhd(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "UHD"), request.args.get('lite') == 'true'))
-@app.route('/movies_title')
-def get_movies_title(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("movies", []), "제목"), request.args.get('lite') == 'true'))
 
 @app.route('/search')
 def search_videos():

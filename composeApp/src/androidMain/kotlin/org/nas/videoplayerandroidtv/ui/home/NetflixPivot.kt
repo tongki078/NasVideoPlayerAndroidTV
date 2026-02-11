@@ -17,7 +17,6 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -48,6 +47,7 @@ fun <T> NetflixTvPivotRow(
     keySelector: (T) -> Any,
     itemContent: @Composable (item: T, index: Int, state: LazyListState, focusRequester: FocusRequester, marginPx: Int, focusedIndex: Int) -> Unit
 ) {
+    // 5만개 데이터를 대비하여 FocusRequester 관리를 더 안전하게 처리
     val focusRequesters = remember(items.size) { List(items.size) { FocusRequester() } }
     val density = LocalDensity.current
     val marginPx = with(density) { marginValue.roundToPx() }
@@ -60,7 +60,20 @@ fun <T> NetflixTvPivotRow(
             .focusProperties {
                 enter = {
                     val lastIdx = rowFocusIndices[rowKey] ?: 0
-                    focusRequesters.getOrNull(lastIdx) ?: FocusRequester.Default
+                    val visibleItems = state.layoutInfo.visibleItemsInfo
+                    
+                    // 현재 화면에 보이는 아이템들 중 마지막 포커스된 인덱스가 있는지 확인
+                    val isLastItemVisible = visibleItems.any { it.index == lastIdx }
+                    
+                    if (isLastItemVisible && lastIdx in focusRequesters.indices) {
+                        focusRequesters[lastIdx]
+                    } else {
+                        // 마지막 포커스 대상이 화면 밖에 있다면, 현재 보이는 첫 번째 아이템으로 안전하게 포커스 유도
+                        visibleItems.firstOrNull()?.let { 
+                            if (it.index in focusRequesters.indices) focusRequesters[it.index] 
+                            else FocusRequester.Default
+                        } ?: FocusRequester.Default
+                    }
                 }
             },
         state = state,
@@ -70,9 +83,12 @@ fun <T> NetflixTvPivotRow(
     ) {
         itemsIndexed(items, key = { _, item -> keySelector(item) }) { index, item ->
             Box(modifier = Modifier.onFocusChanged {
-                if (it.isFocused) rowFocusIndices[rowKey] = index
+                if (it.isFocused) {
+                    rowFocusIndices[rowKey] = index
+                }
             }) {
-                itemContent(item, index, state, focusRequesters[index], marginPx, focusedIndex)
+                val fr = focusRequesters.getOrElse(index) { FocusRequester.Default }
+                itemContent(item, index, state, fr, marginPx, focusedIndex)
             }
         }
     }
@@ -104,13 +120,19 @@ fun NetflixPivotItem(
     var itemRating by remember { mutableStateOf(rating) }
     var showPreview by remember { mutableStateOf(false) }
     
+    val coroutineScope = rememberCoroutineScope()
+
     LaunchedEffect(isFocused) {
         if (isFocused) {
-            state.animateScrollToItem(index, -marginPx)
+            // 빠른 스크롤 시 스크롤 애니메이션 에러 방지 (IllegalStateException 방어)
+            try {
+                state.animateScrollToItem(index, -marginPx)
+            } catch (_: Exception) {}
             
-            // 데이터가 비어있을 때만 서버에 상세 정보 요청
-            if ((previewUrl == null || itemOverview == null || itemYear == null) && categoryPath != null) {
-                launch {
+            // 상세 정보 로딩 지연 (사용자가 잠시 머물 때만 로딩하여 부하 감소)
+            delay(500)
+            if (isFocused && (previewUrl == null || itemOverview == null) && categoryPath != null) {
+                coroutineScope.launch {
                     try {
                         val details = repository.getCategoryList(categoryPath, 1, 0)
                         val cat = details.firstOrNull()
@@ -124,8 +146,9 @@ fun NetflixPivotItem(
                 }
             }
             
-            delay(600)
-            if (previewUrl != null) {
+            // 프리뷰 재생 지연
+            delay(300)
+            if (previewUrl != null && isFocused) {
                 showPreview = true
             }
         } else {
@@ -143,15 +166,13 @@ fun NetflixPivotItem(
             .width(itemWidth)
             .height(totalItemHeight)
             .zIndex(if (isFocused) 10f else 1f)
-            .alpha(1f),
-        contentAlignment = Alignment.TopStart
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .focusRequester(focusRequester)
                 .clip(RoundedCornerShape(6.dp))
-                .background(Color.Transparent) 
+                .background(if (isFocused) Color(0xFF1F1F1F) else Color.Transparent) 
                 .focusable(interactionSource = interactionSource)
                 .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
         ) {
@@ -185,51 +206,46 @@ fun NetflixPivotItem(
                 }
             }
             
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(infoAreaHeight)
-            ) {
-                if (isFocused) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                text = title.cleanTitle(),
-                                color = Color.White,
-                                fontSize = 14.sp, 
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false)
-                            )
-                            
-                            // 실제 데이터가 있을 때만 표시하도록 수정
-                            if (!itemYear.isNullOrBlank()) {
-                                Spacer(Modifier.width(8.dp))
-                                Text(text = itemYear!!, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
-                            }
-                            
-                            if (!itemRating.isNullOrBlank()) {
-                                Spacer(Modifier.width(6.dp))
-                                Text(text = itemRating!!, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                            }
+            // 정보 영역 (포커스 시에만 렌더링)
+            if (isFocused) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(infoAreaHeight)
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = title.cleanTitle(),
+                            color = Color.White,
+                            fontSize = 14.sp, 
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        
+                        if (!itemYear.isNullOrBlank()) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(text = itemYear!!, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
                         }
+                        
+                        if (!itemRating.isNullOrBlank()) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(text = itemRating!!, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    }
 
-                        if (!itemOverview.isNullOrBlank()) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = itemOverview!!,
-                                color = Color.LightGray.copy(alpha = 0.8f),
-                                fontSize = 11.sp,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                lineHeight = 15.sp
-                            )
-                        }
+                    if (!itemOverview.isNullOrBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = itemOverview!!,
+                            color = Color.LightGray.copy(alpha = 0.8f),
+                            fontSize = 11.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            lineHeight = 15.sp
+                        )
                     }
                 }
             }
