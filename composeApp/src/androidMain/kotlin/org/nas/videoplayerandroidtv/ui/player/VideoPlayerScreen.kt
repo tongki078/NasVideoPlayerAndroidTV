@@ -39,7 +39,7 @@ import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 
 /**
- * 직접 정의한 Pause 아이콘 (라이브러리 오류 방지용 및 시인성 개선)
+ * 직접 정의한 Pause 아이콘 (라이브러리 오류 방지 및 시인성 개선)
  */
 val MyPauseIcon: ImageVector
     get() = ImageVector.Builder(
@@ -133,10 +133,10 @@ fun VideoPlayerScreen(
         }
     }
 
-    // 자동 숨김 로직 (일시정지 중이거나 탐색 중, 버튼 포커스 시에는 유지)
+    // 자동 숨김 로직 (재생 중일 때만 작동, 대기 시간을 3초로 단축하여 더 자연스럽게 함)
     LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused, isSkipOpeningFocused, userPaused) {
         if (isControllerVisible && !isSeeking && !isNextButtonFocused && !isSkipOpeningFocused && !userPaused) {
-            delay(5000)
+            delay(3000) // 3초 후 자동으로 사라짐
             isControllerVisible = false
         }
     }
@@ -196,6 +196,8 @@ fun VideoPlayerScreen(
                         if (isSeeking) {
                             finalSeekPosition = seekTime
                             isSeeking = false
+                            // 탐색 완료 시 자연스러운 숨김을 위해 interactionTime 갱신
+                            lastInteractionTime = System.currentTimeMillis()
                             true
                         } else if (isNextButtonFocused || isSkipOpeningFocused) {
                             false
@@ -203,6 +205,7 @@ fun VideoPlayerScreen(
                             // 확인 버튼으로 일시정지/재생 토글
                             userPaused = !userPaused
                             isControllerVisible = true
+                            lastInteractionTime = System.currentTimeMillis()
                             true
                         }
                     }
@@ -325,7 +328,7 @@ fun VideoPlayerScreen(
                         LazyRow(
                             state = thumbListState,
                             contentPadding = PaddingValues(horizontal = 100.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp), // 썸네일 간격 8dp 유지
                             userScrollEnabled = false,
                             modifier = Modifier.fillMaxWidth().height(140.dp).padding(bottom = 16.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -360,7 +363,7 @@ fun VideoPlayerScreen(
                             .padding(bottom = 48.dp, start = 48.dp, end = 60.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 일시정지/재생 아이콘 (시크바 왼쪽 배치, 크기 대폭 확대)
+                        // 일시정지/재생 아이콘 (시크바 왼쪽 배치, 64dp 크기 유지)
                         Icon(
                             imageVector = if (userPaused) Icons.Default.PlayArrow else MyPauseIcon,
                             contentDescription = null,
