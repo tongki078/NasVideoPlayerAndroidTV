@@ -1,12 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- 배경색 (ic_launcher_background 재사용 또는 검정색) -->
-    <item android:drawable="@drawable/ic_launcher_background" />
+    <!-- 배경을 16:9 비율의 직사각형으로 설정하고 라운드 처리 추가 -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#2196F3" /> <!-- 파란색 배경 -->
+            <corners android:radius="12dp" /> <!-- 모서리 라운드 처리 -->
+            <size android:width="320dp" android:height="180dp" />
+        </shape>
+    </item>
 
-    <!-- 중앙 플레이 로고 이미지 -->
+    <!-- 중앙 플레이 로고 (사이즈 조절 및 중앙 배치) -->
     <item
         android:drawable="@drawable/ic_nas_play_foreground"
         android:gravity="center"
-        android:width="120dp"
-        android:height="120dp" />
+        android:top="40dp"
+        android:bottom="40dp"
+        android:left="40dp"
+        android:right="40dp" />
 </layer-list>

@@ -15,7 +15,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
-        android:banner="@drawable/ic_launcher_background"
+        android:banner="@drawable/app_banner"
         android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config"> <!-- 네트워크 보안 설정 연결 -->
 
@@ -23,6 +23,7 @@
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|mnc|mcc|navigation|uiMode"
             android:exported="true"
+            android:banner="@drawable/app_banner"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
