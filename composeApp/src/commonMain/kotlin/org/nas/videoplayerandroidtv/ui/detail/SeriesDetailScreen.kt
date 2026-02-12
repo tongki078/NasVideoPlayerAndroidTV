@@ -58,7 +58,9 @@ fun SeriesDetailScreen(
     onPreviewPlay: (Movie) -> Unit = {}
 ) {
     var state by remember { mutableStateOf(SeriesDetailState()) }
-    val currentWatchingMovie = remember(series) { series.episodes.firstOrNull() }
+    val currentWatchingMovie = remember(series, state.seasons) { 
+        series.episodes.firstOrNull() ?: state.seasons.firstOrNull()?.episodes?.firstOrNull()
+    }
     
     val resumeButtonFocusRequester = remember { FocusRequester() }
     val playButtonFocusRequester = remember { FocusRequester() }
@@ -92,10 +94,15 @@ fun SeriesDetailScreen(
         if (!state.isLoading && !state.showEpisodeOverlay) {
             delay(500)
             try {
-                if (initialPlaybackPosition > 0) {
-                    resumeButtonFocusRequester.requestFocus()
-                } else {
-                    playButtonFocusRequester.requestFocus()
+                val allEpisodes = if (state.seasons.isNotEmpty()) state.seasons.flatMap { it.episodes } else series.episodes
+                val playableEpisode = currentWatchingMovie ?: allEpisodes.firstOrNull()
+                
+                if (playableEpisode != null) {
+                    if (initialPlaybackPosition > 0) {
+                        resumeButtonFocusRequester.requestFocus()
+                    } else {
+                        playButtonFocusRequester.requestFocus()
+                    }
                 }
             } catch (_: Exception) {}
         }
@@ -111,7 +118,9 @@ fun SeriesDetailScreen(
             .fillMaxSize()
             .background(Color.Black)
             .focusProperties { 
-                enter = { if (initialPlaybackPosition > 0) resumeButtonFocusRequester else playButtonFocusRequester } 
+                enter = { 
+                    if (initialPlaybackPosition > 0) resumeButtonFocusRequester else playButtonFocusRequester 
+                } 
             }
             .focusGroup()
     ) {
@@ -141,7 +150,7 @@ fun SeriesDetailScreen(
                     maxLines = 2, 
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(12.dp)) // 간격 축소
+                Spacer(Modifier.height(8.dp))
                 
                 // 정보 뱃지
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -160,13 +169,13 @@ fun SeriesDetailScreen(
                         InfoBadge(text = genre, color = Color.White.copy(alpha = 0.1f))
                     }
                 }
-                Spacer(Modifier.height(16.dp)) // 간격 축소
+                Spacer(Modifier.height(12.dp))
 
-                // 줄거리: 불필요한 줄바꿈 제거 로직 추가
+                // 줄거리
                 val overview = if (state.isLoading) {
                     "상세 정보를 불러오는 중입니다..."
                 } else {
-                    state.metadata?.overview?.replace(Regex("\\n+"), " ")?.trim() ?: "정보가 없습니다."
+                    state.metadata?.overview?.replace(Regex("[\\r\\n]+"), " ")?.trim() ?: "정보가 없습니다."
                 }
 
                 Text(
@@ -174,10 +183,10 @@ fun SeriesDetailScreen(
                     color = Color.White.copy(alpha = 0.8f), 
                     fontSize = 15.sp, 
                     lineHeight = 22.sp, 
-                    maxLines = 3, // 4줄에서 3줄로 축소하여 공간 확보
+                    maxLines = 3, 
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(12.dp)) // 간격 대폭 축소
+                Spacer(Modifier.height(8.dp))
                 
                 // 출연진
                 if (state.credits.isNotEmpty()) {
@@ -188,79 +197,90 @@ fun SeriesDetailScreen(
                         maxLines = 1, 
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(Modifier.height(20.dp)) // 간격 축소
+                    Spacer(Modifier.height(16.dp))
                 } else {
                     Spacer(Modifier.height(8.dp))
                 }
 
                 // 버튼 섹션
-                val allEpisodes = state.seasons.flatMap { it.episodes }
+                val allEpisodes = if (state.seasons.isNotEmpty()) state.seasons.flatMap { it.episodes } else series.episodes
                 val playableEpisode = currentWatchingMovie ?: allEpisodes.firstOrNull()
                 
-                if (playableEpisode != null) {
-                    Column(
-                        modifier = Modifier.focusGroup(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp) // 버튼 간 간격 축소
-                    ) {
-                        if (initialPlaybackPosition > 0) {
-                            val epTitle = playableEpisode.title ?: ""
-                            val seasonNum = epTitle.extractSeason()
-                            val episodeStr = epTitle.extractEpisode()
-                            
-                            val resumeText = if (episodeStr != null) "시즌 $seasonNum : $episodeStr" else "계속 보기"
-                            val progress = if (initialDuration > 0) initialPlaybackPosition.toFloat() / initialDuration else 0f
+                Box(modifier = Modifier.fillMaxWidth().height(150.dp)) {
+                    if (state.isLoading) {
+                        Box(modifier = Modifier.fillMaxHeight(), contentAlignment = Alignment.CenterStart) {
+                            CircularProgressIndicator(color = Color.Red, modifier = Modifier.size(32.dp))
+                        }
+                    } else if (playableEpisode != null) {
+                        Column(
+                            modifier = Modifier.focusGroup().align(Alignment.CenterStart),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (initialPlaybackPosition > 0) {
+                                val epTitle = playableEpisode.title ?: ""
+                                val seasonNum = epTitle.extractSeason()
+                                val episodeStr = epTitle.extractEpisode()
+                                
+                                val resumeText = if (episodeStr != null) "시즌 $seasonNum : $episodeStr" else "계속 보기"
+                                val progress = if (initialDuration > 0) initialPlaybackPosition.toFloat() / initialDuration else 0f
+
+                                TvButton(
+                                    text = resumeText,
+                                    icon = Icons.Default.PlayArrow,
+                                    isPrimary = true,
+                                    progress = progress, 
+                                    modifier = Modifier.focusRequester(resumeButtonFocusRequester),
+                                    onClick = {
+                                        val matchedEpisode = allEpisodes.find { it.videoUrl == playableEpisode.videoUrl } ?: playableEpisode
+                                        val playlist = if (allEpisodes.isNotEmpty()) {
+                                            state.seasons.find { s -> s.episodes.any { it.videoUrl == matchedEpisode.videoUrl } }?.episodes ?: allEpisodes
+                                        } else {
+                                            listOf(matchedEpisode)
+                                        }
+                                        onPlay(matchedEpisode, playlist, initialPlaybackPosition)
+                                    }
+                                )
+                            }
 
                             TvButton(
-                                text = resumeText,
-                                icon = Icons.Default.PlayArrow,
-                                isPrimary = true,
-                                progress = progress, 
-                                modifier = Modifier.focusRequester(resumeButtonFocusRequester),
+                                text = if (initialPlaybackPosition > 0) "처음부터" else "재생",
+                                icon = if (initialPlaybackPosition > 0) Icons.Default.Refresh else Icons.Default.PlayArrow,
+                                isPrimary = initialPlaybackPosition <= 0,
+                                modifier = Modifier.focusRequester(playButtonFocusRequester),
                                 onClick = {
                                     val matchedEpisode = allEpisodes.find { it.videoUrl == playableEpisode.videoUrl } ?: playableEpisode
                                     val playlist = if (allEpisodes.isNotEmpty()) {
-                                        state.seasons.find { it.episodes.any { it.videoUrl == matchedEpisode.videoUrl } }?.episodes ?: allEpisodes
+                                        state.seasons.find { s -> s.episodes.any { it.videoUrl == matchedEpisode.videoUrl } }?.episodes ?: allEpisodes
                                     } else {
                                         listOf(matchedEpisode)
                                     }
-                                    onPlay(matchedEpisode, playlist, initialPlaybackPosition)
+                                    onPlay(matchedEpisode, playlist, 0L)
                                 }
                             )
-                        }
 
-                        TvButton(
-                            text = if (initialPlaybackPosition > 0) "처음부터" else "재생",
-                            icon = if (initialPlaybackPosition > 0) Icons.Default.Refresh else Icons.Default.PlayArrow,
-                            isPrimary = initialPlaybackPosition <= 0,
-                            modifier = Modifier.focusRequester(playButtonFocusRequester),
-                            onClick = {
-                                val matchedEpisode = allEpisodes.find { it.videoUrl == playableEpisode.videoUrl } ?: playableEpisode
-                                val playlist = if (allEpisodes.isNotEmpty()) {
-                                    state.seasons.find { it.episodes.any { it.videoUrl == matchedEpisode.videoUrl } }?.episodes ?: allEpisodes
-                                } else {
-                                    listOf(matchedEpisode)
-                                }
-                                onPlay(matchedEpisode, playlist, 0L)
+                            if (state.seasons.isNotEmpty() && allEpisodes.size > 1) { 
+                                TvButton(
+                                    text = "회차 정보",
+                                    icon = Icons.AutoMirrored.Filled.List,
+                                    isPrimary = false,
+                                    modifier = Modifier.focusRequester(infoButtonFocusRequester),
+                                    onClick = { state = state.copy(showEpisodeOverlay = true) }
+                                )
                             }
-                        )
-
-                        if (state.seasons.isNotEmpty() && allEpisodes.size > 1) { 
-                            TvButton(
-                                text = "회차 정보",
-                                icon = Icons.AutoMirrored.Filled.List,
-                                isPrimary = false,
-                                modifier = Modifier.focusRequester(infoButtonFocusRequester),
-                                onClick = { state = state.copy(showEpisodeOverlay = true) }
+                        }
+                    } else {
+                        Box(modifier = Modifier.fillMaxHeight(), contentAlignment = Alignment.CenterStart) {
+                            Text(
+                                text = "재생 가능한 회차를 찾을 수 없습니다.",
+                                color = Color.Gray,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
                 }
             }
             Box(modifier = Modifier.weight(1f))
-        }
-
-        if (state.isLoading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color.Red) }
         }
 
         if (state.showEpisodeOverlay && state.seasons.isNotEmpty()) {
@@ -434,7 +454,14 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
     if (path.isNullOrBlank()) return listOfNotNull(defaultSeason)
     
     return try {
-        val content = repository.getCategoryList(path)
+        // 이미 prefix가 포함되어 있는지 확인하여 중복 방지
+        val normalizedPath = if (path.startsWith("외국TV/") || path.startsWith("국내TV/") || path.startsWith("영화/") || path.startsWith("애니메이션/") || path.startsWith("방송중/")) {
+            path
+        } else {
+            path // 일단 그대로 둠. VideoRepositoryImpl에서 이미 적절한 prefix를 붙였을 것이라 가정
+        }
+
+        val content = repository.getCategoryList(normalizedPath)
         if (content.isEmpty()) return listOfNotNull(defaultSeason)
 
         val subFolders = content.filter { it.movies.isNullOrEmpty() && !it.name.isNullOrBlank() }
@@ -445,7 +472,7 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
         if (subFolders.isNotEmpty()) {
             coroutineScope {
                 val loadedSeasons = subFolders.map { folder -> async {
-                    val folderPath = folder.path ?: "$path/${folder.name ?: ""}"
+                    val folderPath = folder.path ?: "$normalizedPath/${folder.name ?: ""}"
                     val folderMovies = repository.getCategoryList(folderPath).flatMap { it.movies ?: emptyList() }
                     if (folderMovies.isNotEmpty()) Season(folder.name ?: "알 수 없음", folderMovies.sortedByEpisode()) else null
                 } }.awaitAll().filterNotNull()

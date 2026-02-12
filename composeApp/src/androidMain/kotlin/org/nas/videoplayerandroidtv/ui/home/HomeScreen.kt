@@ -100,23 +100,20 @@ fun HomeScreen(
         ) {
             item(key = "hero_section") {
                 if (heroItem != null) {
+                    val heroSeries = Series(
+                        title = heroItem.name ?: "", 
+                        episodes = heroItem.movies ?: emptyList(), 
+                        fullPath = heroItem.path, 
+                        posterPath = heroItem.posterPath, 
+                        genreIds = heroItem.genreIds ?: emptyList(),
+                        overview = heroItem.overview,
+                        year = heroItem.year,
+                        rating = heroItem.rating
+                    )
                     HeroSection(
-                        series = Series(
-                            title = heroItem.name ?: "", 
-                            episodes = emptyList(), 
-                            fullPath = heroItem.path, 
-                            posterPath = heroItem.posterPath, 
-                            genreIds = heroItem.genreIds ?: emptyList(),
-                            overview = heroItem.overview,
-                            year = heroItem.year,
-                            rating = heroItem.rating
-                        ),
-                        onWatchClick = {
-                            onSeriesClick(Series(title = heroItem.name ?: "", episodes = emptyList(), fullPath = heroItem.path, posterPath = heroItem.posterPath, genreIds = heroItem.genreIds ?: emptyList(), overview = heroItem.overview, year = heroItem.year, rating = heroItem.rating))
-                        },
-                        onInfoClick = {
-                            onSeriesClick(Series(title = heroItem.name ?: "", episodes = emptyList(), fullPath = heroItem.path, posterPath = heroItem.posterPath, genreIds = heroItem.genreIds ?: emptyList(), overview = heroItem.overview, year = heroItem.year, rating = heroItem.rating))
-                        },
+                        series = heroSeries,
+                        onWatchClick = { onSeriesClick(heroSeries) },
+                        onInfoClick = { onSeriesClick(heroSeries) },
                         horizontalPadding = standardMargin
                     )
                 } else {
