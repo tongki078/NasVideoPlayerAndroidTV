@@ -43,17 +43,34 @@ fun EpisodeList(episodes: List<Movie>, metadata: TmdbMetadata?, onPlay: (Movie) 
 @Composable
 fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
     var episodeDetails by remember { mutableStateOf<TmdbEpisode?>(null) }
+    var isDetailLoading by remember { mutableStateOf(true) } // 상세 정보 로딩 상태 추가
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.03f else 1f, label = "EpisodeItemScale")
 
     LaunchedEffect(movie, seriesMeta) {
         if (seriesMeta?.tmdbId != null && seriesMeta.mediaType == "tv") {
+            isDetailLoading = true
             val season = movie.title?.extractSeason() ?: 1
             val episodeNum = movie.title?.extractEpisode()?.filter { it.isDigit() }?.toIntOrNull() ?: 1
             episodeDetails = fetchTmdbEpisodeDetails(seriesMeta.tmdbId, season, episodeNum)
+            isDetailLoading = false
+        } else {
+            isDetailLoading = false
         }
     }
     
+    // 최종 이미지 URL 결정 (상세 정보 로딩이 끝난 후 확정)
+    val imageUrl = remember(episodeDetails, seriesMeta, isDetailLoading) {
+        if (isDetailLoading) "" // 로딩 중에는 빈 값 유지
+        else {
+            when {
+                episodeDetails?.stillPath != null -> "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_SMALL${episodeDetails?.stillPath}"
+                seriesMeta?.posterUrl != null -> seriesMeta.posterUrl
+                else -> ""
+            }
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -75,25 +92,20 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
             .padding(12.dp), 
         verticalAlignment = Alignment.CenterVertically
     ) {
-        val imageUrl = when {
-            episodeDetails?.stillPath != null -> "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_SMALL${episodeDetails?.stillPath}"
-            seriesMeta?.posterUrl != null -> seriesMeta.posterUrl
-            else -> ""
-        }
-        
-        var isLoading by remember { mutableStateOf(true) }
+        var isImageLoading by remember { mutableStateOf(true) }
         Box(
             modifier = Modifier
                 .width(160.dp)
                 .height(90.dp)
                 .clip(RoundedCornerShape(4.dp))
-                .background(shimmerBrush(showShimmer = isLoading && imageUrl.isNotEmpty()))
+                // 상세 정보 로딩 중이거나 이미지가 로딩 중일 때 쉬머 효과 표시
+                .background(shimmerBrush(showShimmer = isDetailLoading || (isImageLoading && imageUrl.isNotEmpty())))
         ) {
             if (imageUrl.isNotEmpty()) {
                 AsyncImage(
                     model = imageUrl,
                     contentDescription = movie.title ?: "",
-                    onState = { state -> isLoading = state is AsyncImagePainter.State.Loading },
+                    onState = { state -> isImageLoading = state is AsyncImagePainter.State.Loading },
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
@@ -112,7 +124,7 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = episodeDetails?.overview ?: "줄거리 정보가 없습니다.", 
+                text = if (isDetailLoading) "불러오는 중..." else (episodeDetails?.overview ?: "줄거리 정보가 없습니다."),
                 color = Color.Gray, 
                 fontSize = 13.sp, 
                 maxLines = 2, 

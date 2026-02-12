@@ -113,7 +113,9 @@ private val REGEX_LETTER_HANGUL = Regex("""([a-zA-Z])([가-힣])""")
 
 private val REGEX_YEAR = Regex("""\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)""")
 private val REGEX_BRACKETS = Regex("""\[.*?\]|\(.*?\)""")
-private val REGEX_TMDB_HINT = Regex("""\{tmdb\s*(\d+)\}""")
+
+// {tmdb 12345} 또는 {tmdb-12345} 형태 모두 대응하도록 정규식 강화
+private val REGEX_TMDB_HINT = Regex("""\{tmdb[\s-]*(\d+)\}""")
 
 private val REGEX_JUNK_KEYWORDS = Regex("""(?i)\s*(?:더빙|자막|극장판|더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|최종화|TV판|완결|속편|상|하|1부|2부|파트)\s*""")
 private val REGEX_PYEON_SUFFIX = Regex("""(?:편|편)(?=[.\s_]|$)""")
@@ -149,12 +151,9 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     val yearMatch = REGEX_YEAR.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     cleaned = REGEX_YEAR.replace(cleaned, " ")
-    
-    // '낭랑18' -> '낭랑 18' 분리
-    cleaned = REGEX_HANGUL_NUMBER.replace(cleaned, "$1 $2")
-    
     cleaned = REGEX_HANGUL_LETTER.replace(cleaned, "$1 $2")
     cleaned = REGEX_LETTER_HANGUL.replace(cleaned, "$1 $2")
+    cleaned = REGEX_HANGUL_NUMBER.replace(cleaned, "$1 $2")
     cleaned = cleaned.replace("(자막)", "").replace("(더빙)", "").replace("[자막]", "").replace("[더빙]", "")
     cleaned = REGEX_JUNK_KEYWORDS.replace(cleaned, " ")
     cleaned = REGEX_BRACKETS.replace(cleaned, " ")
@@ -327,7 +326,7 @@ private suspend fun searchTmdbCore(query: String, language: String?, endpoint: S
             }.thenByDescending { 
                 val matchTitle = (it.name ?: it.title ?: "").lowercase().toNfc().replace("×", "x").replace(" ", "").replace(":", "").replace("-", "")
                 val searchTitle = nfcQuery.lowercase().replace("×", "x").replace(" ", "").replace(":", "").replace("-", "")
-                matchTitle.contains(searchTitle) || searchTitle.contains(matchTitle)
+                matchTitle.equals(searchTitle, ignoreCase = true) || matchTitle.contains(searchTitle) || searchTitle.contains(matchTitle)
             }.thenByDescending { it.posterPath != null }
             .thenByDescending { it.popularity ?: 0.0 }
         ).firstOrNull()

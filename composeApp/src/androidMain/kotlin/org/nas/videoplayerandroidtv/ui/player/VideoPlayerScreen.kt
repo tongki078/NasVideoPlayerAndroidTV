@@ -7,7 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,7 +28,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -43,6 +45,7 @@ import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.cleanTitle
 import org.nas.videoplayerandroidtv.extractEpisode
 import org.nas.videoplayerandroidtv.extractSeason
+import org.nas.videoplayerandroidtv.toNfc
 
 /**
  * 직접 정의한 Pause 아이콘
@@ -112,13 +115,11 @@ fun VideoPlayerScreen(
     val introEnd = currentMovie.introEnd ?: 90000L
     val isDuringOpening = currentPosition in introStart..introEnd
 
-    val seekThumbnails = remember(seekTime, totalDuration) {
+    val allThumbnails = remember(totalDuration) {
         if (totalDuration <= 0) emptyList()
         else {
-            val interval = 30000L 
-            (-3..3).map { i ->
-                (seekTime + (i * interval)).coerceIn(0L, totalDuration)
-            }.distinct()
+            val interval = 10000L 
+            (0L..totalDuration step interval).toList()
         }
     }
 
@@ -141,10 +142,17 @@ fun VideoPlayerScreen(
         }
     }
 
-    LaunchedEffect(seekThumbnails) {
-        if (isSeeking && seekThumbnails.isNotEmpty()) {
-            val centerIndex = seekThumbnails.size / 2
-            thumbListState.scrollToItem(centerIndex)
+    // 썸네일 레이아웃 상수 (크기 확대)
+    val configuration = LocalConfiguration.current
+    val screenWidth = configuration.screenWidthDp.dp
+    val thumbWidth = 240.dp // 더 크게 확대
+    val thumbHeight = 140.dp // 더 크게 확대
+    val horizontalPadding = (screenWidth - thumbWidth) / 2
+    
+    LaunchedEffect(seekTime, isSeeking) {
+        if (isSeeking && allThumbnails.isNotEmpty()) {
+            val targetIndex = (seekTime / 10000L).toInt().coerceIn(allThumbnails.indices)
+            thumbListState.scrollToItem(targetIndex, 0)
         }
     }
 
@@ -354,6 +362,7 @@ fun VideoPlayerScreen(
                 }
             }
 
+            // 하단 시크바 및 썸네일 탐색
             AnimatedVisibility(
                 visible = isControllerVisible || isSeeking,
                 enter = fadeIn(), exit = fadeOut(),
@@ -367,36 +376,57 @@ fun VideoPlayerScreen(
                 ) {
                     if (isSeeking && totalDuration > 0) {
                         val context = LocalContext.current
-                        LazyRow(
-                            state = thumbListState,
-                            contentPadding = PaddingValues(horizontal = 100.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            userScrollEnabled = false,
-                            modifier = Modifier.fillMaxWidth().height(140.dp).padding(bottom = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(180.dp), // 높이 상향
+                            contentAlignment = Alignment.Center
                         ) {
-                            items(seekThumbnails, key = { it }) { timestamp ->
-                                val isCenter = (timestamp == seekTime)
-                                val baseUrl = NasApiClient.BASE_URL
-                                val timeSec = timestamp / 1000
-                                val thumbRequest = remember<ImageRequest>(currentMovie.id, timestamp) {
-                                    val originalThumb = currentMovie.thumbnailUrl ?: ""
-                                    val finalUrl = if (originalThumb.contains("?")) "$baseUrl$originalThumb&t=$timeSec"
-                                                  else "$baseUrl$originalThumb?t=$timeSec"
-                                    ImageRequest.Builder(context).data(finalUrl).crossfade(true).build()
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .width(if (isCenter) 220.dp else 160.dp)
-                                        .fillMaxHeight(if (isCenter) 1f else 0.7f)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .border(width = if (isCenter) 3.dp else 1.dp, color = if (isCenter) Color.White else Color.Gray.copy(alpha = 0.5f), shape = RoundedCornerShape(8.dp))
-                                        .background(Color.DarkGray)
-                                ) {
-                                    AsyncImage(model = thumbRequest, contentDescription = "Seek", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            // 1. 썸네일 리스트 (배경으로 흐름)
+                            LazyRow(
+                                state = thumbListState,
+                                contentPadding = PaddingValues(horizontal = horizontalPadding),
+                                horizontalArrangement = Arrangement.spacedBy(20.dp),
+                                userScrollEnabled = false,
+                                modifier = Modifier.fillMaxSize(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                itemsIndexed(allThumbnails, key = { _, time -> time }) { _, timestamp ->
+                                    val baseUrl = NasApiClient.BASE_URL
+                                    val timeSec = timestamp / 1000
+                                    val thumbRequest = remember(currentMovie.id, timestamp) {
+                                        val originalThumb = currentMovie.thumbnailUrl ?: ""
+                                        val finalUrl = if (originalThumb.contains("?")) "$baseUrl$originalThumb&t=$timeSec"
+                                                      else "$baseUrl$originalThumb?t=$timeSec"
+                                        ImageRequest.Builder(context).data(finalUrl).crossfade(true).build()
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .width(thumbWidth)
+                                            .height(thumbHeight)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(Color.DarkGray)
+                                    ) {
+                                        AsyncImage(
+                                            model = thumbRequest, 
+                                            contentDescription = null, 
+                                            modifier = Modifier.fillMaxSize(), 
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    }
                                 }
                             }
+                            
+                            // 2. 정중앙 고정 포커스 프레임
+                            Box(
+                                modifier = Modifier
+                                    .width(thumbWidth + 12.dp)
+                                    .height(thumbHeight + 12.dp)
+                                    .border(4.dp, Color.White, RoundedCornerShape(8.dp))
+                                    .zIndex(1f)
+                            )
                         }
+                        Spacer(modifier = Modifier.height(20.dp))
                     }
 
                     Row(
