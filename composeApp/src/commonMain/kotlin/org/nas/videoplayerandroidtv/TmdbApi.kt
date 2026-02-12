@@ -130,7 +130,7 @@ private val REGEX_SPACES = Regex("""\s+""")
 private val REGEX_HANGUL_NUMBER = Regex("""([가-힣])(\d+)(?=[.\s_]|$)""")
 
 // 회차 정보 및 날짜 정보(예: 251005)를 포함한 노이즈 제거용 정규식 강화
-private val REGEX_EPISODE_DATE_NOISE = Regex("""(?i)[.\s_-]*(?:[Ee]\d+|[Ss]\d+|[Pp]art\s*\d+|\d+\s*(?:화|회|기|기합본)|시즌\s*\d+|파트\s*\d+|[.\s]\d{6}(?!\d)|[.\s]\d{8}(?!\d)).*""")
+private val REGEX_EP_MARKER = Regex("""(?i)(?:^|[.\s_]|(?<=[가-힣]))(?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+).*""")
 
 private val REGEX_INDEX_FOLDER = Regex("""(?i)^\s*([0-9A-Z가-힣ㄱ-ㅎ]|0Z|0-Z|가-하|[0-9]-[0-9]|[A-Z]-[A-Z]|[가-힣]-[가-힣])\s*$""")
 private val REGEX_YEAR_FOLDER = Regex("""(?i)^\s*(?:\(\d{4}\)|\d{4}|\d{4}\s*년)\s*$""") 
@@ -154,7 +154,7 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     cleaned = REGEX_EXT.replace(cleaned, "")
     
     // 에피소드 및 날짜 노이즈 제거
-    cleaned = REGEX_EPISODE_DATE_NOISE.replace(cleaned, " ")
+    cleaned = REGEX_EP_MARKER.replace(cleaned, "") // 서버 규칙과 동일하게 적용 (복합 제목 유지)
     
     // 연도 추출 및 제거
     val yearMatch = REGEX_YEAR.find(cleaned)
@@ -164,8 +164,10 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     // 괄호 내용 제거 (닫히지 않은 괄호 포함)
     cleaned = REGEX_BRACKETS.replace(cleaned, " ")
     
-    cleaned = REGEX_HANGUL_LETTER.replace(cleaned, "$1 $2")
-    cleaned = REGEX_LETTER_HANGUL.replace(cleaned, "$1 $2")
+    // [수정] 한글/영문 사이 공백 삽입 로직 제거 (Z반 -> Z반 보존)
+    // cleaned = REGEX_HANGUL_LETTER.replace(cleaned, "$1 $2")
+    // cleaned = REGEX_LETTER_HANGUL.replace(cleaned, "$1 $2")
+
     cleaned = REGEX_HANGUL_NUMBER.replace(cleaned, "$1 $2")
     cleaned = cleaned.replace("(자막)", "").replace("(더빙)", "").replace("[자막]", "").replace("[더빙]", "")
     cleaned = REGEX_JUNK_KEYWORDS.replace(cleaned, " ")
