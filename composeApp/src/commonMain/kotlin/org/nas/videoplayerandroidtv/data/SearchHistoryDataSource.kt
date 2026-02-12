@@ -40,18 +40,7 @@ class WatchHistoryDataSource(private val db: AppDatabase) {
                 .asFlow()
                 .mapToList(Dispatchers.IO)
                 .map { list -> 
-                    list.map { 
-                        WatchHistory(
-                            id = it.id,
-                            title = it.title,
-                            videoUrl = it.videoUrl,
-                            thumbnailUrl = it.thumbnailUrl,
-                            timestamp = it.timestamp,
-                            screenType = it.screenType,
-                            pathStackJson = it.pathStackJson,
-                            posterPath = it.posterPath
-                        ) 
-                    } 
+                    list.map { it.toDomainModel() } 
                 }
                 .catch { emit(emptyList()) }
         } catch (e: Exception) {
@@ -67,11 +56,15 @@ class WatchHistoryDataSource(private val db: AppDatabase) {
         timestamp: Long,
         screenType: String,
         pathStackJson: String,
-        posterPath: String?
+        posterPath: String?,
+        lastPosition: Long,
+        duration: Long,
+        seriesTitle: String?,
+        seriesPath: String?
     ) = withContext(Dispatchers.IO) {
         try {
             db.watchHistoryQueries.insertHistory(
-                id, title, videoUrl, thumbnailUrl, timestamp, screenType, pathStackJson, posterPath
+                id, title, videoUrl, thumbnailUrl, timestamp, screenType, pathStackJson, posterPath, lastPosition, duration, seriesTitle, seriesPath
             )
         } catch (_: Exception) {}
     }
@@ -82,6 +75,18 @@ class WatchHistoryDataSource(private val db: AppDatabase) {
 }
 
 fun org.nas.videoplayerandroidtv.db.Search_history.toDomainModel() = SearchHistory(query, timestamp)
+
 fun org.nas.videoplayerandroidtv.db.Watch_history.toDomainModel() = WatchHistory(
-    id, title, videoUrl, thumbnailUrl, timestamp, screenType, pathStackJson, posterPath
+    id = id,
+    title = title,
+    videoUrl = videoUrl,
+    thumbnailUrl = thumbnailUrl,
+    timestamp = timestamp,
+    screenType = screenType,
+    pathStackJson = pathStackJson,
+    posterPath = posterPath,
+    lastPosition = lastPosition,
+    duration = duration,
+    seriesTitle = seriesTitle,
+    seriesPath = seriesPath
 )

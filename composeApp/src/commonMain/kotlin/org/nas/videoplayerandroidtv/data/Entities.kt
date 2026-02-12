@@ -13,5 +13,9 @@ data class WatchHistory(
     val timestamp: Long,
     val screenType: String,
     val pathStackJson: String,
-    val posterPath: String? = null // 추가: 서버에서 받은 TMDB 포스터 경로
+    val posterPath: String? = null,
+    val lastPosition: Long = 0L,
+    val duration: Long = 0L,
+    val seriesTitle: String? = null, // 추가: 시리즈 제목
+    val seriesPath: String? = null   // 추가: 시리즈 경로
 )

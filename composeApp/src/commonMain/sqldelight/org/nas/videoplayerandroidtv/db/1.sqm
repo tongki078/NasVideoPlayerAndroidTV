@@ -1,1 +1,10 @@
-ALTER TABLE watch_history ADD COLUMN posterPath TEXT;
+CREATE TABLE watch_history (
+    id TEXT NOT NULL PRIMARY KEY,
+    title TEXT NOT NULL,
+    videoUrl TEXT NOT NULL,
+    thumbnailUrl TEXT,
+    timestamp INTEGER NOT NULL,
+    screenType TEXT NOT NULL,
+    pathStackJson TEXT NOT NULL,
+    posterPath TEXT
+);

@@ -77,7 +77,7 @@ fun VideoPlayerScreen(
     movie: Movie,
     playlist: List<Movie> = emptyList(),
     initialPosition: Long = 0L,
-    onPositionUpdate: (Long) -> Unit = {},
+    onPositionUpdate: (Long, Long) -> Unit = { _, _ -> }, // (current, total) 로 변경
     onBack: () -> Unit
 ) {
     var currentMovie by remember(movie) { mutableStateOf(movie) }
@@ -127,6 +127,13 @@ fun VideoPlayerScreen(
         mainBoxFocusRequester.requestFocus()
     }
 
+    // 시청 기록 업데이트를 위한 타이머
+    LaunchedEffect(currentPosition, totalDuration) {
+        if (currentPosition > 0 && totalDuration > 0) {
+            onPositionUpdate(currentPosition, totalDuration)
+        }
+    }
+
     LaunchedEffect(currentMovie.id, isDuringOpening) {
         delay(1000)
         if (isDuringOpening && currentPosition < 5000L) {
@@ -142,11 +149,10 @@ fun VideoPlayerScreen(
         }
     }
 
-    // 썸네일 레이아웃 상수 (크기 확대)
     val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp.dp
-    val thumbWidth = 240.dp // 더 크게 확대
-    val thumbHeight = 140.dp // 더 크게 확대
+    val thumbWidth = 240.dp 
+    val thumbHeight = 140.dp 
     val horizontalPadding = (screenWidth - thumbWidth) / 2
     
     LaunchedEffect(seekTime, isSeeking) {
@@ -232,7 +238,6 @@ fun VideoPlayerScreen(
             isPlaying = !isSeeking && !userPaused,
             onPositionUpdate = { pos ->
                 currentPosition = pos
-                onPositionUpdate(pos)
                 if (!isSeeking) seekTime = pos
             },
             onDurationDetermined = { dur -> totalDuration = dur },
@@ -379,7 +384,7 @@ fun VideoPlayerScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(180.dp), // 높이 상향
+                                .height(180.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             // 1. 썸네일 리스트 (배경으로 흐름)

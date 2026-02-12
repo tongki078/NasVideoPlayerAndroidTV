@@ -85,7 +85,8 @@ fun App(driver: SqlDriver) {
     var selectedMovie by remember { mutableStateOf<Movie?>(null) }
     var moviePlaylist by remember { mutableStateOf<List<Movie>>(emptyList()) }
     
-    var lastPlaybackPosition by rememberSaveable { mutableStateOf(0L) }
+    var lastPlaybackPosition by rememberSaveable { mutableLongStateOf(0L) }
+    var lastVideoDuration by rememberSaveable { mutableLongStateOf(0L) }
 
     var homeSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
     var isHomeLoading by remember { mutableStateOf(false) } 
@@ -137,7 +138,8 @@ fun App(driver: SqlDriver) {
         }
     }
 
-    val saveWatchHistory: (Movie, String?) -> Unit = { movie, posterPath ->
+    val saveWatchHistory: (Movie, String?, Long, Long, String?, String?) -> Unit = 
+        { movie, posterPath, pos, dur, sTitle, sPath ->
         scope.launch(Dispatchers.Default) {
             val videoUrl = movie.videoUrl ?: ""
             val title = movie.title ?: ""
@@ -150,7 +152,11 @@ fun App(driver: SqlDriver) {
                 timestamp = currentTimeMillis(),
                 screenType = if (isAni) "animation" else "movie",
                 pathStackJson = "",
-                posterPath = posterPath 
+                posterPath = posterPath,
+                lastPosition = pos,
+                duration = dur,
+                seriesTitle = sTitle,
+                seriesPath = sPath
             )
         }
     }
@@ -218,7 +224,18 @@ fun App(driver: SqlDriver) {
                                 movie = selectedMovie!!, 
                                 playlist = moviePlaylist,
                                 initialPosition = lastPlaybackPosition,
-                                onPositionUpdate = { pos -> lastPlaybackPosition = pos },
+                                onPositionUpdate = { pos, dur -> 
+                                    lastPlaybackPosition = pos 
+                                    lastVideoDuration = dur
+                                    saveWatchHistory(
+                                        selectedMovie!!, 
+                                        selectedSeries?.posterPath, 
+                                        pos, 
+                                        dur,
+                                        selectedSeries?.title,
+                                        selectedSeries?.fullPath
+                                    )
+                                },
                                 onBack = { selectedMovie = null }
                             )
                         }
@@ -233,9 +250,25 @@ fun App(driver: SqlDriver) {
                                     selectedMovie = movie
                                     moviePlaylist = playlist
                                     lastPlaybackPosition = pos
-                                    saveWatchHistory(movie, selectedSeries?.posterPath)
+                                    saveWatchHistory(
+                                        movie, 
+                                        selectedSeries?.posterPath, 
+                                        pos, 
+                                        0L,
+                                        selectedSeries?.title,
+                                        selectedSeries?.fullPath
+                                    )
                                 },
-                                onPreviewPlay = { movie -> saveWatchHistory(movie, selectedSeries?.posterPath) }
+                                onPreviewPlay = { movie -> 
+                                    saveWatchHistory(
+                                        movie, 
+                                        selectedSeries?.posterPath, 
+                                        0L, 
+                                        0L,
+                                        selectedSeries?.title,
+                                        selectedSeries?.fullPath
+                                    ) 
+                                }
                             )
                         }
                         currentScreen == Screen.SEARCH -> {
@@ -268,15 +301,21 @@ fun App(driver: SqlDriver) {
                                     lastPlaybackPosition = 0L
                                 },
                                 onHistoryClick = { history ->
-                                    selectedMovie = Movie(
-                                        id = history.id,
-                                        title = history.title,
-                                        videoUrl = history.videoUrl,
-                                        thumbnailUrl = history.thumbnailUrl
+                                    // 상세 페이지 이동 시 시청 중이던 회차 정보를 미리 넣어주어 버튼이 즉시 나타나게 함
+                                    selectedSeries = Series(
+                                        title = history.seriesTitle ?: history.title,
+                                        fullPath = history.seriesPath,
+                                        posterPath = history.posterPath,
+                                        episodes = listOf(
+                                            Movie(
+                                                id = history.id,
+                                                title = history.title,
+                                                videoUrl = history.videoUrl,
+                                                thumbnailUrl = history.thumbnailUrl
+                                            )
+                                        )
                                     )
-                                    moviePlaylist = listOf(selectedMovie!!)
-                                    lastPlaybackPosition = 0L 
-                                    saveWatchHistory(selectedMovie!!, history.posterPath)
+                                    lastPlaybackPosition = history.lastPosition
                                 }
                             )
                         }

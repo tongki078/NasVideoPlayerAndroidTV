@@ -1,14 +1,34 @@
 package org.nas.videoplayerandroidtv.ui.home
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import org.nas.videoplayerandroidtv.data.WatchHistory
@@ -19,6 +39,7 @@ import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.isGenericTitle
+import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 
 @Composable
 fun HomeScreen(
@@ -35,12 +56,10 @@ fun HomeScreen(
     val rowStates = remember { mutableMapOf<String, LazyListState>() }
     val rowFocusIndices = remember { mutableStateMapOf<String, Int>() }
 
-    // [추가] 외국TV / 국내드라마 데이터를 담을 상태
     var extraSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
 
     LaunchedEffect(Unit) {
         coroutineScope {
-            // 외국TV와 국내 드라마(KtvDrama)를 로딩
             val foreignTvDeferred = async { repository.getLatestForeignTV() }
             val koreanDramaDeferred = async { repository.getKtvDrama(20, 0) }
             
@@ -48,41 +67,21 @@ fun HomeScreen(
             val koreanDrama = try { koreanDramaDeferred.await().take(20) } catch(e: Exception) { emptyList() }
             
             val newSections = mutableListOf<HomeSection>()
-            
-            if (foreignTv.isNotEmpty()) {
-                newSections.add(HomeSection(
-                    title = "인기 외국 TV 시리즈",
-                    items = foreignTv.toCategories()
-                ))
-            }
-            
-            if (koreanDrama.isNotEmpty()) {
-                newSections.add(HomeSection(
-                    title = "화제의 국내 드라마",
-                    items = koreanDrama.toCategories()
-                ))
-            }
-            
+            if (foreignTv.isNotEmpty()) newSections.add(HomeSection("인기 외국 TV 시리즈", foreignTv.toCategories()))
+            if (koreanDrama.isNotEmpty()) newSections.add(HomeSection("화제의 국내 드라마", koreanDrama.toCategories()))
             extraSections = newSections
         }
     }
 
-    // 모든 섹션을 합치고 필터링 적용
     val combinedSections = remember(homeSections, extraSections) {
         (homeSections + extraSections).map { section ->
             section.copy(
                 items = section.items.filter { item ->
                     val name = (item.name ?: "").trim()
                     val path = (item.path ?: "").trim()
-                    
-                    // 1. 관리용 폴더 제외 (시즌 xxxx 등)
                     if (isGenericTitle(name)) return@filter false
-                    
-                    // 2. 다큐/교양 폴더 제외 (단, 제목에 포함된 경우는 허용하도록 경로 위주 체크)
                     val lowerPath = path.lowercase()
-                    val isDokuOrEduFolder = lowerPath.contains("/다큐") || lowerPath.contains("/교양")
-                    
-                    !isDokuOrEduFolder
+                    !(lowerPath.contains("/다큐") || lowerPath.contains("/교양"))
                 }
             )
         }.filter { it.items.isNotEmpty() }
@@ -126,39 +125,29 @@ fun HomeScreen(
             }
 
             if (isLoading && combinedSections.isEmpty()) {
-                items(3) { 
-                    SkeletonRow(standardMargin)
-                }
+                items(3) { SkeletonRow(standardMargin) }
             } else {
+                // --- [시청 중인 콘텐츠: 넷플릭스 스타일] ---
                 if (watchHistory.isNotEmpty()) {
                     item(key = "watch_history_row") {
                         val rowKey = "watch_history"
                         val historyRowState = rowStates.getOrPut(rowKey) { LazyListState() }
 
-                        Column(modifier = Modifier.fillMaxWidth()) { 
+                        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) { 
                             SectionTitle("시청 중인 콘텐츠", standardMargin)
                             
-                            NetflixTvPivotRow(
+                            LazyRow(
                                 state = historyRowState,
-                                items = watchHistory.take(20), 
-                                marginValue = standardMargin,
-                                rowKey = rowKey,
-                                rowFocusIndices = rowFocusIndices,
-                                keySelector = { "history_${it.id}" }
-                            ) { history, index, rowState, focusRequester, marginPx, focusedIndex ->
-                                NetflixPivotItem(
-                                    title = history.title, 
-                                    posterPath = history.posterPath,
-                                    initialVideoUrl = history.videoUrl,
-                                    categoryPath = null,
-                                    repository = repository,
-                                    index = index,
-                                    focusedIndex = focusedIndex,
-                                    state = rowState,
-                                    marginPx = marginPx,
-                                    focusRequester = focusRequester,
-                                    onClick = { onHistoryClick(history) }
-                                )
+                                contentPadding = PaddingValues(horizontal = standardMargin),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.fillMaxWidth().height(220.dp)
+                            ) {
+                                itemsIndexed(watchHistory, key = { _, h -> h.id }) { index, history ->
+                                    NetflixWatchHistoryItem(
+                                        history = history,
+                                        onClick = { onHistoryClick(history) }
+                                    )
+                                }
                             }
                         }
                     }
@@ -204,6 +193,96 @@ fun HomeScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * 넷플릭스 스타일 시청 중인 콘텐츠 아이템
+ */
+@Composable
+private fun NetflixWatchHistoryItem(
+    history: WatchHistory,
+    onClick: () -> Unit
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    
+    Column(
+        modifier = Modifier
+            .width(140.dp)
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable()
+            .clickable(onClick = onClick)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(180.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .border(
+                    width = if (isFocused) 3.dp else 0.dp,
+                    color = if (isFocused) Color.White else Color.Transparent,
+                    shape = RoundedCornerShape(4.dp)
+                )
+        ) {
+            // 1. 포스터 이미지
+            TmdbAsyncImage(
+                title = history.title,
+                posterPath = history.posterPath,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+
+            // 2. 재생 버튼 오버레이 (포커스 시 더 밝게)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isFocused) Color.Black.copy(alpha = 0.2f) else Color.Transparent),
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = Color.Black.copy(alpha = 0.6f),
+                    border = BorderStroke(1.dp, Color.White),
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
+            }
+
+            // 3. 진행바 (하단 고정)
+            val progress = if (history.duration > 0) history.lastPosition.toFloat() / history.duration else 0f
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .background(Color.Gray.copy(alpha = 0.5f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(progress.coerceIn(0f, 1f))
+                        .fillMaxHeight()
+                        .background(Color.Red)
+                )
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        // 4. 제목 (한 줄로 깔끔하게)
+        Text(
+            text = history.title,
+            color = if (isFocused) Color.White else Color.Gray,
+            fontSize = 13.sp,
+            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
