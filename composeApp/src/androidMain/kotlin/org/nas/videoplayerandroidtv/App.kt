@@ -244,6 +244,7 @@ fun App(driver: SqlDriver) {
                                 series = selectedSeries!!, 
                                 repository = repository, 
                                 initialPlaybackPosition = lastPlaybackPosition,
+                                initialDuration = lastVideoDuration, // 시청 중인 영상의 총 길이 전달
                                 onPositionUpdate = { pos -> lastPlaybackPosition = pos },
                                 onBack = { selectedSeries = null }, 
                                 onPlay = { movie: Movie, playlist: List<Movie>, pos: Long ->
@@ -254,7 +255,7 @@ fun App(driver: SqlDriver) {
                                         movie, 
                                         selectedSeries?.posterPath, 
                                         pos, 
-                                        0L,
+                                        lastVideoDuration,
                                         selectedSeries?.title,
                                         selectedSeries?.fullPath
                                     )
@@ -301,7 +302,6 @@ fun App(driver: SqlDriver) {
                                     lastPlaybackPosition = 0L
                                 },
                                 onHistoryClick = { history ->
-                                    // 상세 페이지 이동 시 시청 중이던 회차 정보를 미리 넣어주어 버튼이 즉시 나타나게 함
                                     selectedSeries = Series(
                                         title = history.seriesTitle ?: history.title,
                                         fullPath = history.seriesPath,
@@ -316,6 +316,7 @@ fun App(driver: SqlDriver) {
                                         )
                                     )
                                     lastPlaybackPosition = history.lastPosition
+                                    lastVideoDuration = history.duration // 중요: 히스토리에서 전체 길이 복구
                                 }
                             )
                         }

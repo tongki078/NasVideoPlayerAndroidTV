@@ -38,7 +38,6 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getHomeRecommendations(): List<HomeSection> = try {
         val response = client.get("$baseUrl/home").body<List<HomeSection>>()
         response.map { section ->
-            // 홈 화면에서도 관리용 폴더가 제목인 항목들을 필터링
             val filteredItems = section.items.filter { !isGenericFolder(it.name) }.map { cat ->
                 val updatedMovies = cat.movies?.map { movie ->
                     if (movie.videoUrl != null && !movie.videoUrl.startsWith("http")) {
@@ -109,10 +108,26 @@ class VideoRepositoryImpl : VideoRepository {
                         } else movie
                     }
 
+                    var fullPath = cat.path
+                    if (fullPath != null && !fullPath.contains("/") && episodes.isNotEmpty()) {
+                        val firstUrl = episodes.first().videoUrl ?: ""
+                        val inferredPrefix = when {
+                            firstUrl.contains("type=ftv") -> "외국TV"
+                            firstUrl.contains("type=ktv") -> "국내TV"
+                            firstUrl.contains("type=movie") -> "영화"
+                            firstUrl.contains("type=anim_all") -> "애니메이션"
+                            firstUrl.contains("type=air") -> "방송중"
+                            else -> null
+                        }
+                        if (inferredPrefix != null) {
+                            fullPath = "$inferredPrefix/$fullPath"
+                        }
+                    }
+
                     finalSeriesList.add(Series(
                         title = title,
                         episodes = episodes,
-                        fullPath = cat.path,
+                        fullPath = fullPath,
                         posterPath = cat.posterPath,
                         genreIds = cat.genreIds ?: emptyList(),
                         overview = cat.overview,

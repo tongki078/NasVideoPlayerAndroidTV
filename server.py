@@ -18,7 +18,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "9.7"
+CACHE_VERSION = "9.8"
 
 # TMDB API KEY
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk".strip()
@@ -380,17 +380,32 @@ def get_movies(): return jsonify(process_data(GLOBAL_CACHE.get("movies", []), re
 @app.route('/search')
 def search_videos():
     q = request.args.get('q', '').lower()
-    pool = GLOBAL_CACHE['movies'] + GLOBAL_CACHE['animations_all'] + GLOBAL_CACHE['foreigntv'] + GLOBAL_CACHE['koreantv'] + GLOBAL_CACHE['air']
+
+    # 카테고리별로 prefix 매핑
+    mapping = [
+        ("영화", GLOBAL_CACHE.get('movies', [])),
+        ("애니메이션", GLOBAL_CACHE.get('animations_all', [])),
+        ("외국TV", GLOBAL_CACHE.get('foreigntv', [])),
+        ("국내TV", GLOBAL_CACHE.get('koreantv', [])),
+        ("방송중", GLOBAL_CACHE.get('air', []))
+    ]
+
     res = []
-    for cat in pool:
-        if q in cat['name'].lower():
-            res.append(cat)
-        else:
-            fm = [m for m in cat.get('movies', []) if q in m['title'].lower()]
-            if fm:
+    for prefix, pool in mapping:
+        for cat in pool:
+            if q in cat['name'].lower():
                 nc = cat.copy()
-                nc['movies'] = fm
+                if nc.get('path') and not nc['path'].startswith(prefix):
+                    nc['path'] = f"{prefix}/{nc['path']}"
                 res.append(nc)
+            else:
+                fm = [m for m in cat.get('movies', []) if q in m['title'].lower()]
+                if fm:
+                    nc = cat.copy()
+                    nc['movies'] = fm
+                    if nc.get('path') and not nc['path'].startswith(prefix):
+                        nc['path'] = f"{prefix}/{nc['path']}"
+                    res.append(nc)
     return jsonify(process_data(res, lite=request.args.get('lite') == 'true', is_search=True))
 
 @app.route('/list')
