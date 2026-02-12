@@ -113,7 +113,8 @@ private val REGEX_HANGUL_LETTER = Regex("""([가-힣])([a-zA-Z])""")
 private val REGEX_LETTER_HANGUL = Regex("""([a-zA-Z])([가-힣])""")
 
 private val REGEX_YEAR = Regex("""\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)""")
-private val REGEX_BRACKETS = Regex("""\[.*?\]|\(.*?\)""")
+// 닫히지 않은 괄호도 끝까지 제거하도록 보강
+private val REGEX_BRACKETS = Regex("""\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\}|$)|\【.*?(?:\】|$)|\『.*?(?:\』|$)|\「.*?(?:\」|$)""")
 
 // {tmdb 12345} 또는 {tmdb-12345} 형태 모두 대응하도록 정규식 강화
 private val REGEX_TMDB_HINT = Regex("""\{tmdb[\s-]*(\d+)\}""")
@@ -122,7 +123,8 @@ private val REGEX_JUNK_KEYWORDS = Regex("""(?i)\s*(?:더빙|자막|극장판|ᄃ
 private val REGEX_PYEON_SUFFIX = Regex("""(?:편|편)(?=[.\s_]|$)""")
 
 private val REGEX_TECHNICAL_TAGS = Regex("""(?i)[.\s_](?:\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI).*""")
-private val REGEX_SPECIAL_CHARS = ("""[._\-!?【】『』「」"'#@*※×]""").toRegex()
+// 대괄호와 소괄호 자체도 제거 대상에 포함
+private val REGEX_SPECIAL_CHARS = ("""[\[\]()._\-!?【】『』「」"'#@*※×]""").toRegex()
 private val REGEX_SPACES = Regex("""\s+""")
 
 private val REGEX_HANGUL_NUMBER = Regex("""([가-힣])(\d+)(?=[.\s_]|$)""")
@@ -151,19 +153,24 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     cleaned = REGEX_TMDB_HINT.replace(cleaned, "")
     cleaned = REGEX_EXT.replace(cleaned, "")
     
-    // 에피소드 및 날짜 노이즈 먼저 제거 (예: 가치아쿠타 E10 251005 -> 가치아쿠타)
+    // 에피소드 및 날짜 노이즈 제거
     cleaned = REGEX_EPISODE_DATE_NOISE.replace(cleaned, " ")
     
+    // 연도 추출 및 제거
     val yearMatch = REGEX_YEAR.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     cleaned = REGEX_YEAR.replace(cleaned, " ")
+    
+    // 괄호 내용 제거 (닫히지 않은 괄호 포함)
+    cleaned = REGEX_BRACKETS.replace(cleaned, " ")
+    
     cleaned = REGEX_HANGUL_LETTER.replace(cleaned, "$1 $2")
     cleaned = REGEX_LETTER_HANGUL.replace(cleaned, "$1 $2")
     cleaned = REGEX_HANGUL_NUMBER.replace(cleaned, "$1 $2")
     cleaned = cleaned.replace("(자막)", "").replace("(더빙)", "").replace("[자막]", "").replace("[더빙]", "")
     cleaned = REGEX_JUNK_KEYWORDS.replace(cleaned, " ")
-    cleaned = REGEX_BRACKETS.replace(cleaned, " ")
     cleaned = REGEX_TECHNICAL_TAGS.replace(cleaned, "")
+    
     if (!keepAfterHyphen && cleaned.contains("-")) {
         val parts = cleaned.split("-")
         val afterHyphen = parts.getOrNull(1)?.trim() ?: ""
@@ -171,9 +178,11 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
             cleaned = parts[0]
         }
     }
+    
     cleaned = cleaned.replace(":", " ")
     cleaned = REGEX_SPECIAL_CHARS.replace(cleaned, " ")
     cleaned = REGEX_SPACES.replace(cleaned, " ").trim()
+    
     if (cleaned.length < 2) {
         val backup = normalized.replace(REGEX_TMDB_HINT, "").replace(REGEX_EXT, "").trim()
         return if (backup.length >= 2) backup else normalized
@@ -278,8 +287,7 @@ private suspend fun fetchByIdDirectly(tmdbId: Int): TmdbMetadata? {
 
 private suspend fun performMultiStepSearch(originalTitle: String, typeHint: String?, isAnimation: Boolean): TmdbMetadata? {
     val year = originalTitle.extractYear()
-    val cleanedForSearch = originalTitle.replace(REGEX_EPISODE_DATE_NOISE, "").trim()
-    val fullCleanQuery = cleanedForSearch.cleanTitle(includeYear = false)
+    val fullCleanQuery = originalTitle.cleanTitle(includeYear = false)
     
     val tightQuery = fullCleanQuery.replace(" ", "")
 
@@ -299,6 +307,11 @@ private suspend fun performMultiStepSearch(originalTitle: String, typeHint: Stri
 
     // 4. 연도 없이 검색
     searchTmdbCore(fullCleanQuery, "ko-KR", typeHint ?: "multi", null, isAnimation).first?.let { return it }
+    
+    // 5. 공백 제거 쿼리만 (마지막 수단)
+    if (tightQuery.length >= 2) {
+        searchTmdbCore(tightQuery, "ko-KR", typeHint ?: "multi", null, isAnimation).first?.let { return it }
+    }
 
     return null
 }

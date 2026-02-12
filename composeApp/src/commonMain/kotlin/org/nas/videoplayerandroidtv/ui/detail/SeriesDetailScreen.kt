@@ -58,8 +58,14 @@ fun SeriesDetailScreen(
     onPreviewPlay: (Movie) -> Unit = {}
 ) {
     var state by remember { mutableStateOf(SeriesDetailState()) }
-    val currentWatchingMovie = remember(series, state.seasons) { 
-        series.episodes.firstOrNull() ?: state.seasons.firstOrNull()?.episodes?.firstOrNull()
+    
+    // 현재 시청 중이거나 재생할 영화 결정 로직 보강
+    val currentWatchingMovie = remember(series, state.seasons, state.isLoading) { 
+        if (state.seasons.isNotEmpty()) {
+            state.seasons.firstOrNull()?.episodes?.firstOrNull()
+        } else {
+            series.episodes.firstOrNull()
+        }
     }
     
     val resumeButtonFocusRequester = remember { FocusRequester() }
@@ -420,9 +426,11 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, focusR
 private fun List<Movie>.sortedByEpisode(): List<Movie> = this.sortedWith(compareBy<Movie> { it.title?.extractSeason() ?: 1 }.thenBy { it.title?.extractEpisode()?.filter { char -> char.isDigit() }?.toIntOrNull() ?: 0 })
 
 private suspend fun loadSeasons(series: Series, repository: VideoRepository): List<Season> {
+    // 기본 에피소드 리스트를 "에피소드"라는 이름의 시즌으로 미리 준비
     val defaultSeason = if (series.episodes.isNotEmpty()) Season("에피소드", series.episodes.sortedByEpisode()) else null
     var path = series.fullPath
     
+    // 경로가 없으면 URL에서 추론 시도
     if (path.isNullOrBlank() || !path.contains("/")) {
         val firstMovie = series.episodes.firstOrNull()
         val videoUrl = firstMovie?.videoUrl ?: ""
@@ -451,17 +459,11 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
         }
     }
 
+    // 경로가 여전히 비어있으면 기본 에피소드만 반환
     if (path.isNullOrBlank()) return listOfNotNull(defaultSeason)
     
     return try {
-        // 이미 prefix가 포함되어 있는지 확인하여 중복 방지
-        val normalizedPath = if (path.startsWith("외국TV/") || path.startsWith("국내TV/") || path.startsWith("영화/") || path.startsWith("애니메이션/") || path.startsWith("방송중/")) {
-            path
-        } else {
-            path // 일단 그대로 둠. VideoRepositoryImpl에서 이미 적절한 prefix를 붙였을 것이라 가정
-        }
-
-        val content = repository.getCategoryList(normalizedPath)
+        val content = repository.getCategoryList(path)
         if (content.isEmpty()) return listOfNotNull(defaultSeason)
 
         val subFolders = content.filter { it.movies.isNullOrEmpty() && !it.name.isNullOrBlank() }
@@ -469,10 +471,11 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
         
         val seasonsResult = mutableListOf<Season>()
         
+        // 1. 하위 폴더가 있으면 각 폴더를 시즌으로 처리
         if (subFolders.isNotEmpty()) {
             coroutineScope {
                 val loadedSeasons = subFolders.map { folder -> async {
-                    val folderPath = folder.path ?: "$normalizedPath/${folder.name ?: ""}"
+                    val folderPath = folder.path ?: "$path/${folder.name ?: ""}"
                     val folderMovies = repository.getCategoryList(folderPath).flatMap { it.movies ?: emptyList() }
                     if (folderMovies.isNotEmpty()) Season(folder.name ?: "알 수 없음", folderMovies.sortedByEpisode()) else null
                 } }.awaitAll().filterNotNull()
@@ -480,16 +483,19 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
             }
         }
         
-        if (directMovies.isNotEmpty()) {
-            val name = if (seasonsResult.isEmpty()) "에피소드" else "기타 에피소드"
-            seasonsResult.add(Season(name, directMovies.sortedByEpisode()))
+        // 2. 현재 폴더에 직접 파일이 있거나, 검색된 시즌이 하나도 없는 경우
+        if (directMovies.isNotEmpty() || seasonsResult.isEmpty()) {
+            val finalMovies = if (directMovies.isNotEmpty()) directMovies else series.episodes
+            if (finalMovies.isNotEmpty()) {
+                val name = if (seasonsResult.isEmpty()) "에피소드" else "기타 에피소드"
+                // 이미 동일한 에피소드들이 시즌에 포함되어 있는지 체크 (중복 방지)
+                if (seasonsResult.none { it.episodes.any { e -> e.videoUrl == finalMovies.firstOrNull()?.videoUrl } }) {
+                    seasonsResult.add(0, Season(name, finalMovies.sortedByEpisode()))
+                }
+            }
         }
         
-        if (seasonsResult.isEmpty()) {
-            listOfNotNull(defaultSeason)
-        } else {
-            seasonsResult.sortedBy { it.name }
-        }
+        if (seasonsResult.isEmpty()) listOfNotNull(defaultSeason) else seasonsResult
     } catch (_: Exception) { 
         listOfNotNull(defaultSeason) 
     }
