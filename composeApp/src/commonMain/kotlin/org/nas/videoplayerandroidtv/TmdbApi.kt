@@ -59,7 +59,8 @@ data class TmdbMetadata(
     val backdropUrl: String? = null,
     val overview: String? = null,
     val genreIds: List<Int> = emptyList(),
-    val title: String? = null
+    val title: String? = null,
+    val year: String? = null
 )
 
 @Serializable
@@ -126,7 +127,8 @@ private val REGEX_SPACES = Regex("""\s+""")
 
 private val REGEX_HANGUL_NUMBER = Regex("""([가-힣])(\d+)(?=[.\s_]|$)""")
 
-private val REGEX_SEARCH_NOISE = Regex("""(?i)(?:E\d+|[.\s]\d{6}|[.\s]\d{8}|[.\s]\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])|시즌\s*\d+|파트\s*\d+|\d+\s*기|\d+\s*화)""")
+// 회차 정보 및 날짜 정보(예: 251005)를 포함한 노이즈 제거용 정규식 강화
+private val REGEX_EPISODE_DATE_NOISE = Regex("""(?i)[.\s_-]*(?:[Ee]\d+|[Ss]\d+|[Pp]art\s*\d+|\d+\s*(?:화|회|기|기합본)|시즌\s*\d+|파트\s*\d+|[.\s]\d{6}(?!\d)|[.\s]\d{8}(?!\d)).*""")
 
 private val REGEX_INDEX_FOLDER = Regex("""(?i)^\s*([0-9A-Z가-힣ㄱ-ㅎ]|0Z|0-Z|가-하|[0-9]-[0-9]|[A-Z]-[A-Z]|[가-힣]-[가-힣])\s*$""")
 private val REGEX_YEAR_FOLDER = Regex("""(?i)^\s*(?:\(\d{4}\)|\d{4}|\d{4}\s*년)\s*$""") 
@@ -148,6 +150,10 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     cleaned = cleaned.replace("×", "x").replace("✕", "x")
     cleaned = REGEX_TMDB_HINT.replace(cleaned, "")
     cleaned = REGEX_EXT.replace(cleaned, "")
+    
+    // 에피소드 및 날짜 노이즈 먼저 제거 (예: 가치아쿠타 E10 251005 -> 가치아쿠타)
+    cleaned = REGEX_EPISODE_DATE_NOISE.replace(cleaned, " ")
+    
     val yearMatch = REGEX_YEAR.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     cleaned = REGEX_YEAR.replace(cleaned, " ")
@@ -272,7 +278,7 @@ private suspend fun fetchByIdDirectly(tmdbId: Int): TmdbMetadata? {
 
 private suspend fun performMultiStepSearch(originalTitle: String, typeHint: String?, isAnimation: Boolean): TmdbMetadata? {
     val year = originalTitle.extractYear()
-    val cleanedForSearch = originalTitle.replace(REGEX_SEARCH_NOISE, "").trim()
+    val cleanedForSearch = originalTitle.replace(REGEX_EPISODE_DATE_NOISE, "").trim()
     val fullCleanQuery = cleanedForSearch.cleanTitle(includeYear = false)
     
     val tightQuery = fullCleanQuery.replace(" ", "")
@@ -335,7 +341,8 @@ private suspend fun searchTmdbCore(query: String, language: String?, endpoint: S
             val posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${bestMatch.posterPath}"
             val backdropUrl = bestMatch.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" }
             val mediaType = bestMatch.mediaType ?: (if (bestMatch.title != null) "movie" else "tv")
-            Pair(TmdbMetadata(tmdbId = bestMatch.id, mediaType = mediaType, posterUrl = posterUrl, backdropUrl = backdropUrl, overview = bestMatch.overview, genreIds = bestMatch.genreIds ?: emptyList(), title = bestMatch.name ?: bestMatch.title), null)
+            val resultYear = (bestMatch.releaseDate ?: bestMatch.firstAirDate ?: "").take(4)
+            Pair(TmdbMetadata(tmdbId = bestMatch.id, mediaType = mediaType, posterUrl = posterUrl, backdropUrl = backdropUrl, overview = bestMatch.overview, genreIds = bestMatch.genreIds ?: emptyList(), title = bestMatch.name ?: bestMatch.title, year = resultYear), null)
         } else Pair(null, null)
     } catch (e: Exception) { Pair(null, e) }
 }

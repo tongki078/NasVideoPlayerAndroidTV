@@ -124,91 +124,98 @@ fun SeriesDetailScreen(
         }
 
         Row(modifier = Modifier.fillMaxSize()) {
-            LazyColumn(
+            Column(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .weight(1f)
+                    .weight(1.5f)
                     .padding(start = 60.dp, top = 60.dp, end = 40.dp)
                     .focusProperties { 
                         canFocus = !state.showEpisodeOverlay 
                     }
             ) {
-                item {
-                    Text(text = series.title.cleanTitle(false), color = Color.White, style = TextStyle(fontSize = 38.sp, fontWeight = FontWeight.Black, lineHeight = 46.sp, shadow = Shadow(Color.Black.copy(alpha = 0.8f), Offset(2f, 2f), 8f)), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(12.dp))
-                }
+                // 제목
+                Text(
+                    text = series.title.cleanTitle(includeYear = false), 
+                    color = Color.White, 
+                    style = TextStyle(fontSize = 42.sp, fontWeight = FontWeight.Black, lineHeight = 50.sp, shadow = Shadow(Color.Black.copy(alpha = 0.8f), Offset(2f, 2f), 8f)), 
+                    maxLines = 2, 
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(12.dp)) // 간격 축소
                 
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (!series.year.isNullOrEmpty()) {
-                            Text(series.year!!, color = Color.LightGray, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.width(16.dp))
-                        }
-                        Text(text = series.rating ?: "15+", color = Color.LightGray, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        if (isUhd) {
-                            Spacer(Modifier.width(12.dp))
-                            Text(text = "UHD", color = Color(0xFFE50914), fontSize = 16.sp, fontWeight = FontWeight.Black)
-                        }
-                        Spacer(Modifier.width(16.dp))
-                        state.metadata?.genreIds?.take(3)?.mapNotNull { genreMap[it] }?.joinToString(", ")?.let {
-                            if (it.isNotEmpty()) Text(it, color = Color.LightGray, fontSize = 14.sp)
-                        }
+                // 정보 뱃지
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val displayYear = state.metadata?.year ?: series.year
+                    if (!displayYear.isNullOrEmpty()) {
+                        InfoBadge(text = displayYear)
                     }
-                    Spacer(Modifier.height(16.dp))
-                }
-
-                item {
-                    Text(text = if (state.isLoading) "상세 정보를 불러오는 중입니다..." else (state.metadata?.overview ?: "정보가 없습니다."), color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp, lineHeight = 22.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(32.dp))
-                }
-                
-                item {
-                    if (state.credits.isNotEmpty()) {
-                        Text(text = "출연: " + state.credits.take(4).joinToString { it.name }, color = Color.Gray, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Spacer(Modifier.height(32.dp))
-                    }
-                }
-
-                item {
-                    val allEpisodes = state.seasons.flatMap { it.episodes }
-                    val playableEpisode = currentWatchingMovie ?: allEpisodes.firstOrNull()
                     
+                    InfoBadge(text = series.rating ?: "15+", color = Color.Gray.copy(alpha = 0.3f))
+                    
+                    if (isUhd) {
+                        InfoBadge(text = "UHD", color = Color(0xFFE50914).copy(alpha = 0.2f), textColor = Color(0xFFE50914))
+                    }
+                    
+                    state.metadata?.genreIds?.take(3)?.mapNotNull { genreMap[it] }?.forEach { genre ->
+                        InfoBadge(text = genre, color = Color.White.copy(alpha = 0.1f))
+                    }
+                }
+                Spacer(Modifier.height(16.dp)) // 간격 축소
+
+                // 줄거리: 불필요한 줄바꿈 제거 로직 추가
+                val overview = if (state.isLoading) {
+                    "상세 정보를 불러오는 중입니다..."
+                } else {
+                    state.metadata?.overview?.replace(Regex("\\n+"), " ")?.trim() ?: "정보가 없습니다."
+                }
+
+                Text(
+                    text = overview, 
+                    color = Color.White.copy(alpha = 0.8f), 
+                    fontSize = 15.sp, 
+                    lineHeight = 22.sp, 
+                    maxLines = 3, // 4줄에서 3줄로 축소하여 공간 확보
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(12.dp)) // 간격 대폭 축소
+                
+                // 출연진
+                if (state.credits.isNotEmpty()) {
+                    Text(
+                        text = "출연: " + state.credits.take(4).joinToString { it.name }, 
+                        color = Color.Gray, 
+                        fontSize = 13.sp, 
+                        maxLines = 1, 
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(20.dp)) // 간격 축소
+                } else {
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                // 버튼 섹션
+                val allEpisodes = state.seasons.flatMap { it.episodes }
+                val playableEpisode = currentWatchingMovie ?: allEpisodes.firstOrNull()
+                
+                if (playableEpisode != null) {
                     Column(
                         modifier = Modifier.focusGroup(),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp) // 버튼 간 간격 축소
                     ) {
-                        if (playableEpisode != null) {
-                            if (initialPlaybackPosition > 0) {
-                                val epTitle = playableEpisode.title ?: ""
-                                val season = epTitle.extractSeason()
-                                val episode = epTitle.extractEpisode()
-                                val resumeText = "시즌 $season : $episode 재생"
-                                
-                                val progress = if (initialDuration > 0) initialPlaybackPosition.toFloat() / initialDuration else 0f
-
-                                TvButton(
-                                    text = resumeText,
-                                    icon = Icons.Default.PlayArrow,
-                                    isPrimary = true,
-                                    progress = progress, 
-                                    modifier = Modifier.focusRequester(resumeButtonFocusRequester),
-                                    onClick = {
-                                        val matchedEpisode = allEpisodes.find { it.videoUrl == playableEpisode.videoUrl } ?: playableEpisode
-                                        val playlist = if (allEpisodes.isNotEmpty()) {
-                                            state.seasons.find { it.episodes.any { it.videoUrl == matchedEpisode.videoUrl } }?.episodes ?: allEpisodes
-                                        } else {
-                                            listOf(matchedEpisode)
-                                        }
-                                        onPlay(matchedEpisode, playlist, initialPlaybackPosition)
-                                    }
-                                )
-                            }
+                        if (initialPlaybackPosition > 0) {
+                            val epTitle = playableEpisode.title ?: ""
+                            val seasonNum = epTitle.extractSeason()
+                            val episodeStr = epTitle.extractEpisode()
+                            
+                            val resumeText = if (episodeStr != null) "시즌 $seasonNum : $episodeStr" else "계속 보기"
+                            val progress = if (initialDuration > 0) initialPlaybackPosition.toFloat() / initialDuration else 0f
 
                             TvButton(
-                                text = if (initialPlaybackPosition > 0) "처음부터 보기" else "재생",
-                                icon = if (initialPlaybackPosition > 0) Icons.Default.Refresh else Icons.Default.PlayArrow,
-                                isPrimary = initialPlaybackPosition <= 0,
-                                modifier = Modifier.focusRequester(playButtonFocusRequester),
+                                text = resumeText,
+                                icon = Icons.Default.PlayArrow,
+                                isPrimary = true,
+                                progress = progress, 
+                                modifier = Modifier.focusRequester(resumeButtonFocusRequester),
                                 onClick = {
                                     val matchedEpisode = allEpisodes.find { it.videoUrl == playableEpisode.videoUrl } ?: playableEpisode
                                     val playlist = if (allEpisodes.isNotEmpty()) {
@@ -216,14 +223,30 @@ fun SeriesDetailScreen(
                                     } else {
                                         listOf(matchedEpisode)
                                     }
-                                    onPlay(matchedEpisode, playlist, 0L)
+                                    onPlay(matchedEpisode, playlist, initialPlaybackPosition)
                                 }
                             )
                         }
 
-                        if (state.seasons.isNotEmpty()) { 
+                        TvButton(
+                            text = if (initialPlaybackPosition > 0) "처음부터" else "재생",
+                            icon = if (initialPlaybackPosition > 0) Icons.Default.Refresh else Icons.Default.PlayArrow,
+                            isPrimary = initialPlaybackPosition <= 0,
+                            modifier = Modifier.focusRequester(playButtonFocusRequester),
+                            onClick = {
+                                val matchedEpisode = allEpisodes.find { it.videoUrl == playableEpisode.videoUrl } ?: playableEpisode
+                                val playlist = if (allEpisodes.isNotEmpty()) {
+                                    state.seasons.find { it.episodes.any { it.videoUrl == matchedEpisode.videoUrl } }?.episodes ?: allEpisodes
+                                } else {
+                                    listOf(matchedEpisode)
+                                }
+                                onPlay(matchedEpisode, playlist, 0L)
+                            }
+                        )
+
+                        if (state.seasons.isNotEmpty() && allEpisodes.size > 1) { 
                             TvButton(
-                                text = "회차 정보 보기",
+                                text = "회차 정보",
                                 icon = Icons.AutoMirrored.Filled.List,
                                 isPrimary = false,
                                 modifier = Modifier.focusRequester(infoButtonFocusRequester),
@@ -232,12 +255,8 @@ fun SeriesDetailScreen(
                         }
                     }
                 }
-                
-                item {
-                    Spacer(Modifier.height(150.dp))
-                }
             }
-            Box(modifier = Modifier.weight(1.2f))
+            Box(modifier = Modifier.weight(1f))
         }
 
         if (state.isLoading) {
@@ -252,6 +271,24 @@ fun SeriesDetailScreen(
                 }, onClose = { state = state.copy(showEpisodeOverlay = false) })
             }
         }
+    }
+}
+
+@Composable
+private fun InfoBadge(text: String, color: Color = Color.White.copy(alpha = 0.15f), textColor: Color = Color.White) {
+    Surface(
+        color = color,
+        shape = RoundedCornerShape(4.dp),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+        modifier = Modifier.padding(end = 8.dp)
+    ) {
+        Text(
+            text = text,
+            color = textColor,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+        )
     }
 }
 
@@ -284,27 +321,25 @@ private fun TvButton(
                 scaleX = scale
                 scaleY = scale
             }
-            .widthIn(min = 240.dp, max = 500.dp)
-            .height(56.dp)
+            .widthIn(min = 112.dp, max = 252.dp)
+            .height(40.dp)
             .focusable()
     ) {
         Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween 
+            horizontalArrangement = Arrangement.Start
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                Icon(icon, null, tint = contentColor, modifier = Modifier.size(24.dp))
-                Spacer(Modifier.width(12.dp))
-                Text(text = text, color = contentColor, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            Icon(icon, null, tint = contentColor, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(10.dp))
+            Text(text = text, color = contentColor, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             
             if (progress != null && progress > 0f) {
-                Spacer(Modifier.width(16.dp))
+                Spacer(Modifier.weight(1f))
                 Box(
                     modifier = Modifier
-                        .width(60.dp)
-                        .height(4.dp)
+                        .width(36.dp)
+                        .height(3.dp)
                         .clip(RoundedCornerShape(2.dp))
                         .background(Color.Gray.copy(alpha = 0.3f))
                 ) {
@@ -328,7 +363,7 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, focusR
     Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
         Row(modifier = Modifier.fillMaxSize().padding(60.dp)) {
             Column(modifier = Modifier.weight(0.35f)) {
-                Text(text = seriesTitle.cleanTitle(false), color = Color.White, style = TextStyle(fontSize = 32.sp, fontWeight = FontWeight.Bold, lineHeight = 42.sp, shadow = Shadow(Color.Black, Offset(2f, 2f), 4f)), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(text = seriesTitle.cleanTitle(includeYear = false), color = Color.White, style = TextStyle(fontSize = 32.sp, fontWeight = FontWeight.Bold, lineHeight = 42.sp, shadow = Shadow(Color.Black, Offset(2f, 2f), 4f)), maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(8.dp))
                 Text(text = "시즌 ${state.seasons.size}개", color = Color.Gray, fontSize = 18.sp)
                 Spacer(Modifier.height(40.dp))
@@ -368,12 +403,10 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
     val defaultSeason = if (series.episodes.isNotEmpty()) Season("에피소드", series.episodes.sortedByEpisode()) else null
     var path = series.fullPath
     
-    // 경로 보정 로직 추가: 시청 중인 콘텐츠 등에서 경로가 누락되거나 prefix가 없는 경우 대응
     if (path.isNullOrBlank() || !path.contains("/")) {
         val firstMovie = series.episodes.firstOrNull()
         val videoUrl = firstMovie?.videoUrl ?: ""
         
-        // URL에서 prefix 유추
         val inferredPrefix = when {
             videoUrl.contains("type=ftv") -> "외국TV"
             videoUrl.contains("type=ktv") -> "국내TV"
@@ -384,7 +417,6 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
         }
         
         if (inferredPrefix != null) {
-            // path가 파일명이거나 비어있으면 URL의 path 파라미터에서 폴더 경로 추출 시도
             val urlPath = videoUrl.split("path=").getOrNull(1)?.let { 
                 val decoded = it.split("&").firstOrNull() ?: ""
                 val parts = decoded.split("/")
