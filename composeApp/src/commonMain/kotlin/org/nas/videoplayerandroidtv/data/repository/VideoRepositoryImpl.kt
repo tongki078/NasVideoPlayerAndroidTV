@@ -93,51 +93,10 @@ class VideoRepositoryImpl : VideoRepository {
             }
             
             val results: List<Category> = response.body()
-            val finalSeriesList = mutableListOf<Series>()
-
-            results.forEach { cat ->
-                val movies = cat.movies ?: emptyList()
-                val catName = cat.name ?: ""
-                
-                if (!isGenericFolder(catName) && catName.length >= 2) {
-                    val title = catName.cleanTitle(true).replace(REGEX_GROUP_BY_SERIES, "").trim()
-                    
-                    val episodes = movies.map { movie ->
-                        if (movie.videoUrl != null && !movie.videoUrl.startsWith("http")) {
-                            movie.copy(videoUrl = "$baseUrl${if (movie.videoUrl.startsWith("/")) "" else "/"}${movie.videoUrl}")
-                        } else movie
-                    }
-
-                    var fullPath = cat.path
-                    if (fullPath != null && !fullPath.contains("/") && episodes.isNotEmpty()) {
-                        val firstUrl = episodes.first().videoUrl ?: ""
-                        val inferredPrefix = when {
-                            firstUrl.contains("type=ftv") -> "외국TV"
-                            firstUrl.contains("type=ktv") -> "국내TV"
-                            firstUrl.contains("type=movie") -> "영화"
-                            firstUrl.contains("type=anim_all") -> "애니메이션"
-                            firstUrl.contains("type=air") -> "방송중"
-                            else -> null
-                        }
-                        if (inferredPrefix != null) {
-                            fullPath = "$inferredPrefix/$fullPath"
-                        }
-                    }
-
-                    finalSeriesList.add(Series(
-                        title = title,
-                        episodes = episodes,
-                        fullPath = fullPath,
-                        posterPath = cat.posterPath,
-                        genreIds = cat.genreIds ?: emptyList(),
-                        overview = cat.overview,
-                        year = cat.year,
-                        rating = cat.rating
-                    ))
-                }
-            }
-
-            finalSeriesList.distinctBy { it.title }.sortedBy { it.title }
+            
+            // 검색 결과를 기존의 groupCategoriesToSeries 로직을 통해 처리합니다.
+            // 이렇게 하면 국내TV, 외국TV 등이 제목별로 그룹화되고 경로 정보(fullPath)도 올바르게 생성됩니다.
+            results.filter { !isGenericFolder(it.name) }.groupCategoriesToSeries("")
 
         } catch (e: Exception) {
             if (e is CancellationException) throw e
