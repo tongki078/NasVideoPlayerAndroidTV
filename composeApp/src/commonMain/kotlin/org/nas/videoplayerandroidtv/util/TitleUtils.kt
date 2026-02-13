@@ -9,13 +9,15 @@ object TitleUtils {
     private val REGEX_TMDB_HINT = Regex("""\{tmdb[\s-]*(\d+)\}""")
     private val REGEX_JUNK_KEYWORDS = Regex("""(?i)\s*(?:더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|최종화|TV판|완결|속편|(?<=\s|^)[상하](?=\s|$)|\d+부|파트)\s*""")
     
-    // 기술적 태그 정규식 개선: 소수점(.) 뒤에 숫자가 바로 오는 경우(예: 2.5)는 제외하도록 Lookahead 사용
+    // 기술적 태그 정규식 개선
     private val REGEX_TECHNICAL_TAGS = Regex("""(?i)[.\s_](?!(?:\d+\b))(?:\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI).*""")
     
-    // 특수문자에서 '.'을 제외하여 '2.5' 같은 제목 보호
     private val REGEX_SPECIAL_CHARS = ("""[\[\]()_\-!?【】『』「」"'#@*※×]""").toRegex()
     private val REGEX_SPACES = Regex("""\s+""")
     private val REGEX_EP_MARKER = Regex("""(?i)(?:^|[.\s_]|(?<=[가-힣]))(?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+).*""")
+
+    // [추가] 제목 앞 인덱스 숫자 제거용 정규식 (숫자 뒤에 공백이나 마침표가 있는 경우만 매칭하여 007, 2.5 보호)
+    private val REGEX_LEADING_INDEX = Regex("""^(\d+\s+|(?:\d+\.(?!\d)\s*))""")
 
     val REGEX_INDEX_FOLDER = Regex("""(?i)^\s*([0-9A-Z가-힣ㄱ-ㅎ]|0Z|0-Z|가-하|[0-9]-[0-9]|[A-Z]-[A-Z]|[가-힣]-[가-힣])\s*$""")
     val REGEX_YEAR_FOLDER = Regex("""(?i)^\s*(?:\(\d{4}\)|\d{4}|\d{4}\s*년)\s*$""") 
@@ -39,6 +41,10 @@ object TitleUtils {
     fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = true): String {
         val normalized = this.toNfc()
         var cleaned = normalized
+        
+        // [핵심 추가] 제목 맨 앞의 '1 ', '01. ' 같은 인덱스 제거
+        cleaned = REGEX_LEADING_INDEX.replace(cleaned, "").trim()
+
         cleaned = cleaned.replace("×", "x").replace("✕", "x")
         cleaned = REGEX_TMDB_HINT.replace(cleaned, "")
         cleaned = REGEX_EXT.replace(cleaned, "")

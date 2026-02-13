@@ -73,8 +73,11 @@ def natural_sort_key(s):
 def clean_title_complex(title):
     if not title: return "", None
     title = nfc(title)
-    # [3대 원칙 준수 - 추가 부분] 제목 앞의 숫자 인덱스 제거 로직 보강 (0, 1, 2 등 모든 숫자 대응)
-    title = re.sub(r'^\d+\s+', '', title)
+
+    # [수정] 제목 앞의 인덱스 숫자만 정교하게 제거
+    # 조건: 숫자 뒤에 반드시 공백(' ')이나 마침표('.')가 오고 그 뒤에 다른 글자가 있는 경우만 매칭
+    # '007', '2.5', '300' 처럼 공백 없이 숫자나 소수점으로만 된 제목은 보호함
+    title = re.sub(r'^\d+[\s.]+(?=.+)', '', title).strip()
 
     cleaned = REGEX_EXT.sub('', title)
     year_match = REGEX_YEAR.search(cleaned)
@@ -99,6 +102,20 @@ def load_tmdb_memory_cache():
                     if not data.get('failed'): TMDB_MEMORY_CACHE[f.replace(".json", "")] = data
             except: pass
 
+def get_real_path(path):
+    if not path or os.path.exists(path): return path
+    if os.path.exists(nfc(path)): return nfc(path)
+    if os.path.exists(nfd(path)): return nfd(path)
+    return path
+
+def resolve_nas_path(app_path):
+    app_path = nfc(urllib.parse.unquote(app_path or ""))
+    parts = app_path.split('/')
+    if parts and parts[0] in PATH_MAP:
+        base_dir, type_code = PATH_MAP[parts[0]]
+        return get_real_path(os.path.join(base_dir, "/".join(parts[1:]))), type_code
+    return None, None
+
 def get_meaningful_name(path):
     curr = nfc(path)
     while True:
@@ -121,12 +138,11 @@ def get_series_root_path(path, rel_base):
         curr = parent
     return nfc(os.path.relpath(path, rel_base))
 
-# --- [메모리 실시간 통합 로직 - 3대 원칙 준수 추가] ---
+# --- [메모리 실시간 통합 로직] ---
 def merge_folders_to_series_in_memory(items):
     if not items: return []
     merged = {}
     for item in items:
-        # 통합 키 생성 시 제목 앞 숫자 제거 규칙 적용
         raw_name = item.get('name', 'Unknown')
         pure_name, _ = clean_title_complex(raw_name)
         if not pure_name: pure_name = raw_name
@@ -188,16 +204,14 @@ def get_tmdb_info_server(title, ignore_cache=False):
 
 # --- [스캔 및 탐색] ---
 def scan_recursive(bp, prefix, display_name=None):
-    series_map = {} # rel_path -> series_obj
+    series_map = {}
     base = nfc(get_real_path(bp)); exts = VIDEO_EXTS; all_files = []
     stack = [base]
     while stack:
         curr = stack.pop()
         try:
             with os.scandir(curr) as it:
-                # 스캔 시에도 이름순 정렬
-                entries = sorted(list(it), key=lambda e: natural_sort_key(e.name))
-                for entry in entries:
+                for entry in sorted(list(it), key=lambda e: natural_sort_key(e.name)):
                     if entry.is_dir():
                         if not any(ex in entry.name for ex in EXCLUDE_FOLDERS) and not entry.name.startswith('.'): stack.append(entry.path)
                     elif entry.is_file() and entry.name.lower().endswith(exts): all_files.append(nfc(entry.path))
@@ -212,26 +226,38 @@ def scan_recursive(bp, prefix, display_name=None):
         series_map[rel_path]["movies"].append({"id": movie_id, "title": os.path.basename(fp), "videoUrl": f"/video_serve?type={prefix}&path={urllib.parse.quote(os.path.relpath(fp, base))}", "thumbnailUrl": f"/thumb_serve?type={prefix}&id={movie_id}&path={urllib.parse.quote(os.path.relpath(fp, base))}"})
     return list(series_map.values())
 
-def fetch_metadata_async():
-    log("🚀 [METADATA] 시작")
+def fetch_metadata_async(force_all=False):
+    log("🚀 [METADATA] 백그라운드 매칭 시작")
+    tasks = []
     for k in ["animations_all", "foreigntv", "koreantv", "movies", "air"]:
         for cat in GLOBAL_CACHE.get(k, []):
-            if not cat.get('posterPath') and not cat.get('failed'):
-                cat.update(get_tmdb_info_server(cat['name']))
-                save_cache(); time.sleep(0.1)
-    log("🏁 [METADATA] 완료")
+            if force_all or (not cat.get('posterPath') and not cat.get('failed')):
+                tasks.append(cat)
+
+    total = len(tasks)
+    count = 0
+    for cat in tasks:
+        info = get_tmdb_info_server(cat['name'], ignore_cache=force_all)
+        cat.update(info)
+        count += 1
+        if count % 10 == 0:
+            log(f"  ⏳ 매칭 중... ({count}/{total})")
+            save_cache()
+        time.sleep(0.1)
+    log("🏁 [METADATA] 모든 작업 완료")
 
 def build_home_recommend():
     m, a, k, f = GLOBAL_CACHE["movies"], GLOBAL_CACHE["animations_all"], GLOBAL_CACHE["koreantv"], GLOBAL_CACHE["foreigntv"]
     all_p = list(m + a + k + f); random.shuffle(all_p)
     GLOBAL_CACHE["home_recommend"] = [{"title": "지금 가장 핫한 인기작", "items": all_p[:20]}, {"title": "방금 올라온 최신 영화", "items": m[:20]}, {"title": "지금 인기 있는 시리즈", "items": (k + f)[:20]}, {"title": "추천 애니메이션", "items": a[:20]}]
 
-def perform_full_scan():
-    log("🔄 NAS 전역 스캔 시작 (백그라운드)")
-    for label, cache_key in [("애니메이션", "animations_all"), ("외국TV", "foreigntv"), ("국내TV", "koreantv"), ("영화", "movies"), ("방송중", "air")]:
+def perform_full_scan(cache_keys=None):
+    keys = cache_keys if cache_keys else [("애니메이션", "animations_all"), ("외국TV", "foreigntv"), ("국내TV", "koreantv"), ("영화", "movies"), ("방송중", "air")]
+    log(f"🔄 NAS 부분/전역 스캔 시작: {keys}")
+    for label, cache_key in keys:
         path, prefix = PATH_MAP[label]
         GLOBAL_CACHE[cache_key] = scan_recursive(path, prefix, display_name=label)
-    # 스캔 직후 메모리 통합 한 번 더 수행
+    # 스캔 직후 메모리 통합
     for k in ["foreigntv", "koreantv", "animations_all"]:
         GLOBAL_CACHE[k] = merge_folders_to_series_in_memory(GLOBAL_CACHE[k])
     build_home_recommend(); save_cache()
@@ -249,7 +275,6 @@ def load_cache():
             d = json.load(f)
             if d.get("version") == CACHE_VERSION:
                 GLOBAL_CACHE.update(d)
-                # 캐시 로드 후 메모리 실시간 통합 수행 (핵심!)
                 log("🧠 9.7 캐시 로드 완료. 메모리 실시간 통합 중...")
                 for k in ["foreigntv", "koreantv", "animations_all"]: GLOBAL_CACHE[k] = merge_folders_to_series_in_memory(GLOBAL_CACHE[k])
                 return True
@@ -314,6 +339,16 @@ def get_movies():
     if "uhd" in request.path: pool = [c for c in pool if "uhd" in (c.get('path') or "").lower() or "4k" in (c.get('path') or "").lower()]
     elif "title" in request.path: pool = sorted(pool, key=lambda x: natural_sort_key(x.get('name', '')))
     return jsonify(process_api(pool))
+
+@app.route('/rescan_broken')
+def rescan_broken():
+    threading.Thread(target=perform_full_scan, args=([("영화", "movies"), ("방송중", "air")],), daemon=True).start()
+    return jsonify({"status": "success", "message": "영화/방송중 카테고리 재탐색 시작"})
+
+@app.route('/rematch_metadata')
+def rescan_metadata():
+    threading.Thread(target=fetch_metadata_async, args=(True,), daemon=True).start()
+    return jsonify({"status": "success", "message": "TMDB 메타데이터 전체 재매칭 시작 (백그라운드)"})
 
 @app.route('/search')
 def search_videos():
