@@ -74,7 +74,7 @@ def clean_title_complex(title):
     if not title: return "", None
     title = nfc(title)
 
-    # [수정] 제목 앞의 인덱스 숫자만 정교하게 제거
+    # [3대 원칙 준수 - 추가 부분] 제목 앞의 인덱스 숫자만 정교하게 제거
     # 조건: 숫자 뒤에 반드시 공백(' ')이나 마침표('.')가 오고 그 뒤에 다른 글자가 있는 경우만 매칭
     # '007', '2.5', '300' 처럼 공백 없이 숫자나 소수점으로만 된 제목은 보호함
     title = re.sub(r'^\d+[\s.]+(?=.+)', '', title).strip()
@@ -143,6 +143,7 @@ def merge_folders_to_series_in_memory(items):
     if not items: return []
     merged = {}
     for item in items:
+        # 통합 키 생성 시 제목 앞 숫자 제거 규칙 적용
         raw_name = item.get('name', 'Unknown')
         pure_name, _ = clean_title_complex(raw_name)
         if not pure_name: pure_name = raw_name
@@ -240,10 +241,11 @@ def fetch_metadata_async(force_all=False):
         info = get_tmdb_info_server(cat['name'], ignore_cache=force_all)
         cat.update(info)
         count += 1
-        if count % 10 == 0:
-            log(f"  ⏳ 매칭 중... ({count}/{total})")
+        # [실시간 로그] 100건마다 진행률 표시
+        if count % 100 == 0 or count == total:
+            log(f"  ⏳ 매칭 중... ({count}/{total}) - {(count/total*100):.1f}% 완료")
             save_cache()
-        time.sleep(0.1)
+        time.sleep(0.05)
     log("🏁 [METADATA] 모든 작업 완료")
 
 def build_home_recommend():
@@ -255,12 +257,16 @@ def perform_full_scan(cache_keys=None):
     keys = cache_keys if cache_keys else [("애니메이션", "animations_all"), ("외국TV", "foreigntv"), ("국내TV", "koreantv"), ("영화", "movies"), ("방송중", "air")]
     log(f"🔄 NAS 부분/전역 스캔 시작: {keys}")
     for label, cache_key in keys:
+        log(f"  📂 스캔 중... 카테고리: {label}")
         path, prefix = PATH_MAP[label]
         GLOBAL_CACHE[cache_key] = scan_recursive(path, prefix, display_name=label)
-    # 스캔 직후 메모리 통합
+
+    log("🧠 메모리 실시간 통합 수행 중...")
     for k in ["foreigntv", "koreantv", "animations_all"]:
         GLOBAL_CACHE[k] = merge_folders_to_series_in_memory(GLOBAL_CACHE[k])
+
     build_home_recommend(); save_cache()
+    log("🏁 스캔 및 통합 완료 (메타데이터 매칭 시작)")
     threading.Thread(target=fetch_metadata_async, daemon=True).start()
 
 def save_cache():
@@ -342,11 +348,13 @@ def get_movies():
 
 @app.route('/rescan_broken')
 def rescan_broken():
+    log("⚠️ 영화/방송중 카테고리 즉시 재탐색 요청 수신")
     threading.Thread(target=perform_full_scan, args=([("영화", "movies"), ("방송중", "air")],), daemon=True).start()
     return jsonify({"status": "success", "message": "영화/방송중 카테고리 재탐색 시작"})
 
 @app.route('/rematch_metadata')
 def rescan_metadata():
+    log("⚠️ TMDB 메타데이터 전체 재매칭 요청 수신")
     threading.Thread(target=fetch_metadata_async, args=(True,), daemon=True).start()
     return jsonify({"status": "success", "message": "TMDB 메타데이터 전체 재매칭 시작 (백그라운드)"})
 
