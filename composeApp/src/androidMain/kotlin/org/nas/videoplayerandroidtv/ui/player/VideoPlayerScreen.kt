@@ -42,10 +42,10 @@ import coil3.request.crossfade
 import kotlinx.coroutines.delay
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
-import org.nas.videoplayerandroidtv.cleanTitle
-import org.nas.videoplayerandroidtv.extractEpisode
-import org.nas.videoplayerandroidtv.extractSeason
 import org.nas.videoplayerandroidtv.toNfc
+import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
+import org.nas.videoplayerandroidtv.util.TitleUtils.extractEpisode
+import org.nas.videoplayerandroidtv.util.TitleUtils.extractSeason
 
 /**
  * 직접 정의한 Pause 아이콘

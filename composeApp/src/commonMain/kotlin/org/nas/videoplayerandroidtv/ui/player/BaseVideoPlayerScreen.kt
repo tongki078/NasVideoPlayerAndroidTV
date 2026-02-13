@@ -21,7 +21,7 @@ import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
 import org.nas.videoplayerandroidtv.ui.player.VideoPlayer
 import org.nas.videoplayerandroidtv.domain.model.Movie
-import org.nas.videoplayerandroidtv.prettyTitle
+import org.nas.videoplayerandroidtv.util.TitleUtils.prettyTitle
 
 @Composable
 fun BaseVideoPlayerScreen(

@@ -22,6 +22,7 @@ import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 import org.nas.videoplayerandroidtv.ui.player.VideoPlayer
 import androidx.compose.ui.focus.onFocusChanged
+import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 
 @Composable
 fun SeriesDetailHeader(

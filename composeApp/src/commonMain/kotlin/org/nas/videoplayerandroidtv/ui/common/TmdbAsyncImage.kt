@@ -22,6 +22,7 @@ import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import org.nas.videoplayerandroidtv.*
+import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 
 @Composable
 fun TmdbAsyncImage(

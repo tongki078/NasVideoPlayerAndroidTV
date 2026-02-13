@@ -19,8 +19,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -28,7 +26,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import org.nas.videoplayerandroidtv.data.WatchHistory
@@ -38,7 +35,7 @@ import org.nas.videoplayerandroidtv.domain.model.HomeSection
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
-import org.nas.videoplayerandroidtv.isGenericTitle
+import org.nas.videoplayerandroidtv.util.TitleUtils.isGenericTitle
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 
 @Composable
@@ -63,8 +60,8 @@ fun HomeScreen(
             val foreignTvDeferred = async { repository.getLatestForeignTV() }
             val koreanDramaDeferred = async { repository.getKtvDrama(20, 0) }
             
-            val foreignTv = try { foreignTvDeferred.await().take(20) } catch(e: Exception) { emptyList() }
-            val koreanDrama = try { koreanDramaDeferred.await().take(20) } catch(e: Exception) { emptyList() }
+            val foreignTv = try { foreignTvDeferred.await().take(20) } catch(_: Exception) { emptyList() }
+            val koreanDrama = try { koreanDramaDeferred.await().take(20) } catch(_: Exception) { emptyList() }
             
             val newSections = mutableListOf<HomeSection>()
             if (foreignTv.isNotEmpty()) newSections.add(HomeSection("인기 외국 TV 시리즈", foreignTv.toCategories()))
@@ -124,7 +121,6 @@ fun HomeScreen(
             if (isLoading && combinedSections.isEmpty()) {
                 items(3) { SkeletonRow(standardMargin) }
             } else {
-                // --- [시청 중인 콘텐츠: 넷플릭스 스타일] ---
                 if (watchHistory.isNotEmpty()) {
                     item(key = "watch_history_row") {
                         val rowKey = "watch_history"
@@ -139,7 +135,7 @@ fun HomeScreen(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 modifier = Modifier.fillMaxWidth().height(220.dp)
                             ) {
-                                itemsIndexed(watchHistory, key = { _, h -> h.id }) { index, history ->
+                                itemsIndexed(watchHistory, key = { _, h -> h.id }) { _, history ->
                                     NetflixWatchHistoryItem(
                                         history = history,
                                         onClick = { onHistoryClick(history) }
@@ -193,9 +189,6 @@ fun HomeScreen(
     }
 }
 
-/**
- * 넷플릭스 스타일 시청 중인 콘텐츠 아이템
- */
 @Composable
 private fun NetflixWatchHistoryItem(
     history: WatchHistory,
@@ -221,7 +214,6 @@ private fun NetflixWatchHistoryItem(
                     shape = RoundedCornerShape(4.dp)
                 )
         ) {
-            // 1. 포스터 이미지
             TmdbAsyncImage(
                 title = history.title,
                 posterPath = history.posterPath,
@@ -229,7 +221,6 @@ private fun NetflixWatchHistoryItem(
                 contentScale = ContentScale.Crop
             )
 
-            // 2. 재생 버튼 오버레이 (포커스 시 더 밝게)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -251,7 +242,6 @@ private fun NetflixWatchHistoryItem(
                 }
             }
 
-            // 3. 진행바 (하단 고정)
             val progress = if (history.duration > 0) history.lastPosition.toFloat() / history.duration else 0f
             Box(
                 modifier = Modifier
@@ -271,7 +261,6 @@ private fun NetflixWatchHistoryItem(
         
         Spacer(modifier = Modifier.height(8.dp))
         
-        // 4. 제목 (한 줄로 깔끔하게)
         Text(
             text = history.title,
             color = if (isFocused) Color.White else Color.Gray,

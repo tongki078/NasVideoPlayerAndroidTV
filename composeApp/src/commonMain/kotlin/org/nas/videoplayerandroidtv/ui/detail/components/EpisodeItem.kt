@@ -23,6 +23,9 @@ import coil3.compose.AsyncImagePainter
 import org.nas.videoplayerandroidtv.*
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
+import org.nas.videoplayerandroidtv.util.TitleUtils.extractEpisode
+import org.nas.videoplayerandroidtv.util.TitleUtils.extractSeason
+import org.nas.videoplayerandroidtv.util.TitleUtils.prettyTitle
 
 @Composable
 fun EpisodeList(episodes: List<Movie>, metadata: TmdbMetadata?, onPlay: (Movie) -> Unit) {

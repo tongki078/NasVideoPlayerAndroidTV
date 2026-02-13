@@ -32,9 +32,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import org.nas.videoplayerandroidtv.cleanTitle
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
+import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -165,7 +165,6 @@ fun NetflixPivotItem(
                 .fillMaxSize()
                 .focusRequester(focusRequester)
                 .clip(RoundedCornerShape(6.dp))
-                // 포커스 시 배경색을 투명(Transparent)으로 변경하여 회색 배경 제거
                 .background(Color.Transparent) 
                 .focusable(interactionSource = interactionSource)
                 .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)

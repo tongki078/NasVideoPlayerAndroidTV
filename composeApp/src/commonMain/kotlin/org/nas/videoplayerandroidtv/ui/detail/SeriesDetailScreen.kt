@@ -42,6 +42,10 @@ import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.detail.components.EpisodeItem
+import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
+import org.nas.videoplayerandroidtv.util.TitleUtils.extractEpisode
+import org.nas.videoplayerandroidtv.util.TitleUtils.extractSeason
+import org.nas.videoplayerandroidtv.util.TitleUtils.isGenericTitle
 
 @Composable
 fun SeriesDetailScreen(
