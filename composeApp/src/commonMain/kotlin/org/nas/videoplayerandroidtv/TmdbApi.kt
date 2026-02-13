@@ -115,11 +115,11 @@ private val REGEX_EXT = Regex("""\.[a-zA-Z0-9]{2,4}$""")
 private val REGEX_YEAR = Regex("""\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)""")
 private val REGEX_BRACKETS = Regex("""\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\}|$)|\【.*?(?:\】|$)|\『.*?(?:\』|$)|\「.*?(?:\」|$)""")
 private val REGEX_TMDB_HINT = Regex("""\{tmdb[\s-]*(\d+)\}""")
-private val REGEX_JUNK_KEYWORDS = Regex("""(?i)\s*(?:더빙|자막|극장판|더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|최종화|TV판|완결|속편|상|하|1부|2부|파트)\s*""")
+// NCIS 하와이 제목 유지를 위해 정규식 수정: '하'가 단독 단어일 때만 상/하 구분으로 제거
+private val REGEX_JUNK_KEYWORDS = Regex("""(?i)\s*(?:더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|최종화|TV판|완결|속편|(?<=\s|^)[상하](?=\s|$)|\d+부|파트)\s*""")
 private val REGEX_TECHNICAL_TAGS = Regex("""(?i)[.\s_](?:\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI).*""")
 private val REGEX_SPECIAL_CHARS = ("""[\[\]()._\-!?【】『』「」"'#@*※×]""").toRegex()
 private val REGEX_SPACES = Regex("""\s+""")
-private val REGEX_HANGUL_NUMBER = Regex("""([가-힣])(\d+)(?=[.\s_]|$)""")
 private val REGEX_EP_MARKER = Regex("""(?i)(?:^|[.\s_]|(?<=[가-힣]))(?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+).*""")
 
 private val REGEX_INDEX_FOLDER = Regex("""(?i)^\s*([0-9A-Z가-힣ㄱ-ㅎ]|0Z|0-Z|가-하|[0-9]-[0-9]|[A-Z]-[A-Z]|[가-힣]-[가-힣])\s*$""")
@@ -129,11 +129,10 @@ private val REGEX_SEASON_FOLDER = Regex("""(?i)^\s*(?:Season\s*\d+|시즌\s*\d+(
 fun isGenericTitle(name: String?): Boolean {
     if (name.isNullOrBlank()) return true
     val n = name.trim().toNfc()
-    return REGEX_INDEX_FOLDER.matches(n) || 
-           REGEX_YEAR_FOLDER.matches(n) || 
-           REGEX_SEASON_FOLDER.matches(n) ||
-           n.contains("Search Results", ignoreCase = true) ||
-           (n.startsWith("시즌") && n.any { it.isDigit() } && n.contains("년"))
+    if (REGEX_INDEX_FOLDER.matches(n) || REGEX_YEAR_FOLDER.matches(n) || REGEX_SEASON_FOLDER.matches(n)) return true
+    val seasonKeywords = Regex("""(?i)Season\s*\d+|시즌\s*\d+|Part\s*\d+|파트\s*\d+|S\d+|\d+기|\d+화|\d+회""")
+    val cleaned = seasonKeywords.replace(n, "").trim().replace(REGEX_SPECIAL_CHARS, "").trim()
+    return cleaned.isEmpty() || (cleaned.length < 2 && !cleaned.any { it.isLetter() })
 }
 
 fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = true, preserveSubtitle: Boolean = false): String {
@@ -143,28 +142,29 @@ fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = t
     cleaned = REGEX_TMDB_HINT.replace(cleaned, "")
     cleaned = REGEX_EXT.replace(cleaned, "")
     cleaned = REGEX_EP_MARKER.replace(cleaned, "") 
-    
     val yearMatch = REGEX_YEAR.find(cleaned)
     val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
     cleaned = REGEX_YEAR.replace(cleaned, " ")
     cleaned = REGEX_BRACKETS.replace(cleaned, " ")
-    cleaned = REGEX_HANGUL_NUMBER.replace(cleaned, "$1 $2")
     cleaned = cleaned.replace("(자막)", "").replace("(더빙)", "").replace("[자막]", "").replace("[더빙]", "")
     cleaned = REGEX_JUNK_KEYWORDS.replace(cleaned, " ")
     cleaned = REGEX_TECHNICAL_TAGS.replace(cleaned, "")
     
+    // 9-1-1 같은 제목을 보존하기 위해 하이픈 유지 로직 강화
     if (!keepAfterHyphen && cleaned.contains("-")) {
         val parts = cleaned.split("-")
+        val firstPart = parts[0].trim()
         val afterHyphen = parts.getOrNull(1)?.trim() ?: ""
-        if (!(afterHyphen.length <= 2 && afterHyphen.all { it.isDigit() })) {
-            cleaned = parts[0]
+        // 뒤에 오는게 순수 숫자가 아니거나 너무 길면 잘라냄 (NCIS: LA - 01화 같은 경우 대응)
+        if (!(afterHyphen.length <= 3 && afterHyphen.all { it.isDigit() })) {
+            cleaned = firstPart
         }
     }
     
     cleaned = cleaned.replace(":", " ")
     cleaned = REGEX_SPECIAL_CHARS.replace(cleaned, " ")
     cleaned = REGEX_SPACES.replace(cleaned, " ").trim()
-    
+
     if (cleaned.length < 2) {
         val backup = normalized.replace(REGEX_TMDB_HINT, "").replace(REGEX_EXT, "").trim()
         return if (backup.length >= 2) backup else normalized
@@ -203,13 +203,11 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimati
     if (TMDB_API_KEY.isBlank()) return TmdbMetadata()
     val normalizedTitle = title.toNfc()
     val cacheKey = if (isAnimation) "ani_$normalizedTitle" else normalizedTitle
-    
     tmdbCache[cacheKey]?.let { return it }
     persistentCache?.getCache(cacheKey)?.let {
         tmdbCache[cacheKey] = it
         return it
     }
-
     val deferred = tmdbMutex.withLock {
         tmdbInFlightRequests.getOrPut(cacheKey) {
             @OptIn(DelicateCoroutinesApi::class)
@@ -224,12 +222,10 @@ suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimati
                         }
                     }
                 } catch (e: Exception) { null }
-                
                 if (result != null && result.posterUrl != null) {
                     withContext(Dispatchers.Main) { tmdbCache[cacheKey] = result }
                     persistentCache?.saveCache(cacheKey, result)
                 }
-                
                 tmdbMutex.withLock { tmdbInFlightRequests.remove(cacheKey) }
                 result
             }
@@ -246,19 +242,9 @@ private suspend fun fetchByIdDirectly(tmdbId: Int): TmdbMetadata? {
             parameter("language", "ko-KR")
         }.body<TmdbDetailsResponse>()
     } catch (e: Exception) { null }
-    
     if (movieRes != null && movieRes.posterPath != null) {
-        return TmdbMetadata(
-            tmdbId = movieRes.id, 
-            mediaType = "movie", 
-            posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${movieRes.posterPath}", 
-            backdropUrl = movieRes.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" }, 
-            overview = movieRes.overview, 
-            genreIds = movieRes.genres?.map { it.id } ?: emptyList(), 
-            title = movieRes.title ?: movieRes.name
-        )
+        return TmdbMetadata(tmdbId = movieRes.id, mediaType = "movie", posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${movieRes.posterPath}", backdropUrl = movieRes.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" }, overview = movieRes.overview, genreIds = movieRes.genres?.map { it.id } ?: emptyList(), title = movieRes.title ?: movieRes.name)
     }
-    
     val tvRes = try {
         tmdbClient.get("$TMDB_BASE_URL/tv/$tmdbId") {
             if (TMDB_API_KEY.startsWith("eyJ")) header("Authorization", "Bearer $TMDB_API_KEY")
@@ -266,17 +252,8 @@ private suspend fun fetchByIdDirectly(tmdbId: Int): TmdbMetadata? {
             parameter("language", "ko-KR")
         }.body<TmdbDetailsResponse>()
     } catch (e: Exception) { null }
-    
     if (tvRes != null && tvRes.posterPath != null) {
-        return TmdbMetadata(
-            tmdbId = tvRes.id,
-            mediaType = "tv",
-            posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${tvRes.posterPath}",
-            backdropUrl = tvRes.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" },
-            overview = tvRes.overview,
-            genreIds = tvRes.genres?.map { it.id } ?: emptyList(),
-            title = tvRes.title ?: tvRes.name
-        )
+        return TmdbMetadata(tmdbId = tvRes.id, mediaType = "tv", posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${tvRes.posterPath}", backdropUrl = tvRes.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" }, overview = tvRes.overview, genreIds = tvRes.genres?.map { it.id } ?: emptyList(), title = tvRes.title ?: tvRes.name)
     }
     return null
 }
@@ -285,7 +262,6 @@ private suspend fun performMultiStepSearch(originalTitle: String, typeHint: Stri
     val year = originalTitle.extractYear()
     val fullCleanQuery = originalTitle.cleanTitle(includeYear = false)
     val tightQuery = fullCleanQuery.replace(" ", "")
-
     if (tightQuery != fullCleanQuery && tightQuery.length >= 2) {
         searchTmdbCore(tightQuery, "ko-KR", typeHint ?: "multi", year, isAnimation).first?.let { return it }
     }
@@ -315,27 +291,9 @@ private suspend fun searchTmdbCore(query: String, language: String?, endpoint: S
             }
             parameter("include_adult", "false")
         }.body()
-
         val results = response.results.filter { it.mediaType != "person" }
         if (results.isEmpty()) return null to null
-        
-        val bestMatch = results.sortedWith(
-            compareByDescending<TmdbResult> { 
-                if (year != null) {
-                    val resYear = (it.releaseDate ?: it.firstAirDate ?: "").take(4)
-                    resYear == year
-                } else false
-            }.thenByDescending { 
-                val hasAniGenre = it.genreIds?.contains(16) == true
-                if (isAnimation) hasAniGenre else true
-            }.thenByDescending { 
-                val matchTitle = (it.name ?: it.title ?: "").lowercase().toNfc().replace("×", "x").replace(" ", "").replace(":", "").replace("-", "")
-                val searchTitle = nfcQuery.lowercase().replace("×", "x").replace(" ", "").replace(":", "").replace("-", "")
-                matchTitle.equals(searchTitle, ignoreCase = true) || matchTitle.contains(searchTitle) || searchTitle.contains(matchTitle)
-            }.thenByDescending { it.posterPath != null }
-            .thenByDescending { it.popularity ?: 0.0 }
-        ).firstOrNull()
-        
+        val bestMatch = results.sortedWith(compareByDescending<TmdbResult> { if (year != null) { (it.releaseDate ?: it.firstAirDate ?: "").take(4) == year } else false }.thenByDescending { if (isAnimation) it.genreIds?.contains(16) == true else true }.thenByDescending { val matchTitle = (it.name ?: it.title ?: "").lowercase().toNfc().replace("×", "x").replace(" ", "").replace(":", "").replace("-", ""); val searchTitle = nfcQuery.lowercase().replace("×", "x").replace(" ", "").replace(":", "").replace("-", ""); matchTitle == searchTitle || matchTitle.contains(searchTitle) || searchTitle.contains(matchTitle) }.thenByDescending { it.posterPath != null }.thenByDescending { it.popularity ?: 0.0 }).firstOrNull()
         if (bestMatch != null && bestMatch.posterPath != null) {
             val posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${bestMatch.posterPath}"
             val backdropUrl = bestMatch.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" }
@@ -344,27 +302,6 @@ private suspend fun searchTmdbCore(query: String, language: String?, endpoint: S
             Pair(TmdbMetadata(tmdbId = bestMatch.id, mediaType = mediaType, posterUrl = posterUrl, backdropUrl = backdropUrl, overview = bestMatch.overview, genreIds = bestMatch.genreIds ?: emptyList(), title = bestMatch.name ?: bestMatch.title, year = resultYear), null)
         } else Pair(null, null)
     } catch (e: Exception) { Pair(null, e) }
-}
-
-suspend fun fetchTmdbDetails(tmdbId: Int, mediaType: String): TmdbDetailsResponse? {
-    return try {
-        tmdbClient.get("$TMDB_BASE_URL/$mediaType/$tmdbId") {
-            if (TMDB_API_KEY.startsWith("eyJ")) header("Authorization", "Bearer $TMDB_API_KEY")
-            else parameter("api_key", TMDB_API_KEY)
-            parameter("language", "ko-KR")
-        }.body()
-    } catch (e: Exception) { null }
-}
-
-suspend fun fetchTmdbSeasonDetails(tmdbId: Int, season: Int): List<TmdbEpisode> {
-    return try {
-        val response: TmdbSeasonResponse = tmdbClient.get("$TMDB_BASE_URL/tv/$tmdbId/season/$season") {
-            if (TMDB_API_KEY.startsWith("eyJ")) header("Authorization", "Bearer $TMDB_API_KEY")
-            else parameter("api_key", TMDB_API_KEY)
-            parameter("language", "ko-KR")
-        }.body()
-        response.episodes
-    } catch (e: Exception) { emptyList() }
 }
 
 suspend fun fetchTmdbEpisodeDetails(tmdbId: Int, season: Int, episodeNum: Int): TmdbEpisode? {
@@ -387,11 +324,6 @@ suspend fun fetchTmdbCredits(tmdbId: Int, mediaType: String?): List<TmdbCast> {
             else parameter("api_key", TMDB_API_KEY)
             parameter("language", "ko-KR")
         }.body()
-        response.cast.take(30)
+        response.cast
     } catch (e: Exception) { emptyList() }
-}
-
-fun getRandomThemeName(originalName: String, index: Int, isMovie: Boolean = false, category: String? = null): String {
-    val alternates = if (isMovie) listOf("시선을 사로잡는 영화", "주말 밤 책임질 명작", "시간 순삭 몰입도 최강") else listOf("한 번 시작하면 멈출 수 없는", "웰메이드 명품 시리즈", "놓치면 후회할 인생 드라마")
-    return alternates[index % alternates.size]
 }

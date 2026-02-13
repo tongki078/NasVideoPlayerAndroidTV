@@ -244,9 +244,9 @@ fun App(driver: SqlDriver) {
                                 series = selectedSeries!!, 
                                 repository = repository, 
                                 initialPlaybackPosition = lastPlaybackPosition,
-                                initialDuration = lastVideoDuration, // 시청 중인 영상의 총 길이 전달
+                                initialDuration = lastVideoDuration,
                                 onPositionUpdate = { pos -> lastPlaybackPosition = pos },
-                                onBack = { selectedSeries = null }, 
+                                onBackPressed = { selectedSeries = null }, 
                                 onPlay = { movie: Movie, playlist: List<Movie>, pos: Long ->
                                     selectedMovie = movie
                                     moviePlaylist = playlist
@@ -259,16 +259,6 @@ fun App(driver: SqlDriver) {
                                         selectedSeries?.title,
                                         selectedSeries?.fullPath
                                     )
-                                },
-                                onPreviewPlay = { movie -> 
-                                    saveWatchHistory(
-                                        movie, 
-                                        selectedSeries?.posterPath, 
-                                        0L, 
-                                        0L,
-                                        selectedSeries?.title,
-                                        selectedSeries?.fullPath
-                                    ) 
                                 }
                             )
                         }
@@ -316,7 +306,7 @@ fun App(driver: SqlDriver) {
                                         )
                                     )
                                     lastPlaybackPosition = history.lastPosition
-                                    lastVideoDuration = history.duration // 중요: 히스토리에서 전체 길이 복구
+                                    lastVideoDuration = history.duration
                                 }
                             )
                         }

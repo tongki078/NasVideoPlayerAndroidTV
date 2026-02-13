@@ -10,9 +10,9 @@ import org.nas.videoplayerandroidtv.domain.model.*
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.cleanTitle
 import org.nas.videoplayerandroidtv.toNfc
+import org.nas.videoplayerandroidtv.isGenericTitle
 import kotlinx.coroutines.*
 
-// 시리즈 제목 추출을 위한 정밀 정규식
 private val REGEX_GROUP_BY_SERIES = Regex(
     """(?i)[\s._-]*(?:s\d{1,2}e\d{1,3} |season\s*\d{1,2} |s\d{1,2} |ep\d{1,3}|e\d{1,3}|\d{1,3}화|\d{1,3}회|\d+기|part\s*\d|극장판|완결|special|extras|ova|720p|1080p|2160p|4k|h264|h265|x264|x265|bluray|web-dl|aac|mp4|mkv|avi|\([^)]*\)|\[[^\]]*\]).*|(?:\s+\d+\s*$)""", 
     RegexOption.IGNORE_CASE
@@ -28,7 +28,8 @@ class VideoRepositoryImpl : VideoRepository {
     private fun isGenericFolder(name: String?): Boolean {
         if (name.isNullOrBlank()) return true
         val n = name.trim().toNfc()
-        return REGEX_INDEX_FOLDER.matches(n) || 
+        return isGenericTitle(n) || 
+               REGEX_INDEX_FOLDER.matches(n) || 
                REGEX_YEAR_FOLDER.matches(n) || 
                REGEX_GENERIC_MANAGEMENT_FOLDER.matches(n) ||
                n.contains("Search Results", ignoreCase = true)
@@ -90,33 +91,11 @@ class VideoRepositoryImpl : VideoRepository {
                 parameter("lite", "true") 
                 if (category != "전체") parameter("category", category)
             }
-            
             val results: List<Category> = response.body()
             results.groupCategoriesToSeries("")
-
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
-        }
-    }
-
-    private fun List<Movie>.groupBySeriesInternal(
-        basePath: String? = null,
-        posterPath: String? = null,
-        genreIds: List<Int>? = emptyList()
-    ): List<Series> {
-        if (this.isEmpty()) return emptyList()
-        return this.groupBy { movie ->
-            (movie.title ?: "").cleanTitle(true).replace(REGEX_GROUP_BY_SERIES, "").trim()
-        }.filterKeys { it.isNotBlank() }.map { (title, episodes) ->
-            val sortedEps = episodes.distinctBy { it.id }.sortedBy { it.title ?: "" }
-            Series(
-                title = title,
-                episodes = sortedEps,
-                fullPath = basePath,
-                posterPath = posterPath,
-                genreIds = genreIds ?: emptyList()
-            )
         }
     }
 
@@ -141,40 +120,9 @@ class VideoRepositoryImpl : VideoRepository {
         }
     }
 
-    override suspend fun getAnimationsAll(): List<Series> = withContext(Dispatchers.Default) {
-        try {
-            val response = client.get("$baseUrl/animations_all") {
-                parameter("lite", "true")
-                parameter("limit", 600)
-            }
-            if (response.status == HttpStatusCode.OK) {
-                val categories: List<Category> = response.body()
-                categories.groupCategoriesToSeries("애니메이션")
-            } else { emptyList() }
-        } catch (e: Exception) { emptyList() }
-    }
-
-    override suspend fun getAnimationsRaftel(limit: Int, offset: Int): List<Series> = withContext(Dispatchers.Default) {
-        try {
-            val categories: List<Category> = client.get("$baseUrl/anim_raftel") {
-                parameter("limit", 600)
-                parameter("offset", offset)
-                parameter("lite", "true")
-            }.body()
-            categories.groupCategoriesToSeries("애니메이션")
-        } catch (e: Exception) { emptyList() }
-    }
-
-    override suspend fun getAnimationsSeries(limit: Int, offset: Int): List<Series> = withContext(Dispatchers.Default) {
-        try {
-            val categories: List<Category> = client.get("$baseUrl/anim_series") {
-                parameter("limit", 600)
-                parameter("offset", offset)
-                parameter("lite", "true")
-            }.body()
-            categories.groupCategoriesToSeries("애니메이션")
-        } catch (e: Exception) { emptyList() }
-    }
+    override suspend fun getAnimationsAll(): List<Series> = getGroupedData("/animations_all", 600, 0, "애니메이션")
+    override suspend fun getAnimationsRaftel(limit: Int, offset: Int): List<Series> = getGroupedData("/anim_raftel", 600, offset, "애니메이션", "라프텔")
+    override suspend fun getAnimationsSeries(limit: Int, offset: Int): List<Series> = getGroupedData("/anim_series", 600, offset, "애니메이션", "시리즈")
 
     override suspend fun getDramas(): List<Series> = withContext(Dispatchers.Default) {
         try {
@@ -222,18 +170,20 @@ class VideoRepositoryImpl : VideoRepository {
             }
             if (response.status == HttpStatusCode.OK) {
                 val categories: List<Category> = response.body()
-                val filtered = categories.filter { cat ->
-                    if (isGenericFolder(cat.name)) return@filter false
-                    
-                    if (filterKeyword != null) {
-                        val target = filterKeyword.replace(" ", "").lowercase().toNfc()
-                        val pathNormalized = cat.path?.replace(" ", "")?.lowercase()?.toNfc() ?: ""
-                        val nameNormalized = cat.name?.replace(" ", "")?.lowercase()?.toNfc() ?: ""
-                        
-                        pathNormalized.contains(target) || nameNormalized.contains(target)
-                    } else true
-                }
-                filtered.groupCategoriesToSeries(prefix)
+                // [강화] 모든 엔드포인트에서 filterKeyword가 있으면 무조건 클라이언트에서도 한 번 더 필터링
+                val filtered = if (filterKeyword != null) {
+                    val target = filterKeyword.replace(" ", "").lowercase().toNfc()
+                    categories.filter { cat ->
+                        val p = cat.path?.replace(" ", "")?.lowercase()?.toNfc() ?: ""
+                        val n = cat.name?.replace(" ", "")?.lowercase()?.toNfc() ?: ""
+                        // 동의어 처리
+                        p.contains(target) || n.contains(target) ||
+                        (target == "미국" && (p.contains("미드") || p.contains("us"))) ||
+                        (target == "중국" && (p.contains("중드") || p.contains("cn"))) ||
+                        (target == "일본" && (p.contains("일드") || p.contains("jp")))
+                    }
+                } else categories
+                filtered.groupCategoriesToSeries(prefix, filterKeyword)
             } else emptyList()
         } catch (e: Exception) { emptyList() }
     }
@@ -253,22 +203,11 @@ class VideoRepositoryImpl : VideoRepository {
                             movie.copy(videoUrl = "$baseUrl${if (movie.videoUrl.startsWith("/")) "" else "/"}${movie.videoUrl}")
                         } else movie
                     } ?: emptyList()
-
                     val rawPath = cat.path ?: ""
                     val fullPath = if (rawPath.isNotEmpty()) {
                         if (rawPath.startsWith(prefix)) rawPath else "$prefix/$rawPath"
                     } else null
-
-                    Series(
-                        title = cat.name ?: "Unknown",
-                        episodes = episodes,
-                        fullPath = fullPath,
-                        genreIds = cat.genreIds ?: emptyList(),
-                        posterPath = cat.posterPath,
-                        overview = cat.overview,
-                        year = cat.year,
-                        rating = cat.rating
-                    )
+                    Series(title = cat.name ?: "Unknown", episodes = episodes, fullPath = fullPath, genreIds = cat.genreIds ?: emptyList(), posterPath = cat.posterPath, overview = cat.overview, year = cat.year, rating = cat.rating)
                 }
             } else emptyList()
         } catch (e: Exception) { emptyList() }
@@ -277,122 +216,48 @@ class VideoRepositoryImpl : VideoRepository {
     private suspend fun getAirDataInternal(filterKeyword: String? = null): List<Series> = withContext(Dispatchers.Default) {
         try {
             val endpoint = if (filterKeyword == "라프텔") "/air_animations" else if (filterKeyword == "드라마") "/air_dramas" else "/air"
-            
-            val response = client.get("$baseUrl$endpoint") {
-                parameter("lite", "true")
-            }
-            
+            val response = client.get("$baseUrl$endpoint") { parameter("lite", "true") }
             if (response.status != HttpStatusCode.OK) return@withContext emptyList()
-            
             val categories: List<Category> = response.body()
-            
-            val filteredCategories = categories.filter { cat ->
-                val path = cat.path ?: ""
-                val name = cat.name ?: ""
-                if (path.contains("OTT") || name.contains("OTT")) return@filter false
-                if (isGenericFolder(name)) return@filter false
-                
-                if (filterKeyword != null) {
-                    path.contains(filterKeyword) || name.contains(filterKeyword)
-                } else true
-            }
-            
-            filteredCategories.groupCategoriesToSeries("방송중")
-        } catch (e: Exception) {
-            emptyList()
-        }
+            categories.filter { cat ->
+                val p = cat.path ?: ""; val n = cat.name ?: ""
+                if (p.contains("OTT") || n.contains("OTT") || isGenericFolder(n)) return@filter false
+                if (filterKeyword != null) p.contains(filterKeyword) || n.contains(filterKeyword) else true
+            }.groupCategoriesToSeries("방송중", filterKeyword)
+        } catch (e: Exception) { emptyList() }
     }
 
-    private fun List<Category>.groupCategoriesToSeries(basePathPrefix: String = ""): List<Series> {
+    private fun List<Category>.groupCategoriesToSeries(basePathPrefix: String = "", filterKeyword: String? = null): List<Series> {
         val showGroups = mutableMapOf<String, MutableList<Category>>()
-        
-        // 시즌 폴더 패턴 (데이터를 담고 있는 실제 하위 폴더들)
-        val seasonPattern = Regex("""(?i)^\s*(?:Season\s*\d+|시즌\s*\d+|S\d+|\d+기|\d+화|\d+회|Part\s*\d+|파트\s*\d+)\s*$""")
-
+        val skipFolders = mutableSetOf("미국 드라마", "중국 드라마", "일본 드라마", "기타국가 드라마", "다큐", "드라마", "시트콤", "예능", "교양", "다큐멘터리", "미드", "중드", "일드", "외드", "Foreign TV", "ForeignTV", "Korean TV", "KoreanTV", "Documentary", "라프텔", "시리즈", "애니메이션", "국내TV", "외국TV", "영화", "방송중", "라프텔 애니메이션", "OTT 애니메이션", "volume1", "video", "GDS3", "GDRIVE", "NAS", "share").map { it.lowercase().toNfc() }.toMutableSet()
+        filterKeyword?.let { skipFolders.add(it.lowercase().toNfc()) }
+        basePathPrefix.split("/").forEach { skipFolders.add(it.lowercase().toNfc()) }
         for (cat in this) {
-            val path = cat.path ?: continue
-            val parts = path.split("/").filter { it.isNotBlank() }
-            
-            var showTitle = ""
-            var showPath = ""
-            
-            val skipFolders = listOf(
-                "미국 드라마", "중국 드라마", "일본 드라마", "기타국가 드라마", "다큐", "드라마", "시트콤", "예능", "교양", "다큐멘터리",
-                "라프텔", "시리즈", "애니메이션", "국내TV", "외국TV", "영화", "방송중", "라프텔 애니메이션", "OTT 애니메이션",
-                "volume1", "video", "GDS3", "GDRIVE", "VIDEO", "NAS", "share"
-            )
-            
-            // 뒤에서부터 탐색하여 '작품의 실제 이름'을 역추적
-            var found = false
+            val rawPath = cat.path ?: continue
+            val parts = rawPath.split("/").filter { it.isNotBlank() }
+            if (parts.isEmpty()) continue
+            var showTitle = ""; var showPath = ""
             for (i in parts.lastIndex downTo 0) {
-                val part = parts[i].trim()
-                
-                // 건너뛸 폴더명들
-                if (part in skipFolders) continue
-                if (REGEX_INDEX_FOLDER.matches(part) || REGEX_YEAR_FOLDER.matches(part)) continue
-                
-                // 만약 현재 폴더가 Season 1 같은 시즌 폴더면, 제목으로 삼지 않고 부모 폴더로 올라감
-                if (seasonPattern.matches(part)) continue
-                
-                // 유효한 첫 번째 상위 폴더를 제목으로 채택
-                showTitle = part
-                showPath = parts.subList(0, i + 1).joinToString("/")
-                found = true
-                break
+                val part = parts[i].trim().toNfc()
+                val partLower = part.lowercase()
+                if (partLower in skipFolders || REGEX_INDEX_FOLDER.matches(part) || REGEX_YEAR_FOLDER.matches(part) || isGenericTitle(part)) continue
+                showTitle = part; showPath = parts.subList(0, i + 1).joinToString("/"); break
             }
-            
-            // 경로에서 제목을 못 찾았을 경우의 예외 처리
             if (showTitle.isEmpty()) {
-                val catName = cat.name ?: ""
-                if (!isGenericFolder(catName) && !seasonPattern.matches(catName)) {
-                    showTitle = catName
-                } else {
-                    val firstMovie = cat.movies?.firstOrNull()?.title
-                    if (firstMovie != null) {
-                        showTitle = firstMovie.cleanTitle(false).replace(REGEX_GROUP_BY_SERIES, "").trim()
-                    }
-                }
+                val catName = cat.name ?: "Unknown"
+                if (catName.lowercase().toNfc() in skipFolders || isGenericFolder(catName)) continue
+                showTitle = catName; showPath = rawPath
             }
-
-            if (showTitle.isEmpty()) showTitle = "Unknown"
-            if (showPath.isEmpty()) showPath = path
-            
-            // 제목 정규화 및 그룹핑 (공통된 작품명으로 합치기)
             val groupKey = showTitle.cleanTitle(false).replace(REGEX_GROUP_BY_SERIES, "").trim()
-            if (groupKey.isNotEmpty()) {
-                showGroups.getOrPut(groupKey) { mutableListOf() }.add(cat.copy(path = showPath))
-            }
+            if (groupKey.isNotEmpty()) showGroups.getOrPut(groupKey) { mutableListOf() }.add(cat.copy(path = showPath))
         }
-        
         return showGroups.map { (title, cats) ->
-            // 해당 시리즈의 모든 하위 폴더(Season 1, 2 등) 에피소드를 하나로 통합
             val allEpisodes = cats.flatMap { it.movies ?: emptyList() }.map { movie ->
-                if (movie.videoUrl != null && !movie.videoUrl.startsWith("http")) {
-                    movie.copy(videoUrl = "$baseUrl${if (movie.videoUrl.startsWith("/")) "" else "/"}${movie.videoUrl}")
-                } else movie
-            }.distinctBy { it.id }.sortedBy { it.title ?: "" }
-
-            val bestCat = cats.maxByOrNull { 
-                (if (it.posterPath != null) 2 else 0) + (if (!it.genreIds.isNullOrEmpty()) 1 else 0)
-            } ?: cats.first()
-
-            val fullPath = if (basePathPrefix.isNotEmpty()) {
-                if (bestCat.path?.startsWith(basePathPrefix) == true) bestCat.path 
-                else "$basePathPrefix/${bestCat.path}"
-            } else bestCat.path
-
-            Series(
-                title = title, 
-                episodes = allEpisodes,
-                fullPath = fullPath,
-                genreIds = bestCat.genreIds ?: emptyList(),
-                posterPath = bestCat.posterPath,
-                overview = bestCat.overview,
-                year = bestCat.year,
-                rating = bestCat.rating
-            )
-        }
-        .filter { it.title.isNotEmpty() && !isGenericFolder(it.title) }
-        .sortedBy { it.title }
+                if (movie.videoUrl != null && !movie.videoUrl.startsWith("http")) movie.copy(videoUrl = "$baseUrl${if (movie.videoUrl.startsWith("/")) "" else "/"}${movie.videoUrl}") else movie
+            }.distinctBy { it.videoUrl ?: it.id }.sortedBy { it.title ?: "" }
+            val bestCat = cats.maxByOrNull { (if (it.posterPath != null) 2 else 0) + (if (!it.genreIds.isNullOrEmpty()) 1 else 0) } ?: cats.first()
+            val fullPath = if (basePathPrefix.isNotEmpty()) { if (bestCat.path?.startsWith(basePathPrefix) == true) bestCat.path else "$basePathPrefix/${bestCat.path}" } else bestCat.path
+            Series(title = title, episodes = allEpisodes, fullPath = fullPath, genreIds = bestCat.genreIds ?: emptyList(), posterPath = bestCat.posterPath, overview = bestCat.overview, year = bestCat.year, rating = bestCat.rating)
+        }.filter { it.title.isNotEmpty() && !isGenericFolder(it.title) }.sortedBy { it.title }
     }
 }
