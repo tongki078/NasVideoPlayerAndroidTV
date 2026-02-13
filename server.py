@@ -7,7 +7,7 @@ from datetime import datetime
 app = Flask(__name__)
 CORS(app)
 
-# MIME 타입 추가 등록 (재생 관련 문제 방지)
+# MIME 타입 추가 등록
 if not mimetypes.types_map.get('.mkv'): mimetypes.add_type('video/x-matroska', '.mkv')
 if not mimetypes.types_map.get('.ts'): mimetypes.add_type('video/mp2t', '.ts')
 if not mimetypes.types_map.get('.tp'): mimetypes.add_type('video/mp2t', '.tp')
@@ -18,7 +18,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "9.9" # 버전 업데이트로 로직 갱신 강제
+CACHE_VERSION = "10.1"
 
 # TMDB API KEY
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk".strip()
@@ -77,12 +77,12 @@ def clean_title_complex(title):
     year = year_match.group().replace('(', '').replace(')', '') if year_match else None
     cleaned = REGEX_YEAR.sub(' ', cleaned)
     cleaned = REGEX_EP_MARKER.sub(' ', cleaned)
-    cleaned = re.sub(r'\[.*?\]|\(.*?\)', ' ', cleaned)
 
-    # 숫자 사이의 점(소수점)은 유지하도록 수정
+    # 괄호 안의 내용이 제목일 수 있으므로 완전히 삭제하지 않고 내부 정보만 활용
+    cleaned = re.sub(r'\[.*?\]', ' ', cleaned)
+    cleaned = re.sub(r'\(.*?\)', ' ', cleaned)
     cleaned = re.sub(r'(?<!\d)\.|\.(?!\d)', ' ', cleaned)
     cleaned = re.sub(r'[\_\-!?【】『』「」"\'#@*※:]', ' ', cleaned)
-
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned, year
 
@@ -106,7 +106,19 @@ def resolve_nas_path(app_path):
         return resolved, type_code
     return None, None
 
-# --- [TMDB 및 메타데이터] ---
+def get_cached_tmdb_info(title):
+    """실시간 네트워크 호출 없이 캐시된 TMDB 정보만 반환"""
+    if not title: return {}
+    title_pure = nfc(title).split('/')[-1]
+    cp = os.path.join(TMDB_CACHE_DIR, f"{hashlib.md5(title_pure.encode()).hexdigest()}.json")
+    if os.path.exists(cp):
+        try:
+            with open(cp, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data if not data.get('failed') else {}
+        except: pass
+    return {}
+
 def get_tmdb_info_server(title, ignore_cache=False, log_path=None, search_override=None):
     if not title: return {"failed": True}
     title_pure = nfc(title).split('/')[-1]
@@ -149,13 +161,6 @@ def get_tmdb_info_server(title, ignore_cache=False, log_path=None, search_overri
     with open(cp, 'w', encoding='utf-8') as f: json.dump({"failed": True}, f, ensure_ascii=False)
     return {"failed": True}
 
-def attach_tmdb_info(cat):
-    name = cat.get('name')
-    if name:
-        info = get_tmdb_info_server(name, log_path=cat.get('path'))
-        cat.update(info)
-    return cat
-
 def fetch_metadata_async(force_all=False):
     log("🚀 [METADATA] 백그라운드 매칭 시작")
     tasks = []
@@ -176,7 +181,6 @@ def fetch_metadata_async(force_all=False):
     build_home_recommend(); save_cache()
     log("🏁 [METADATA] 모든 작업 완료")
 
-# --- [스캔 및 탐색] ---
 def scan_recursive(bp, prefix, rb=None, display_name=None):
     cats = []
     exts = VIDEO_EXTS
@@ -246,7 +250,6 @@ def perform_full_scan(reason="필요"):
     log(f"🔄 사유: {reason} -> 백그라운드 탐색 시작")
     t = [("애니메이션", ANI_DIR, "anim_all", "animations_all"), ("외국TV", FOREIGN_TV_DIR, "ftv", "foreigntv"), ("국내TV", KOREAN_TV_DIR, "ktv", "koreantv"), ("영화", MOVIES_ROOT_DIR, "movie", "movies"), ("방송중", AIR_DIR, "air", "air")]
     for label, path, prefix, cache_key in t:
-        if GLOBAL_CACHE.get(cache_key) and len(GLOBAL_CACHE[cache_key]) > 0: continue
         try:
             results = scan_recursive(path, prefix, display_name=label)
             GLOBAL_CACHE[cache_key] = results
@@ -307,39 +310,19 @@ def process_data(data, lite=False):
         result = list(data); random.shuffle(result)
     if offset: result = result[offset:]
     if limit: result = result[:limit]
+
     if lite:
-        # 상세 화면에서 필요한 정보를 유지하도록 필드 추가 (movies 제외)
         return [{"name": c.get('name',''), "path": c.get('path',''), "genreIds": c.get('genreIds', []), "posterPath": c.get('posterPath'), "year": c.get('year'), "overview": c.get('overview'), "rating": c.get('rating'), "seasonCount": c.get('seasonCount'), "failed": c.get('failed', False)} for c in result]
     return result
 
 def filter_by_path(pool, keyword):
-    # 동의어 사전 강화 (탭별 영상 누락 방지)
-    synonyms = {
-        "미국": ["미국", "미드", "us", "usa", "american"],
-        "중국": ["중국", "중드", "cn", "china", "chinese", "chn"],
-        "일본": ["일본", "일드", "jp", "japan", "japanese", "jpn"],
-        "기타": ["기타", "etc", "foreign"],
-        "다큐": ["다큐", "docu", "documentary"],
-        "드라마": ["드라마", "drama"],
-        "시트콤": ["시트콤", "sitcom"],
-        "예능": ["예능", "variety", "entertainment", "show", "variety show"],
-        "교양": ["교양", "edu", "culture", "information"],
-        "다큐멘터리": ["다큐", "docu", "documentary", "다큐멘터리"]
-    }
-    raw_targets = synonyms.get(keyword, [keyword])
-    targets = [nfc(t).lower() for t in raw_targets]
-    res = []
-    for c in pool:
-        p = nfc(c.get('path', '')).lower()
-        n = nfc(c.get('name', '')).lower()
-        # 경로명이나 폴더명에 키워드가 포함되면 필터링 성공
-        if any(t in p or t in n for t in targets): res.append(c)
-    return res
+    synonyms = {"미국": ["미국", "미드", "us", "usa"], "중국": ["중국", "중드", "cn", "china"], "일본": ["일본", "일드", "jp", "japan"], "기타": ["기타", "etc"], "다큐": ["다큐", "docu"], "드라마": ["드라마", "drama"], "시트콤": ["시트콤", "sitcom"], "예능": ["예능", "variety"], "교양": ["교양", "edu"], "다큐멘터리": ["다큐", "docu", "다큐멘터리"]}
+    targets = [nfc(t).lower() for t in synonyms.get(keyword, [keyword])]
+    return [c for c in pool if any(t in nfc(c.get('path','')).lower() or t in nfc(c.get('name','')).lower() for t in targets)]
 
 @app.route('/home')
 def get_home(): return jsonify(GLOBAL_CACHE.get("home_recommend", []))
 
-# 외국TV
 @app.route('/foreigntv')
 def get_ftv(): return jsonify(process_data(GLOBAL_CACHE.get("foreigntv", []), request.args.get('lite') == 'true'))
 @app.route('/ftv_us')
@@ -353,7 +336,6 @@ def get_ftv_docu(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get(
 @app.route('/ftv_etc')
 def get_ftv_etc(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("foreigntv", []), "기타"), request.args.get('lite') == 'true'))
 
-# 국내TV
 @app.route('/koreantv')
 def get_ktv(): return jsonify(process_data(GLOBAL_CACHE.get("koreantv", []), request.args.get('lite') == 'true'))
 @app.route('/ktv_drama')
@@ -367,7 +349,6 @@ def get_ktv_edu(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("
 @app.route('/ktv_docu')
 def get_ktv_docu(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("koreantv", []), "다큐멘터리"), request.args.get('lite') == 'true'))
 
-# 애니메이션
 @app.route('/animations_all')
 def get_anim(): return jsonify(process_data(GLOBAL_CACHE.get("animations_all", []), request.args.get('lite') == 'true'))
 @app.route('/anim_raftel')
@@ -375,7 +356,6 @@ def get_anim_r(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("a
 @app.route('/anim_series')
 def get_anim_s(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "시리즈"), request.args.get('lite') == 'true'))
 
-# 영화
 @app.route('/movies')
 @app.route('/movies_all')
 @app.route('/movies_latest')
@@ -390,36 +370,44 @@ def get_movies():
 @app.route('/search')
 def search_videos():
     q = request.args.get('q', '').lower()
-    mapping = [("영화", GLOBAL_CACHE.get('movies', [])), ("애니메이션", GLOBAL_CACHE.get('animations_all', [])), ("외국TV", GLOBAL_CACHE.get('foreigntv', [])), ("국내TV", GLOBAL_CACHE.get('koreantv', [])), ("방송중", GLOBAL_CACHE.get('air', []))]
+    lite_req = request.args.get('lite') == 'true'
     res = []
-    for prefix, pool in mapping:
-        for cat in pool:
-            if q in cat['name'].lower():
-                nc = cat.copy(); nc['movies'] = []; res.append(nc)
-    return jsonify(process_data(res, lite=True))
+    for k in ["movies", "animations_all", "foreigntv", "koreantv", "air"]:
+        for cat in GLOBAL_CACHE.get(k, []):
+            if q in cat['name'].lower(): res.append(cat.copy())
+    return jsonify(process_data(res, lite=lite_req))
 
 @app.route('/list')
 def get_list():
     path = request.args.get('path')
     if not path: return jsonify([])
+    log(f"🔎 [LIST] 경로 요청: {path}")
     real_path, type_code = resolve_nas_path(path)
-    if not real_path or not os.path.exists(real_path): return jsonify([])
+    if not real_path or not os.path.exists(real_path):
+        log(f"❌ [LIST] 경로 해석 실패: {path}")
+        return jsonify([])
     cat_prefix = nfc(path.split('/')[0])
     base_dir = PATH_MAP.get(cat_prefix, (None, None))[0]
     res, movies = [], []
-    for entry in sorted(os.listdir(real_path)):
-        fe = os.path.join(real_path, entry)
-        if os.path.isdir(fe):
-            if any(ex in entry for ex in EXCLUDE_FOLDERS): continue
-            name = nfc(entry)
-            rel_path = nfc(os.path.relpath(fe, base_dir))
-            # 폴더 클릭 시 하위 목록 조회를 위해 정보 전송
-            res.append(attach_tmdb_info({"name": name, "path": f"{cat_prefix}/{rel_path}"}))
-        elif entry.lower().endswith(VIDEO_EXTS): movies.append(get_movie_info(fe, base_dir, type_code))
+    try:
+        for entry in sorted(os.listdir(real_path)):
+            fe = os.path.join(real_path, entry)
+            if os.path.isdir(fe):
+                if any(ex in entry for ex in EXCLUDE_FOLDERS): continue
+                name = nfc(entry)
+                rel_path = nfc(os.path.relpath(fe, base_dir))
+                # 실시간 TMDB 호출 대신 캐시된 정보만 사용 (응답 속도 개선)
+                item = {"name": name, "path": f"{cat_prefix}/{rel_path}"}
+                item.update(get_cached_tmdb_info(name))
+                res.append(item)
+            elif entry.lower().endswith(VIDEO_EXTS):
+                movies.append(get_movie_info(fe, base_dir, type_code))
+    except: pass
     if movies:
         rel_path = nfc(os.path.relpath(real_path, base_dir))
-        # 파일이 있는 경우 movies 리스트를 포함하여 반환 (재생 버튼 활성화의 핵심)
-        res.append({"name": nfc(os.path.basename(real_path)), "path": f"{cat_prefix}/{rel_path}", "movies": movies})
+        info = {"name": nfc(os.path.basename(real_path)), "path": f"{cat_prefix}/{rel_path}", "movies": movies}
+        info.update(get_cached_tmdb_info(info['name']))
+        res.append(info)
     return jsonify(res)
 
 @app.route('/video_serve')

@@ -24,7 +24,6 @@ class VideoRepositoryImpl : VideoRepository {
     private fun isGenericFolder(name: String?): Boolean {
         if (name.isNullOrBlank()) return true
         val n = name.trim().toNfc()
-        // TitleUtils의 통합 로직 사용
         return isGenericTitle(n) || n.contains("Search Results", ignoreCase = true)
     }
 
@@ -81,7 +80,7 @@ class VideoRepositoryImpl : VideoRepository {
         try {
             val response = client.get("$baseUrl/search") {
                 parameter("q", query)
-                parameter("lite", "true") 
+                // 상세 페이지에서의 수집을 위해 lite=true를 제거하여 실제 에피소드 정보를 가져옴
                 if (category != "전체") parameter("category", category)
             }
             val results: List<Category> = response.body()

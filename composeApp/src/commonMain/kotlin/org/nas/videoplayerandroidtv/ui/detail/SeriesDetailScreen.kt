@@ -411,18 +411,29 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
             val parts = path.split("/").filter { it.isNotBlank() }
             if (parts.isEmpty()) return@async emptyList<Movie>()
             
-            val folderName = parts.last().toNfc()
-            val isSeasonFolder = isGenericTitle(folderName) || 
-                                 folderName.contains(Regex("(?i)Season|시즌|S\\d+|Part|파트|\\d+기"))
+            // 마지막 경로가 시즌 형태(S01, Season 1 등)인지 확인
+            val lastPart = parts.last().toNfc()
+            val isSeasonPart = isGenericTitle(lastPart) || 
+                               lastPart.contains(Regex("(?i)Season|시즌|S\\d+|Part|파트|\\d+기"))
             
-            // 만약 현재가 시즌 폴더면 부모 폴더(시리즈 루트)를 기준으로 모든 시즌 탐색
-            val rootPath = if (isSeasonFolder && parts.size > 1) path.substringBeforeLast("/") else path
+            // 시리즈 루트 경로 결정
+            val rootPath = if (isSeasonPart && parts.size > 1) path.substringBeforeLast("/") else path
+            
+            // 루트 폴더의 콘텐츠를 가져옴
             val rootContent = repository.getCategoryList(rootPath)
             
-            rootContent.map { cat ->
+            // [강화] 루트 폴더 자체에 이미 영상이 있는 경우 (시즌 구분 없는 경우)
+            val rootMovies = rootContent.flatMap { it.movies ?: emptyList() }
+            foundMovies.addAll(rootMovies)
+
+            // 각 하위 폴더(시즌 폴더들) 탐색
+            rootContent.filter { it.movies == null || it.movies!!.isEmpty() }.map { cat ->
                 async {
                     val subPath = cat.path ?: "$rootPath/${cat.name}"
-                    repository.getCategoryList(subPath).flatMap { it.movies ?: emptyList() }
+                    // 자기 자신(루트)을 다시 호출하지 않도록 방지
+                    if (subPath != rootPath) {
+                        repository.getCategoryList(subPath).flatMap { it.movies ?: emptyList() }
+                    } else emptyList()
                 }
             }.awaitAll().forEach { foundMovies.addAll(it) }
             
