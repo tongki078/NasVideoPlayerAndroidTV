@@ -293,7 +293,7 @@ private fun TvButton(
     }
 }
 
-data class Season(val name: String, val episodes: List<Movie>)
+data class Season(val number: Int, val name: String, val episodes: List<Movie>)
 private data class SeriesDetailState(
     val seasons: List<Season> = emptyList(),
     val metadata: TmdbMetadata? = null,
@@ -362,7 +362,6 @@ private fun EpisodeOverlay(
             Column(modifier = Modifier.weight(0.65f)) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text(text = state.seasons.getOrNull(state.selectedSeasonIndex)?.name ?: "회차 정보", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                    Text(text = "[뒤로가기] 닫기", color = Color.Gray, fontSize = 14.sp)
                 }
                 Spacer(Modifier.height(24.dp))
                 val episodes = state.seasons.getOrNull(state.selectedSeasonIndex)?.episodes ?: emptyList()
@@ -386,14 +385,11 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
     val cleanTitle = series.title.cleanTitle(includeYear = false)
     val rawTitle = series.title.toNfc()
     
-    // 1. 이미 series 객체에 포함된 에피소드들 추가
     collectedEpisodes.addAll(series.episodes)
 
-    // 2. 제목 기반 전역 검색 및 경로 탐색 병렬 진행
     val searchTask = async(Dispatchers.IO) {
         val searchResults = mutableListOf<Movie>()
         try { 
-            // 다양한 쿼리 변이형으로 검색 범위 극대화
             val queries = listOf(rawTitle, cleanTitle, rawTitle.replace("-", " "), rawTitle.replace("-", ""))
             queries.distinct().forEach { query ->
                 repository.searchVideos(query).forEach { foundSeries ->
@@ -411,28 +407,21 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
             val parts = path.split("/").filter { it.isNotBlank() }
             if (parts.isEmpty()) return@async emptyList<Movie>()
             
-            // 마지막 경로가 시즌 형태(S01, Season 1 등)인지 확인
             val lastPart = parts.last().toNfc()
             val isSeasonPart = isGenericTitle(lastPart) || 
                                lastPart.contains(Regex("(?i)Season|시즌|S\\d+|Part|파트|\\d+기"))
             
-            // 시리즈 루트 경로 결정
             val rootPath = if (isSeasonPart && parts.size > 1) path.substringBeforeLast("/") else path
+            val rootContent = repository.getCategoryList(rootPath, limit = 100)
             
-            // 루트 폴더의 콘텐츠를 가져옴
-            val rootContent = repository.getCategoryList(rootPath)
-            
-            // [강화] 루트 폴더 자체에 이미 영상이 있는 경우 (시즌 구분 없는 경우)
             val rootMovies = rootContent.flatMap { it.movies ?: emptyList() }
             foundMovies.addAll(rootMovies)
 
-            // 각 하위 폴더(시즌 폴더들) 탐색
             rootContent.filter { it.movies == null || it.movies!!.isEmpty() }.map { cat ->
                 async {
                     val subPath = cat.path ?: "$rootPath/${cat.name}"
-                    // 자기 자신(루트)을 다시 호출하지 않도록 방지
                     if (subPath != rootPath) {
-                        repository.getCategoryList(subPath).flatMap { it.movies ?: emptyList() }
+                        repository.getCategoryList(subPath, limit = 200).flatMap { it.movies ?: emptyList() }
                     } else emptyList()
                 }
             }.awaitAll().forEach { foundMovies.addAll(it) }
@@ -441,7 +430,6 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
         foundMovies
     }
 
-    // 3. 결과 통합 및 정제 (URL 및 ID 기준 중복 제거)
     val totalMovies = collectedEpisodes + searchTask.await() + pathTask.await()
     val uniqueEpisodes = totalMovies.distinctBy { it.videoUrl ?: it.id ?: it.title }.map { movie ->
         if (movie.videoUrl?.startsWith("http") == false) {
@@ -449,15 +437,13 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
         } else movie
     }
     
-    // 4. 시즌별 그룹화 (파일명 정밀 분석 활용)
     val seasonsMap = uniqueEpisodes.groupBy { it.title?.extractSeason() ?: 1 }
-    
     val finalSeasons = seasonsMap.map { (num, eps) ->
-        Season(name = "시즌 $num", episodes = eps.sortedByEpisode())
-    }.sortedBy { it.name }
+        Season(number = num, name = "시즌 $num", episodes = eps.sortedByEpisode())
+    }.sortedBy { it.number }
 
     if (finalSeasons.isEmpty() && uniqueEpisodes.isNotEmpty()) {
-        listOf(Season(name = "시즌 1", episodes = uniqueEpisodes.sortedByEpisode()))
+        listOf(Season(number = 1, name = "시즌 1", episodes = uniqueEpisodes.sortedByEpisode()))
     } else {
         finalSeasons
     }
