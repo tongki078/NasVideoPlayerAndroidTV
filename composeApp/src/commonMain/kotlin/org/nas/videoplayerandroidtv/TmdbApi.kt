@@ -16,6 +16,10 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import org.nas.videoplayerandroidtv.data.TmdbCacheDataSource
+import org.nas.videoplayerandroidtv.util.TitleUtils
+import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
+import org.nas.videoplayerandroidtv.util.TitleUtils.extractYear
+import org.nas.videoplayerandroidtv.util.TitleUtils.extractTmdbId
 
 // TMDB 관련 상수
 const val TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk"
@@ -110,94 +114,6 @@ private val tmdbInFlightRequests = mutableMapOf<String, Deferred<TmdbMetadata?>>
 private val tmdbMutex = Mutex()
 
 internal var persistentCache: TmdbCacheDataSource? = null
-
-private val REGEX_EXT = Regex("""\.[a-zA-Z0-9]{2,4}$""")
-private val REGEX_YEAR = Regex("""\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)""")
-private val REGEX_BRACKETS = Regex("""\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\}|$)|\【.*?(?:\】|$)|\『.*?(?:\』|$)|\「.*?(?:\」|$)""")
-private val REGEX_TMDB_HINT = Regex("""\{tmdb[\s-]*(\d+)\}""")
-// NCIS 하와이 제목 유지를 위해 정규식 수정: '하'가 단독 단어일 때만 상/하 구분으로 제거
-private val REGEX_JUNK_KEYWORDS = Regex("""(?i)\s*(?:더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|최종화|TV판|완결|속편|(?<=\s|^)[상하](?=\s|$)|\d+부|파트)\s*""")
-private val REGEX_TECHNICAL_TAGS = Regex("""(?i)[.\s_](?:\d{3,4}p|WEB-DL|WEBRip|Bluray|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AAC|DTS|AC3|DDP|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI).*""")
-private val REGEX_SPECIAL_CHARS = ("""[\[\]()._\-!?【】『』「」"'#@*※×]""").toRegex()
-private val REGEX_SPACES = Regex("""\s+""")
-private val REGEX_EP_MARKER = Regex("""(?i)(?:^|[.\s_]|(?<=[가-힣]))(?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+).*""")
-
-private val REGEX_INDEX_FOLDER = Regex("""(?i)^\s*([0-9A-Z가-힣ㄱ-ㅎ]|0Z|0-Z|가-하|[0-9]-[0-9]|[A-Z]-[A-Z]|[가-힣]-[가-힣])\s*$""")
-private val REGEX_YEAR_FOLDER = Regex("""(?i)^\s*(?:\(\d{4}\)|\d{4}|\d{4}\s*년)\s*$""") 
-private val REGEX_SEASON_FOLDER = Regex("""(?i)^\s*(?:Season\s*\d+|시즌\s*\d+(?:\s*년)?|Part\s*\d+|파트\s*\d+|S\d+|\d+기|\d+화|\d+회|특집|Special|Extras|Bonus|미분류|기타|새\s*폴더)\s*$""")
-
-fun isGenericTitle(name: String?): Boolean {
-    if (name.isNullOrBlank()) return true
-    val n = name.trim().toNfc()
-    if (REGEX_INDEX_FOLDER.matches(n) || REGEX_YEAR_FOLDER.matches(n) || REGEX_SEASON_FOLDER.matches(n)) return true
-    val seasonKeywords = Regex("""(?i)Season\s*\d+|시즌\s*\d+|Part\s*\d+|파트\s*\d+|S\d+|\d+기|\d+화|\d+회""")
-    val cleaned = seasonKeywords.replace(n, "").trim().replace(REGEX_SPECIAL_CHARS, "").trim()
-    return cleaned.isEmpty() || (cleaned.length < 2 && !cleaned.any { it.isLetter() })
-}
-
-fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = true, preserveSubtitle: Boolean = false): String {
-    val normalized = this.toNfc()
-    var cleaned = normalized
-    cleaned = cleaned.replace("×", "x").replace("✕", "x")
-    cleaned = REGEX_TMDB_HINT.replace(cleaned, "")
-    cleaned = REGEX_EXT.replace(cleaned, "")
-    cleaned = REGEX_EP_MARKER.replace(cleaned, "") 
-    val yearMatch = REGEX_YEAR.find(cleaned)
-    val yearStr = yearMatch?.value?.replace("(", "")?.replace(")", "")
-    cleaned = REGEX_YEAR.replace(cleaned, " ")
-    cleaned = REGEX_BRACKETS.replace(cleaned, " ")
-    cleaned = cleaned.replace("(자막)", "").replace("(더빙)", "").replace("[자막]", "").replace("[더빙]", "")
-    cleaned = REGEX_JUNK_KEYWORDS.replace(cleaned, " ")
-    cleaned = REGEX_TECHNICAL_TAGS.replace(cleaned, "")
-    
-    // 9-1-1 같은 제목을 보존하기 위해 하이픈 유지 로직 강화
-    if (!keepAfterHyphen && cleaned.contains("-")) {
-        val parts = cleaned.split("-")
-        val firstPart = parts[0].trim()
-        val afterHyphen = parts.getOrNull(1)?.trim() ?: ""
-        // 뒤에 오는게 순수 숫자가 아니거나 너무 길면 잘라냄 (NCIS: LA - 01화 같은 경우 대응)
-        if (!(afterHyphen.length <= 3 && afterHyphen.all { it.isDigit() })) {
-            cleaned = firstPart
-        }
-    }
-    
-    cleaned = cleaned.replace(":", " ")
-    cleaned = REGEX_SPECIAL_CHARS.replace(cleaned, " ")
-    cleaned = REGEX_SPACES.replace(cleaned, " ").trim()
-
-    if (cleaned.length < 2) {
-        val backup = normalized.replace(REGEX_TMDB_HINT, "").replace(REGEX_EXT, "").trim()
-        return if (backup.length >= 2) backup else normalized
-    }
-    return if (includeYear && yearStr != null) "$cleaned ($yearStr)" else cleaned
-}
-
-fun String.extractYear(): String? = REGEX_YEAR.find(this)?.value?.replace("(", "")?.replace(")", "")
-fun String.extractTmdbId(): Int? = REGEX_TMDB_HINT.find(this)?.groupValues?.get(1)?.toIntOrNull()
-
-fun String.extractEpisode(): String? {
-    Regex("""(?i)[Ee](\d+)""").find(this)?.let { return "${it.groupValues[1].toInt()}화" }
-    Regex("""(\d+)\s*(?:화|회|화|회)""").find(this)?.let { return "${it.groupValues[1].toInt()}화" }
-    return null
-}
-
-fun String.extractSeason(): Int {
-    Regex("""(?i)[Ss](\d+)""").find(this)?.let { return it.groupValues[1].toInt() }
-    Regex("""(?i)Season\s*(\d+)""").find(this)?.let { return it.groupValues[1].toInt() }
-    Regex("""(?i)Part\s*(\d+)""").find(this)?.let { return it.groupValues[1].toInt() }
-    Regex("""(\d+)\s*(?:기|기)""").find(this)?.let { return it.groupValues[1].toInt() }
-    return 1
-}
-
-fun String.prettyTitle(): String {
-    val ep = this.extractEpisode()
-    val base = this.cleanTitle(keepAfterHyphen = true, includeYear = false)
-    if (ep == null) return base
-    return if (base.contains(" - ")) { 
-        val split = base.split(" - ", limit = 2)
-        "${split[0]} $ep - ${split[1]}" 
-    } else "$base $ep"
-}
 
 suspend fun fetchTmdbMetadata(title: String, typeHint: String? = null, isAnimation: Boolean = false): TmdbMetadata {
     if (TMDB_API_KEY.isBlank()) return TmdbMetadata()

@@ -78,7 +78,11 @@ def clean_title_complex(title):
     cleaned = REGEX_YEAR.sub(' ', cleaned)
     cleaned = REGEX_EP_MARKER.sub(' ', cleaned)
     cleaned = re.sub(r'\[.*?\]|\(.*?\)', ' ', cleaned)
-    cleaned = re.sub(r'[._\-!?【】『』「」"\'#@*※:]', ' ', cleaned)
+
+    # 숫자 사이의 점(소수점)은 유지하도록 수정
+    cleaned = re.sub(r'(?<!\d)\.|\.(?!\d)', ' ', cleaned)
+    cleaned = re.sub(r'[\_\-!?【】『』「」"\'#@*※:]', ' ', cleaned)
+
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned, year
 
@@ -120,7 +124,7 @@ def get_tmdb_info_server(title, ignore_cache=False, log_path=None, search_overri
         with open(cp, 'w', encoding='utf-8') as f: json.dump(info, f, ensure_ascii=False)
         return info
 
-    params = {"query": ct, "language": "ko-KR", "include_adult": "false", "region": "KR"}
+    params = {"query": ct, "language": "ko-KR", "include_adult": "true", "region": "KR"}
     if year: params["year"] = year
     headers = {"Authorization": f"Bearer {TMDB_API_KEY}"} if TMDB_API_KEY.startswith("eyJ") else {}
     if not headers: params["api_key"] = TMDB_API_KEY

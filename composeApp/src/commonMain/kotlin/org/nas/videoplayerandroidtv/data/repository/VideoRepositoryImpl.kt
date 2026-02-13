@@ -8,18 +8,14 @@ import io.ktor.http.*
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.domain.model.*
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
-import org.nas.videoplayerandroidtv.cleanTitle
+import org.nas.videoplayerandroidtv.util.TitleUtils
+import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
+import org.nas.videoplayerandroidtv.util.TitleUtils.isGenericTitle
+import org.nas.videoplayerandroidtv.util.TitleUtils.REGEX_GROUP_BY_SERIES
+import org.nas.videoplayerandroidtv.util.TitleUtils.REGEX_INDEX_FOLDER
+import org.nas.videoplayerandroidtv.util.TitleUtils.REGEX_YEAR_FOLDER
 import org.nas.videoplayerandroidtv.toNfc
-import org.nas.videoplayerandroidtv.isGenericTitle
 import kotlinx.coroutines.*
-
-private val REGEX_GROUP_BY_SERIES = Regex(
-    """(?i)[\s._-]*(?:s\d{1,2}e\d{1,3} |season\s*\d{1,2} |s\d{1,2} |ep\d{1,3}|e\d{1,3}|\d{1,3}화|\d{1,3}회|\d+기|part\s*\d|극장판|완결|special|extras|ova|720p|1080p|2160p|4k|h264|h265|x264|x265|bluray|web-dl|aac|mp4|mkv|avi|\([^)]*\)|\[[^\]]*\]).*|(?:\s+\d+\s*$)""", 
-    RegexOption.IGNORE_CASE
-)
-private val REGEX_INDEX_FOLDER = Regex("""(?i)^\s*(?:[0-9A-Z가-힣ㄱ-ㅎ]|0Z|0-Z|가-하|[0-9]-[0-9]|[A-Z]-[A-Z]|[가-힣]-[가-힣])\s*$""")
-private val REGEX_YEAR_FOLDER = Regex("""(?i)^\s*(?:\(\d{4}\)|\d{4}|\d{4}\s*년)\s*$""") 
-private val REGEX_GENERIC_MANAGEMENT_FOLDER = Regex("""(?i)^\s*(?:특집|Special|Extras|Bonus|미분류|기타|새\s*폴더)\s*$""")
 
 class VideoRepositoryImpl : VideoRepository {
     private val client = NasApiClient.client
@@ -28,11 +24,8 @@ class VideoRepositoryImpl : VideoRepository {
     private fun isGenericFolder(name: String?): Boolean {
         if (name.isNullOrBlank()) return true
         val n = name.trim().toNfc()
-        return isGenericTitle(n) || 
-               REGEX_INDEX_FOLDER.matches(n) || 
-               REGEX_YEAR_FOLDER.matches(n) || 
-               REGEX_GENERIC_MANAGEMENT_FOLDER.matches(n) ||
-               n.contains("Search Results", ignoreCase = true)
+        // TitleUtils의 통합 로직 사용
+        return isGenericTitle(n) || n.contains("Search Results", ignoreCase = true)
     }
 
     override suspend fun getHomeRecommendations(): List<HomeSection> = try {
@@ -170,13 +163,11 @@ class VideoRepositoryImpl : VideoRepository {
             }
             if (response.status == HttpStatusCode.OK) {
                 val categories: List<Category> = response.body()
-                // [강화] 모든 엔드포인트에서 filterKeyword가 있으면 무조건 클라이언트에서도 한 번 더 필터링
                 val filtered = if (filterKeyword != null) {
                     val target = filterKeyword.replace(" ", "").lowercase().toNfc()
                     categories.filter { cat ->
                         val p = cat.path?.replace(" ", "")?.lowercase()?.toNfc() ?: ""
                         val n = cat.name?.replace(" ", "")?.lowercase()?.toNfc() ?: ""
-                        // 동의어 처리
                         p.contains(target) || n.contains(target) ||
                         (target == "미국" && (p.contains("미드") || p.contains("us"))) ||
                         (target == "중국" && (p.contains("중드") || p.contains("cn"))) ||
