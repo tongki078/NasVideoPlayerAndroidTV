@@ -7,13 +7,18 @@ from datetime import datetime
 app = Flask(__name__)
 CORS(app)
 
+# MIME 타입 추가 등록 (재생 관련 문제 방지)
+if not mimetypes.types_map.get('.mkv'): mimetypes.add_type('video/x-matroska', '.mkv')
+if not mimetypes.types_map.get('.ts'): mimetypes.add_type('video/mp2t', '.ts')
+if not mimetypes.types_map.get('.tp'): mimetypes.add_type('video/mp2t', '.tp')
+
 # --- [1. 설정 및 경로] ---
 MY_IP = "192.168.0.2"
 DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "9.7" # 버전을 그대로 유지하여 4일간의 스캔 데이터 보존
+CACHE_VERSION = "9.9" # 버전 업데이트로 로직 갱신 강제
 
 # TMDB API KEY
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk".strip()
@@ -58,6 +63,7 @@ def log(msg):
 def nfc(text): return unicodedata.normalize('NFC', text) if text else ""
 def nfd(text): return unicodedata.normalize('NFD', text) if text else ""
 
+# --- [정규식 및 클리닝] ---
 REGEX_EXT = re.compile(r'\.[a-zA-Z0-9]{2,4}$')
 REGEX_YEAR = re.compile(r'\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)')
 REGEX_EP_MARKER = re.compile(r'(?i)(?:^|[.\s_]|(?<=[가-힣]))(?:S\d+E\d+|S\d+|E\d+|\d+\s*(?:화|회|기)|Season\s*\d+|Part\s*\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+).*')
@@ -96,6 +102,7 @@ def resolve_nas_path(app_path):
         return resolved, type_code
     return None, None
 
+# --- [TMDB 및 메타데이터] ---
 def get_tmdb_info_server(title, ignore_cache=False, log_path=None, search_override=None):
     if not title: return {"failed": True}
     title_pure = nfc(title).split('/')[-1]
@@ -104,16 +111,20 @@ def get_tmdb_info_server(title, ignore_cache=False, log_path=None, search_overri
         try:
             with open(cp, 'r', encoding='utf-8') as f: return json.load(f)
         except: pass
+
     query_text = search_override if search_override else title_pure
     ct, year = clean_title_complex(query_text)
+
     if not search_override and (REGEX_FORBIDDEN_TITLE.match(ct) or ct.lower() in ["season", "series", "video", "episode"]):
         info = {"failed": True, "forbidden": True}
         with open(cp, 'w', encoding='utf-8') as f: json.dump(info, f, ensure_ascii=False)
         return info
+
     params = {"query": ct, "language": "ko-KR", "include_adult": "false", "region": "KR"}
     if year: params["year"] = year
     headers = {"Authorization": f"Bearer {TMDB_API_KEY}"} if TMDB_API_KEY.startswith("eyJ") else {}
     if not headers: params["api_key"] = TMDB_API_KEY
+
     try:
         resp = requests.get(f"{TMDB_BASE_URL}/search/multi", params=params, headers=headers, timeout=5).json()
         results = [r for r in resp.get('results', []) if r.get('media_type') in ['movie', 'tv']]
@@ -161,10 +172,11 @@ def fetch_metadata_async(force_all=False):
     build_home_recommend(); save_cache()
     log("🏁 [METADATA] 모든 작업 완료")
 
+# --- [스캔 및 탐색] ---
 def scan_recursive(bp, prefix, rb=None, display_name=None):
     cats = []
     exts = VIDEO_EXTS
-    p, rel_base = get_real_path(bp), get_real_path(rb) if rb else get_real_path(bp)
+    p, rel_base = nfc(get_real_path(bp)), nfc(get_real_path(rb) if rb else get_real_path(bp))
     all_f = []
     stack = [p]
     while stack:
@@ -176,12 +188,12 @@ def scan_recursive(bp, prefix, rb=None, display_name=None):
                         if not any(ex in entry.name for ex in EXCLUDE_FOLDERS) and not entry.name.startswith('.'):
                             stack.append(entry.path)
                     elif entry.is_file() and entry.name.lower().endswith(exts):
-                        all_f.append(entry.path)
+                        all_f.append(nfc(entry.path))
         except: pass
     all_f.sort()
     curr, movies = "", []
     for fp in all_f:
-        dp = os.path.dirname(fp)
+        dp = nfc(os.path.dirname(fp))
         if dp != curr:
             if movies:
                 rel_path = nfc(os.path.relpath(curr, rel_base))
@@ -205,7 +217,7 @@ def scan_recursive(bp, prefix, rb=None, display_name=None):
     return cats
 
 def get_movie_info(fp, base, prefix):
-    rel = nfc(os.path.relpath(fp, base))
+    rel = nfc(os.path.relpath(nfc(fp), nfc(base)))
     tid = hashlib.md5(f"{prefix}_{rel}".encode()).hexdigest() + ".jpg"
     return {"id": tid, "title": os.path.basename(fp), "videoUrl": f"/video_serve?type={prefix}&path={urllib.parse.quote(rel)}", "thumbnailUrl": f"/thumb_serve?type={prefix}&id={tid}&path={urllib.parse.quote(rel)}"}
 
@@ -244,11 +256,17 @@ def fix_cache_paths():
     for k, p in mapping.items():
         items = GLOBAL_CACHE.get(k, [])
         if not items: continue
+        p_nfc = nfc(p)
         for c in items:
-            path = c.get('path', '')
-            if path and not path.startswith(p + "/"):
-                if path == ".": c['path'] = p
-                else: c['path'] = f"{p}/{path}"
+            raw_path = c.get('path', '')
+            if not raw_path: continue
+            path = nfc(raw_path)
+            if not path.startswith(p_nfc + "/"):
+                if path == p_nfc: c['path'] = p_nfc
+                elif path == ".": c['path'] = p_nfc
+                else: c['path'] = f"{p_nfc}/{path}"
+            else:
+                c['path'] = path
     log("✅ [FIX] 캐시 경로 보정 완료")
 
 def load_cache():
@@ -256,7 +274,7 @@ def load_cache():
     try:
         with open(CACHE_FILE, 'r', encoding='utf-8') as f:
             d = json.load(f)
-            if d.get("version") != CACHE_VERSION: return False # 버전 다르면 다시 스캔
+            if d.get("version") != CACHE_VERSION: return False
             GLOBAL_CACHE.update(d)
             return True
     except: return False
@@ -286,33 +304,38 @@ def process_data(data, lite=False):
     if offset: result = result[offset:]
     if limit: result = result[:limit]
     if lite:
+        # 상세 화면에서 필요한 정보를 유지하도록 필드 추가 (movies 제외)
         return [{"name": c.get('name',''), "path": c.get('path',''), "genreIds": c.get('genreIds', []), "posterPath": c.get('posterPath'), "year": c.get('year'), "overview": c.get('overview'), "rating": c.get('rating'), "seasonCount": c.get('seasonCount'), "failed": c.get('failed', False)} for c in result]
     return result
 
 def filter_by_path(pool, keyword):
+    # 동의어 사전 강화 (탭별 영상 누락 방지)
     synonyms = {
         "미국": ["미국", "미드", "us", "usa", "american"],
-        "중국": ["중국", "중드", "cn", "china", "chinese"],
-        "일본": ["일본", "일드", "jp", "japan", "japanese"],
+        "중국": ["중국", "중드", "cn", "china", "chinese", "chn"],
+        "일본": ["일본", "일드", "jp", "japan", "japanese", "jpn"],
         "기타": ["기타", "etc", "foreign"],
-        "다큐": ["다큐", "docu"],
+        "다큐": ["다큐", "docu", "documentary"],
         "드라마": ["드라마", "drama"],
         "시트콤": ["시트콤", "sitcom"],
-        "예능": ["예능", "variety"],
-        "교양": ["교양", "edu"],
-        "다큐멘터리": ["다큐", "docu", "documentary"]
+        "예능": ["예능", "variety", "entertainment", "show", "variety show"],
+        "교양": ["교양", "edu", "culture", "information"],
+        "다큐멘터리": ["다큐", "docu", "documentary", "다큐멘터리"]
     }
-    targets = synonyms.get(keyword, [nfc(keyword).lower()])
+    raw_targets = synonyms.get(keyword, [keyword])
+    targets = [nfc(t).lower() for t in raw_targets]
     res = []
     for c in pool:
         p = nfc(c.get('path', '')).lower()
         n = nfc(c.get('name', '')).lower()
+        # 경로명이나 폴더명에 키워드가 포함되면 필터링 성공
         if any(t in p or t in n for t in targets): res.append(c)
     return res
 
 @app.route('/home')
 def get_home(): return jsonify(GLOBAL_CACHE.get("home_recommend", []))
 
+# 외국TV
 @app.route('/foreigntv')
 def get_ftv(): return jsonify(process_data(GLOBAL_CACHE.get("foreigntv", []), request.args.get('lite') == 'true'))
 @app.route('/ftv_us')
@@ -326,6 +349,7 @@ def get_ftv_docu(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get(
 @app.route('/ftv_etc')
 def get_ftv_etc(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("foreigntv", []), "기타"), request.args.get('lite') == 'true'))
 
+# 국내TV
 @app.route('/koreantv')
 def get_ktv(): return jsonify(process_data(GLOBAL_CACHE.get("koreantv", []), request.args.get('lite') == 'true'))
 @app.route('/ktv_drama')
@@ -339,6 +363,7 @@ def get_ktv_edu(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("
 @app.route('/ktv_docu')
 def get_ktv_docu(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("koreantv", []), "다큐멘터리"), request.args.get('lite') == 'true'))
 
+# 애니메이션
 @app.route('/animations_all')
 def get_anim(): return jsonify(process_data(GLOBAL_CACHE.get("animations_all", []), request.args.get('lite') == 'true'))
 @app.route('/anim_raftel')
@@ -346,6 +371,7 @@ def get_anim_r(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("a
 @app.route('/anim_series')
 def get_anim_s(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "시리즈"), request.args.get('lite') == 'true'))
 
+# 영화
 @app.route('/movies')
 @app.route('/movies_all')
 @app.route('/movies_latest')
@@ -374,11 +400,8 @@ def get_list():
     if not path: return jsonify([])
     real_path, type_code = resolve_nas_path(path)
     if not real_path or not os.path.exists(real_path): return jsonify([])
-
-    # Prefix 유지 로직 추가
-    cat_prefix = path.split('/')[0]
+    cat_prefix = nfc(path.split('/')[0])
     base_dir = PATH_MAP.get(cat_prefix, (None, None))[0]
-
     res, movies = [], []
     for entry in sorted(os.listdir(real_path)):
         fe = os.path.join(real_path, entry)
@@ -386,13 +409,12 @@ def get_list():
             if any(ex in entry for ex in EXCLUDE_FOLDERS): continue
             name = nfc(entry)
             rel_path = nfc(os.path.relpath(fe, base_dir))
-            # path에 prefix를 붙여서 반환
+            # 폴더 클릭 시 하위 목록 조회를 위해 정보 전송
             res.append(attach_tmdb_info({"name": name, "path": f"{cat_prefix}/{rel_path}"}))
         elif entry.lower().endswith(VIDEO_EXTS): movies.append(get_movie_info(fe, base_dir, type_code))
-
     if movies:
         rel_path = nfc(os.path.relpath(real_path, base_dir))
-        # path에 prefix를 붙여서 반환
+        # 파일이 있는 경우 movies 리스트를 포함하여 반환 (재생 버튼 활성화의 핵심)
         res.append({"name": nfc(os.path.basename(real_path)), "path": f"{cat_prefix}/{rel_path}", "movies": movies})
     return jsonify(res)
 
