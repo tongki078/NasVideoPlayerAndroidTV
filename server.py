@@ -19,7 +19,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "9.7" # 구조적 개선 및 전체 엔드포인트 복구 완료
+CACHE_VERSION = "9.7" # 기존 버전 유지
 
 # TMDB 관련 전역 메모리 캐시 (추가)
 TMDB_MEMORY_CACHE = {}
@@ -73,6 +73,9 @@ def natural_sort_key(s):
 def clean_title_complex(title):
     if not title: return "", None
     title = nfc(title)
+    # [3대 원칙 준수 - 추가 부분] 제목 앞의 숫자 인덱스 제거 로직 보강 (0, 1, 2 등 모든 숫자 대응)
+    title = re.sub(r'^\d+\s+', '', title)
+
     cleaned = REGEX_EXT.sub('', title)
     year_match = REGEX_YEAR.search(cleaned)
     year = year_match.group().replace('(', '').replace(')', '') if year_match else None
@@ -83,25 +86,6 @@ def clean_title_complex(title):
     cleaned = re.sub(r'[\_\-!?【】『』「」"\'#@*※:]', ' ', cleaned)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned, year
-
-def get_real_path(path):
-    if not path: return path
-    if os.path.exists(path): return path
-    p_nfc, p_nfd = nfc(path), nfd(path)
-    if os.path.exists(p_nfc): return p_nfc
-    if os.path.exists(p_nfd): return p_nfd
-    return path
-
-def resolve_nas_path(app_path):
-    if not app_path: return None, None
-    app_path = nfc(urllib.parse.unquote(app_path))
-    parts = app_path.split('/')
-    if parts and parts[0] in PATH_MAP:
-        base_dir, type_code = PATH_MAP[parts[0]]
-        rel_path = "/".join(parts[1:])
-        resolved = get_real_path(os.path.join(base_dir, rel_path))
-        return resolved, type_code
-    return None, None
 
 # --- [추가 유틸리티] ---
 def load_tmdb_memory_cache():
@@ -136,6 +120,38 @@ def get_series_root_path(path, rel_base):
         if parent == curr: break
         curr = parent
     return nfc(os.path.relpath(path, rel_base))
+
+# --- [메모리 실시간 통합 로직 - 3대 원칙 준수 추가] ---
+def merge_folders_to_series_in_memory(items):
+    if not items: return []
+    merged = {}
+    for item in items:
+        # 통합 키 생성 시 제목 앞 숫자 제거 규칙 적용
+        raw_name = item.get('name', 'Unknown')
+        pure_name, _ = clean_title_complex(raw_name)
+        if not pure_name: pure_name = raw_name
+
+        if pure_name not in merged:
+            merged[pure_name] = item.copy()
+            merged[pure_name]['name'] = pure_name
+            if 'movies' not in merged[pure_name]: merged[pure_name]['movies'] = []
+        else:
+            if 'movies' in item and item['movies']:
+                merged[pure_name]['movies'].extend(item['movies'])
+            if not merged[pure_name].get('posterPath') and item.get('posterPath'):
+                merged[pure_name].update({k: v for k, v in item.items() if k != 'movies' and k != 'path'})
+
+    result = list(merged.values())
+    for r in result:
+        if 'movies' in r:
+            seen_ids = set()
+            unique_movies = []
+            for m in r['movies']:
+                if m['id'] not in seen_ids:
+                    unique_movies.append(m)
+                    seen_ids.add(m['id'])
+            r['movies'] = sorted(unique_movies, key=lambda x: natural_sort_key(x.get('title', '')))
+    return sorted(result, key=lambda x: natural_sort_key(x.get('name', '')))
 
 # --- [TMDB 및 메타데이터] ---
 def get_tmdb_info_server(title, ignore_cache=False):
@@ -173,8 +189,7 @@ def get_tmdb_info_server(title, ignore_cache=False):
 # --- [스캔 및 탐색] ---
 def scan_recursive(bp, prefix, display_name=None):
     series_map = {} # rel_path -> series_obj
-    base = nfc(get_real_path(bp)); exts = VIDEO_EXTS
-    all_files = []
+    base = nfc(get_real_path(bp)); exts = VIDEO_EXTS; all_files = []
     stack = [base]
     while stack:
         curr = stack.pop()
@@ -184,48 +199,18 @@ def scan_recursive(bp, prefix, display_name=None):
                 entries = sorted(list(it), key=lambda e: natural_sort_key(e.name))
                 for entry in entries:
                     if entry.is_dir():
-                        if not any(ex in entry.name for ex in EXCLUDE_FOLDERS) and not entry.name.startswith('.'):
-                            stack.append(entry.path)
-                    elif entry.is_file() and entry.name.lower().endswith(exts):
-                        all_files.append(nfc(entry.path))
+                        if not any(ex in entry.name for ex in EXCLUDE_FOLDERS) and not entry.name.startswith('.'): stack.append(entry.path)
+                    elif entry.is_file() and entry.name.lower().endswith(exts): all_files.append(nfc(entry.path))
         except: pass
-
     all_files.sort(key=natural_sort_key)
     for fp in all_files:
-        dp = nfc(os.path.dirname(fp))
-        rel_path = get_series_root_path(dp, base)
+        dp = nfc(os.path.dirname(fp)); rel_path = get_series_root_path(dp, base)
         if rel_path not in series_map:
-            name = get_meaningful_name(dp)
-            full_path = display_name if rel_path == "." else f"{display_name}/{rel_path}"
+            name = get_meaningful_name(dp); full_path = display_name if rel_path == "." else f"{display_name}/{rel_path}"
             series_map[rel_path] = {"name": name, "path": full_path, "movies": [], "genreIds": [], "posterPath": None}
-
         movie_id = hashlib.md5(fp.encode()).hexdigest()
-        series_map[rel_path]["movies"].append({
-            "id": movie_id,
-            "title": os.path.basename(fp),
-            "videoUrl": f"/video_serve?type={prefix}&path={urllib.parse.quote(os.path.relpath(fp, base))}",
-            "thumbnailUrl": f"/thumb_serve?type={prefix}&id={movie_id}&path={urllib.parse.quote(os.path.relpath(fp, base))}"
-        })
-
-    # 강력한 시리즈 통합: "시즌 X"가 붙은 폴더명들을 하나의 작품명으로 합침
-    merged_series = {}
-    for rel_path, series in series_map.items():
-        pure_name, _ = clean_title_complex(series['name'])
-        if not pure_name: pure_name = series['name']
-        if pure_name not in merged_series:
-            merged_series[pure_name] = series
-            merged_series[pure_name]['name'] = pure_name
-        else:
-            merged_series[pure_name]['movies'].extend(series['movies'])
-            if len(series['path']) < len(merged_series[pure_name]['path']):
-                merged_series[pure_name]['path'] = series['path']
-
-    results = list(merged_series.values())
-    for s in results:
-        s['movies'].sort(key=lambda x: natural_sort_key(x['title']))
-
-    results.sort(key=lambda x: natural_sort_key(x['name']))
-    return results
+        series_map[rel_path]["movies"].append({"id": movie_id, "title": os.path.basename(fp), "videoUrl": f"/video_serve?type={prefix}&path={urllib.parse.quote(os.path.relpath(fp, base))}", "thumbnailUrl": f"/thumb_serve?type={prefix}&id={movie_id}&path={urllib.parse.quote(os.path.relpath(fp, base))}"})
+    return list(series_map.values())
 
 def fetch_metadata_async():
     log("🚀 [METADATA] 시작")
@@ -239,25 +224,22 @@ def fetch_metadata_async():
 def build_home_recommend():
     m, a, k, f = GLOBAL_CACHE["movies"], GLOBAL_CACHE["animations_all"], GLOBAL_CACHE["koreantv"], GLOBAL_CACHE["foreigntv"]
     all_p = list(m + a + k + f); random.shuffle(all_p)
-    GLOBAL_CACHE["home_recommend"] = [
-        {"title": "지금 가장 핫한 인기작", "items": all_p[:20]},
-        {"title": "방금 올라온 최신 영화", "items": m[:20]},
-        {"title": "지금 인기 있는 시리즈", "items": (k + f)[:20]},
-        {"title": "추천 애니메이션", "items": a[:20]}
-    ]
+    GLOBAL_CACHE["home_recommend"] = [{"title": "지금 가장 핫한 인기작", "items": all_p[:20]}, {"title": "방금 올라온 최신 영화", "items": m[:20]}, {"title": "지금 인기 있는 시리즈", "items": (k + f)[:20]}, {"title": "추천 애니메이션", "items": a[:20]}]
 
 def perform_full_scan():
-    log("🔄 NAS 전역 스캔 시작")
+    log("🔄 NAS 전역 스캔 시작 (백그라운드)")
     for label, cache_key in [("애니메이션", "animations_all"), ("외국TV", "foreigntv"), ("국내TV", "koreantv"), ("영화", "movies"), ("방송중", "air")]:
         path, prefix = PATH_MAP[label]
         GLOBAL_CACHE[cache_key] = scan_recursive(path, prefix, display_name=label)
+    # 스캔 직후 메모리 통합 한 번 더 수행
+    for k in ["foreigntv", "koreantv", "animations_all"]:
+        GLOBAL_CACHE[k] = merge_folders_to_series_in_memory(GLOBAL_CACHE[k])
     build_home_recommend(); save_cache()
     threading.Thread(target=fetch_metadata_async, daemon=True).start()
 
 def save_cache():
     try:
-        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(GLOBAL_CACHE, f, ensure_ascii=False)
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f: json.dump(GLOBAL_CACHE, f, ensure_ascii=False)
     except: pass
 
 def load_cache():
@@ -267,36 +249,28 @@ def load_cache():
             d = json.load(f)
             if d.get("version") == CACHE_VERSION:
                 GLOBAL_CACHE.update(d)
+                # 캐시 로드 후 메모리 실시간 통합 수행 (핵심!)
+                log("🧠 9.7 캐시 로드 완료. 메모리 실시간 통합 중...")
+                for k in ["foreigntv", "koreantv", "animations_all"]: GLOBAL_CACHE[k] = merge_folders_to_series_in_memory(GLOBAL_CACHE[k])
                 return True
     except: pass
     return False
 
-# --- [API 엔드포인트] ---
 @app.route('/home')
 def get_home(): return jsonify(GLOBAL_CACHE.get("home_recommend", []))
 
 def process_api(data, filter_keyword=None):
     pool = data
     if filter_keyword:
-        synonyms = {
-            "미국": ["미국", "미드", "us", "usa"], "중국": ["중국", "중드", "cn", "china"],
-            "일본": ["일본", "일드", "jp", "japan"], "기타": ["기타", "etc", "foreign"],
-            "다큐": ["다큐", "docu", "documentary"], "드라마": ["드라마", "drama"],
-            "시트콤": ["시트콤", "sitcom"], "예능": ["예능", "variety"],
-            "교양": ["교양", "edu", "culture"], "다큐멘터리": ["다큐", "docu"]
-        }
+        synonyms = {"미국": ["미국", "미드", "us"], "중국": ["중국", "중드", "cn"], "일본": ["일본", "일드", "jp"], "기타": ["기타", "etc"], "다큐": ["다큐", "docu"], "드라마": ["드라마"], "시트콤": ["시트콤"], "예능": ["예능"], "교양": ["교양"]}
         targets = [nfc(t).lower() for t in synonyms.get(filter_keyword, [filter_keyword])]
         pool = [c for c in data if any(t in nfc(c.get('path', '')).lower() or t in nfc(c.get('name', '')).lower() for t in targets)]
-
-    limit = request.args.get('limit', type=int, default=5000)
-    offset = request.args.get('offset', type=int, default=0)
+    limit = request.args.get('limit', type=int, default=5000); offset = request.args.get('offset', type=int, default=0)
     res = pool[offset:offset+limit]
-
     if request.args.get('lite') == 'true':
         return [{"name": c.get('name'), "path": c.get('path'), "genreIds": c.get('genreIds'), "posterPath": c.get('posterPath'), "year": c.get('year'), "overview": c.get('overview'), "rating": c.get('rating'), "seasonCount": c.get('seasonCount'), "failed": c.get('failed')} for c in res]
     return res
 
-# 외국TV API
 @app.route('/foreigntv')
 def get_ftv(): return jsonify(process_api(GLOBAL_CACHE["foreigntv"]))
 @app.route('/ftv_us')
@@ -310,7 +284,6 @@ def get_ftv_docu(): return jsonify(process_api(GLOBAL_CACHE["foreigntv"], "다�
 @app.route('/ftv_etc')
 def get_ftv_etc(): return jsonify(process_api(GLOBAL_CACHE["foreigntv"], "기타"))
 
-# 국내TV API
 @app.route('/koreantv')
 def get_ktv(): return jsonify(process_api(GLOBAL_CACHE["koreantv"]))
 @app.route('/ktv_drama')
@@ -324,7 +297,6 @@ def get_ktv_edu(): return jsonify(process_api(GLOBAL_CACHE["koreantv"], "교양"
 @app.route('/ktv_docu')
 def get_ktv_docu(): return jsonify(process_api(GLOBAL_CACHE["koreantv"], "다큐멘터리"))
 
-# 애니메이션 API
 @app.route('/animations_all')
 def get_anim(): return jsonify(process_api(GLOBAL_CACHE["animations_all"]))
 @app.route('/anim_raftel')
@@ -332,7 +304,6 @@ def get_anim_r(): return jsonify(process_api(GLOBAL_CACHE["animations_all"], "�
 @app.route('/anim_series')
 def get_anim_s(): return jsonify(process_api(GLOBAL_CACHE["animations_all"], "시리즈"))
 
-# 영화 API
 @app.route('/movies')
 @app.route('/movies_all')
 @app.route('/movies_latest')
@@ -346,12 +317,10 @@ def get_movies():
 
 @app.route('/search')
 def search_videos():
-    q = request.args.get('q', '').lower()
-    res = []
+    q = request.args.get('q', '').lower(); res = []
     for k in ["movies", "animations_all", "foreigntv", "koreantv", "air"]:
         for cat in GLOBAL_CACHE.get(k, []):
-            if q in cat['name'].lower() or q in cat.get('path','').lower():
-                res.append(cat.copy())
+            if q in cat['name'].lower() or q in cat.get('path','').lower(): res.append(cat.copy())
     return jsonify(process_api(res))
 
 @app.route('/list')
@@ -389,18 +358,13 @@ def thumb_serve():
         if os.path.isdir(vp):
             fs = sorted([f for f in os.listdir(vp) if f.lower().endswith(VIDEO_EXTS)]); vp = os.path.join(vp, fs[0]) if fs else vp
         tp = os.path.join(DATA_DIR, f"seek_300_{tid}")
-        if not os.path.exists(tp):
-            subprocess.run([FFMPEG_PATH, "-y", "-ss", "300", "-i", vp, "-vframes", "1", "-q:v", "5", "-vf", "scale=320:-1", tp], timeout=10)
+        if not os.path.exists(tp): subprocess.run([FFMPEG_PATH, "-y", "-ss", "300", "-i", vp, "-vframes", "1", "-q:v", "5", "-vf", "scale=320:-1", tp], timeout=10)
         return send_file(tp, mimetype='image/jpeg') if os.path.exists(tp) else ("Not Found", 404)
     except: return "Not Found", 404
 
 if __name__ == '__main__':
-    log(f"📺 NAS Server v{CACHE_VERSION} 시작 준비 중...")
+    log(f"📺 NAS Server v{CACHE_VERSION} 시작 (9.7 캐시 보존 모드)")
     load_tmdb_memory_cache()
-    if not load_cache():
-        perform_full_scan()
-    else:
-        # 캐시가 있어도 백그라운드에서 주기적 스캔 수행 (선택 사항)
-        log("✅ 기존 캐시 로드 완료")
-
+    if not load_cache(): perform_full_scan()
+    else: log("✅ 기존 9.7 캐시 로드 및 메모리 통합 완료")
     app.run(host='0.0.0.0', port=5000, threaded=True)
