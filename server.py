@@ -13,7 +13,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "9.7" # 버전을 올려서 전체 재스캔 유도 (필터링용 path 데이터 갱신)
+CACHE_VERSION = "9.7" # 버전을 그대로 유지하여 4일간의 스캔 데이터 보존
 
 # TMDB API KEY
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk".strip()
@@ -347,6 +347,7 @@ def get_anim_r(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("a
 def get_anim_s(): return jsonify(process_data(filter_by_path(GLOBAL_CACHE.get("animations_all", []), "시리즈"), request.args.get('lite') == 'true'))
 
 @app.route('/movies')
+@app.route('/movies_all')
 @app.route('/movies_latest')
 @app.route('/movies_uhd')
 @app.route('/movies_title')
@@ -373,16 +374,26 @@ def get_list():
     if not path: return jsonify([])
     real_path, type_code = resolve_nas_path(path)
     if not real_path or not os.path.exists(real_path): return jsonify([])
-    base_dir = PATH_MAP.get(path.split('/')[0], (None, None))[0]
+
+    # Prefix 유지 로직 추가
+    cat_prefix = path.split('/')[0]
+    base_dir = PATH_MAP.get(cat_prefix, (None, None))[0]
+
     res, movies = [], []
     for entry in sorted(os.listdir(real_path)):
         fe = os.path.join(real_path, entry)
         if os.path.isdir(fe):
             if any(ex in entry for ex in EXCLUDE_FOLDERS): continue
             name = nfc(entry)
-            res.append(attach_tmdb_info({"name": name, "path": nfc(os.path.relpath(fe, base_dir))}))
+            rel_path = nfc(os.path.relpath(fe, base_dir))
+            # path에 prefix를 붙여서 반환
+            res.append(attach_tmdb_info({"name": name, "path": f"{cat_prefix}/{rel_path}"}))
         elif entry.lower().endswith(VIDEO_EXTS): movies.append(get_movie_info(fe, base_dir, type_code))
-    if movies: res.append({"name": nfc(os.path.basename(real_path)), "path": nfc(os.path.relpath(real_path, base_dir)), "movies": movies})
+
+    if movies:
+        rel_path = nfc(os.path.relpath(real_path, base_dir))
+        # path에 prefix를 붙여서 반환
+        res.append({"name": nfc(os.path.basename(real_path)), "path": f"{cat_prefix}/{rel_path}", "movies": movies})
     return jsonify(res)
 
 @app.route('/video_serve')
