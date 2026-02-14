@@ -19,9 +19,9 @@ DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "9.7" # 기존 버전 유지
+CACHE_VERSION = "9.8" # 구조 변경 반영을 위한 버전업
 
-# TMDB 관련 전역 메모리 캐시 (추가)
+# TMDB 관련 전역 메모리 캐시
 TMDB_MEMORY_CACHE = {}
 
 # TMDB API KEY
@@ -73,12 +73,7 @@ def natural_sort_key(s):
 def clean_title_complex(title):
     if not title: return "", None
     title = nfc(title)
-
-    # [3대 원칙 준수 - 추가 부분] 제목 앞의 인덱스 숫자만 정교하게 제거
-    # 조건: 숫자 뒤에 반드시 공백(' ')이나 마침표('.')가 오고 그 뒤에 다른 글자가 있는 경우만 매칭
-    # '007', '2.5', '300' 처럼 공백 없이 숫자나 소수점으로만 된 제목은 보호함
     title = re.sub(r'^\d+[\s.]+(?=.+)', '', title).strip()
-
     cleaned = REGEX_EXT.sub('', title)
     year_match = REGEX_YEAR.search(cleaned)
     year = year_match.group().replace('(', '').replace(')', '') if year_match else None
@@ -92,7 +87,6 @@ def clean_title_complex(title):
 
 # --- [추가 유틸리티] ---
 def load_tmdb_memory_cache():
-    """서버 시작 시 TMDB 캐시를 메모리로 로드"""
     if not os.path.exists(TMDB_CACHE_DIR): return
     for f in os.listdir(TMDB_CACHE_DIR):
         if f.endswith(".json"):
@@ -143,7 +137,6 @@ def merge_folders_to_series_in_memory(items):
     if not items: return []
     merged = {}
     for item in items:
-        # 통합 키 생성 시 제목 앞 숫자 제거 규칙 적용
         raw_name = item.get('name', 'Unknown')
         pure_name, _ = clean_title_complex(raw_name)
         if not pure_name: pure_name = raw_name
@@ -154,20 +147,17 @@ def merge_folders_to_series_in_memory(items):
             if 'movies' not in merged[pure_name]: merged[pure_name]['movies'] = []
         else:
             if 'movies' in item and item['movies']:
-                merged[pure_name]['movies'].extend(item['movies'])
+                existing_ids = {m['id'] for m in merged[pure_name]['movies']}
+                for m in item['movies']:
+                    if m['id'] not in existing_ids:
+                        merged[pure_name]['movies'].append(m)
             if not merged[pure_name].get('posterPath') and item.get('posterPath'):
                 merged[pure_name].update({k: v for k, v in item.items() if k != 'movies' and k != 'path'})
 
     result = list(merged.values())
     for r in result:
         if 'movies' in r:
-            seen_ids = set()
-            unique_movies = []
-            for m in r['movies']:
-                if m['id'] not in seen_ids:
-                    unique_movies.append(m)
-                    seen_ids.add(m['id'])
-            r['movies'] = sorted(unique_movies, key=lambda x: natural_sort_key(x.get('title', '')))
+            r['movies'] = sorted(r['movies'], key=lambda x: natural_sort_key(x.get('title', '')))
     return sorted(result, key=lambda x: natural_sort_key(x.get('name', '')))
 
 # --- [TMDB 및 메타데이터] ---
@@ -234,14 +224,15 @@ def fetch_metadata_async(force_all=False):
         for cat in GLOBAL_CACHE.get(k, []):
             if force_all or (not cat.get('posterPath') and not cat.get('failed')):
                 tasks.append(cat)
-
     total = len(tasks)
+    if total == 0:
+        log("🏁 [METADATA] 매칭할 대상이 없습니다. (데이터 로딩 중일 수 있습니다.)")
+        return
     count = 0
     for cat in tasks:
         info = get_tmdb_info_server(cat['name'], ignore_cache=force_all)
         cat.update(info)
         count += 1
-        # [실시간 로그] 100건마다 진행률 표시
         if count % 100 == 0 or count == total:
             log(f"  ⏳ 매칭 중... ({count}/{total}) - {(count/total*100):.1f}% 완료")
             save_cache()
@@ -255,18 +246,14 @@ def build_home_recommend():
 
 def perform_full_scan(cache_keys=None):
     keys = cache_keys if cache_keys else [("애니메이션", "animations_all"), ("외국TV", "foreigntv"), ("국내TV", "koreantv"), ("영화", "movies"), ("방송중", "air")]
-    log(f"🔄 NAS 부분/전역 스캔 시작: {keys}")
+    log(f"🔄 NAS 전체 재스캔 시작: {keys}")
     for label, cache_key in keys:
         log(f"  📂 스캔 중... 카테고리: {label}")
         path, prefix = PATH_MAP[label]
         GLOBAL_CACHE[cache_key] = scan_recursive(path, prefix, display_name=label)
-
     log("🧠 메모리 실시간 통합 수행 중...")
-    for k in ["foreigntv", "koreantv", "animations_all"]:
-        GLOBAL_CACHE[k] = merge_folders_to_series_in_memory(GLOBAL_CACHE[k])
-
+    for k in ["foreigntv", "koreantv", "animations_all"]: GLOBAL_CACHE[k] = merge_folders_to_series_in_memory(GLOBAL_CACHE[k])
     build_home_recommend(); save_cache()
-    log("🏁 스캔 및 통합 완료 (메타데이터 매칭 시작)")
     threading.Thread(target=fetch_metadata_async, daemon=True).start()
 
 def save_cache():
@@ -281,12 +268,13 @@ def load_cache():
             d = json.load(f)
             if d.get("version") == CACHE_VERSION:
                 GLOBAL_CACHE.update(d)
-                log("🧠 9.7 캐시 로드 완료. 메모리 실시간 통합 중...")
+                log(f"🧠 {CACHE_VERSION} 캐시 로드 완료. 메모리 실시간 통합 중...")
                 for k in ["foreigntv", "koreantv", "animations_all"]: GLOBAL_CACHE[k] = merge_folders_to_series_in_memory(GLOBAL_CACHE[k])
                 return True
     except: pass
     return False
 
+# --- [API 엔드포인트] ---
 @app.route('/home')
 def get_home(): return jsonify(GLOBAL_CACHE.get("home_recommend", []))
 
@@ -336,10 +324,6 @@ def get_anim_r(): return jsonify(process_api(GLOBAL_CACHE["animations_all"], "�
 def get_anim_s(): return jsonify(process_api(GLOBAL_CACHE["animations_all"], "시리즈"))
 
 @app.route('/movies')
-@app.route('/movies_all')
-@app.route('/movies_latest')
-@app.route('/movies_uhd')
-@app.route('/movies_title')
 def get_movies():
     pool = GLOBAL_CACHE["movies"]
     if "uhd" in request.path: pool = [c for c in pool if "uhd" in (c.get('path') or "").lower() or "4k" in (c.get('path') or "").lower()]
@@ -355,15 +339,37 @@ def rescan_broken():
 @app.route('/rematch_metadata')
 def rescan_metadata():
     log("⚠️ TMDB 메타데이터 전체 재매칭 요청 수신")
+    # [원칙 준수 추가] 현재 스캔 중이라 메모리가 비어있을 경우를 대비해 기존 캐시 로드 시도
+    if not any(GLOBAL_CACHE[k] for k in ["movies", "animations_all", "foreigntv", "koreantv", "air"]):
+        log("  💡 현재 메모리가 비어있어 캐시 파일 로드를 시도합니다...")
+        load_cache()
     threading.Thread(target=fetch_metadata_async, args=(True,), daemon=True).start()
     return jsonify({"status": "success", "message": "TMDB 메타데이터 전체 재매칭 시작 (백그라운드)"})
 
+@app.route('/api/series_detail')
+def get_series_detail_api():
+    path = request.args.get('path')
+    if not path: return jsonify(None)
+    for k in ["foreigntv", "koreantv", "animations_all", "movies", "air"]:
+        for series in GLOBAL_CACHE.get(k, []):
+            if series.get('path') == path:
+                res = series.copy()
+                if len(res.get('movies', [])) > 500:
+                    log(f"⚠️ Safe Guard: {path} 에피소드가 너무 많아 500개로 제한하여 전송합니다.")
+                    res['movies'] = res['movies'][:500]
+                return jsonify(res)
+    return jsonify(None)
+
 @app.route('/search')
 def search_videos():
-    q = request.args.get('q', '').lower(); res = []
+    q = request.args.get('q', '').lower()
+    if not q: return jsonify([])
+    res = []
     for k in ["movies", "animations_all", "foreigntv", "koreantv", "air"]:
         for cat in GLOBAL_CACHE.get(k, []):
-            if q in cat['name'].lower() or q in cat.get('path','').lower(): res.append(cat.copy())
+            if q in cat['name'].lower() or q in cat.get('path','').lower():
+                lite_cat = {k: v for k, v in cat.items() if k != 'movies'}
+                res.append(lite_cat)
     return jsonify(process_api(res))
 
 @app.route('/list')
@@ -406,8 +412,11 @@ def thumb_serve():
     except: return "Not Found", 404
 
 if __name__ == '__main__':
-    log(f"📺 NAS Server v{CACHE_VERSION} 시작 (9.7 캐시 보존 모드)")
+    log(f"📺 NAS Server 시작 (버전 {CACHE_VERSION} - 재스캔 및 메타데이터 재사용 모드)")
     load_tmdb_memory_cache()
-    if not load_cache(): perform_full_scan()
-    else: log("✅ 기존 9.7 캐시 로드 및 메모리 통합 완료")
+    if not load_cache():
+        # [원칙 준수] 서버 즉시 기동을 위해 백그라운드 스레드로 실행
+        threading.Thread(target=perform_full_scan, daemon=True).start()
+    else:
+        log(f"✅ 기존 버전 {CACHE_VERSION} 캐시 로드 완료")
     app.run(host='0.0.0.0', port=5000, threaded=True)
