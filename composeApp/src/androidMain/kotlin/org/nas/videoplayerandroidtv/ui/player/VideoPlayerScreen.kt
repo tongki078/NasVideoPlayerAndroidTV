@@ -39,7 +39,9 @@ import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.toNfc
@@ -100,6 +102,7 @@ fun VideoPlayerScreen(
     val nextButtonFocusRequester = remember { FocusRequester() }
     val skipOpeningFocusRequester = remember { FocusRequester() }
     val thumbListState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
 
     var isNextButtonFocused by remember { mutableStateOf(false) }
     var isSkipOpeningFocused by remember { mutableStateOf(false) }
@@ -144,21 +147,23 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused, isSkipOpeningFocused, userPaused) {
         if (isControllerVisible && !isSeeking && !isNextButtonFocused && !isSkipOpeningFocused && !userPaused) {
-            delay(3000)
+            delay(5000) // 3초에서 5초로 연장
             isControllerVisible = false
         }
     }
 
     val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp.dp
-    val thumbWidth = 240.dp 
-    val thumbHeight = 140.dp 
+    val thumbWidth = 280.dp // 240에서 약간 키움
+    val thumbHeight = 160.dp // 140에서 약간 키움
     val horizontalPadding = (screenWidth - thumbWidth) / 2
     
+    // 썸네일 리스트 스크롤 애니메이션 최적화
     LaunchedEffect(seekTime, isSeeking) {
         if (isSeeking && allThumbnails.isNotEmpty()) {
             val targetIndex = (seekTime / 10000L).toInt().coerceIn(allThumbnails.indices)
-            thumbListState.scrollToItem(targetIndex, 0)
+            // 즉시 이동 대신 애니메이션 사용 (부드러운 효과)
+            thumbListState.animateScrollToItem(targetIndex, 0)
         }
     }
 
@@ -195,13 +200,21 @@ fun VideoPlayerScreen(
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                         isControllerVisible = true
-                        if (!isSeeking) { seekTime = currentPosition; isSeeking = true }
+                        if (!isSeeking) { 
+                            seekTime = currentPosition
+                            isSeeking = true 
+                        }
+                        // 10초씩 이동 (길게 누를 경우를 대비해 스택 가능)
                         seekTime = (seekTime - 10000).coerceAtLeast(0L)
                         true
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
                         isControllerVisible = true
-                        if (!isSeeking) { seekTime = currentPosition; isSeeking = true }
+                        if (!isSeeking) { 
+                            seekTime = currentPosition
+                            isSeeking = true 
+                        }
+                        // 10초씩 이동
                         seekTime = (seekTime + 10000).coerceAtMost(totalDuration)
                         true
                     }
@@ -213,7 +226,7 @@ fun VideoPlayerScreen(
                             lastInteractionTime = System.currentTimeMillis()
                             true
                         } else if (isNextButtonFocused || isSkipOpeningFocused) {
-                            false
+                            false // 버튼의 자체 클릭 핸들러가 동작하도록 함
                         } else {
                             userPaused = !userPaused
                             isControllerVisible = true
@@ -222,9 +235,17 @@ fun VideoPlayerScreen(
                         }
                     }
                     android.view.KeyEvent.KEYCODE_BACK -> {
-                        if (isSeeking) { isSeeking = false; true }
-                        else if (isControllerVisible) { isControllerVisible = false; true }
-                        else { onBack(); true }
+                        if (isSeeking) { 
+                            isSeeking = false
+                            seekTime = currentPosition // 원래 위치로 복구
+                            true 
+                        } else if (isControllerVisible) { 
+                            isControllerVisible = false
+                            true 
+                        } else { 
+                            onBack()
+                            true 
+                        }
                     }
                     else -> false
                 }
@@ -254,6 +275,7 @@ fun VideoPlayerScreen(
             }
         )
 
+        // 탐색 시 배경 오버레이
         AnimatedVisibility(
             visible = isSeeking,
             enter = fadeIn(),
@@ -262,7 +284,7 @@ fun VideoPlayerScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.7f))
+                    .background(Color.Black.copy(alpha = 0.5f))
             )
         }
 
@@ -322,6 +344,7 @@ fun VideoPlayerScreen(
                     .fillMaxSize()
                     .padding(48.dp)
             ) {
+                // 다음 에피소드 버튼
                 AnimatedVisibility(
                     visible = isControllerVisible && nextMovie != null && !isSeeking,
                     enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
@@ -345,6 +368,7 @@ fun VideoPlayerScreen(
                     )
                 }
 
+                // 오프닝 건너뛰기 버튼
                 AnimatedVisibility(
                     visible = isControllerVisible && isDuringOpening && !isSeeking,
                     enter = fadeIn() + slideInHorizontally(initialOffsetX = { -it }),
@@ -370,12 +394,17 @@ fun VideoPlayerScreen(
             // 하단 시크바 및 썸네일 탐색
             AnimatedVisibility(
                 visible = isControllerVisible || isSeeking,
-                enter = fadeIn(), exit = fadeOut(),
+                enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),
                 modifier = Modifier.align(Alignment.BottomCenter)
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth().then(
-                        if (isSeeking) Modifier else Modifier.background(Color.Black.copy(alpha = 0.4f))
+                        if (isSeeking) Modifier else Modifier.background(
+                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f))
+                            )
+                        )
                     ),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
@@ -384,10 +413,10 @@ fun VideoPlayerScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(180.dp),
+                                .height(220.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            // 1. 썸네일 리스트 (배경으로 흐름)
+                            // 1. 썸네일 리스트
                             LazyRow(
                                 state = thumbListState,
                                 contentPadding = PaddingValues(horizontal = horizontalPadding),
@@ -401,16 +430,21 @@ fun VideoPlayerScreen(
                                     val timeSec = timestamp / 1000
                                     val thumbRequest = remember(currentMovie.id, timestamp) {
                                         val originalThumb = currentMovie.thumbnailUrl ?: ""
+                                        // server.py가 t 파라미터를 지원하도록 수정됨
                                         val finalUrl = if (originalThumb.contains("?")) "$baseUrl$originalThumb&t=$timeSec"
                                                       else "$baseUrl$originalThumb?t=$timeSec"
-                                        ImageRequest.Builder(context).data(finalUrl).crossfade(true).build()
+                                        ImageRequest.Builder(context)
+                                            .data(finalUrl)
+                                            .crossfade(true)
+                                            .build()
                                     }
                                     Box(
                                         modifier = Modifier
                                             .width(thumbWidth)
                                             .height(thumbHeight)
-                                            .clip(RoundedCornerShape(6.dp))
+                                            .clip(RoundedCornerShape(8.dp))
                                             .background(Color.DarkGray)
+                                            .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
                                     ) {
                                         AsyncImage(
                                             model = thumbRequest, 
@@ -427,7 +461,7 @@ fun VideoPlayerScreen(
                                 modifier = Modifier
                                     .width(thumbWidth + 12.dp)
                                     .height(thumbHeight + 12.dp)
-                                    .border(4.dp, Color.White, RoundedCornerShape(8.dp))
+                                    .border(4.dp, Color.White, RoundedCornerShape(10.dp))
                                     .zIndex(1f)
                             )
                         }
@@ -444,22 +478,32 @@ fun VideoPlayerScreen(
                             imageVector = if (userPaused) Icons.Default.PlayArrow else MyPauseIcon,
                             contentDescription = null,
                             tint = Color.White,
-                            modifier = Modifier.size(64.dp)
+                            modifier = Modifier.size(56.dp)
                         )
                         
                         Spacer(Modifier.width(24.dp))
 
                         Column(modifier = Modifier.weight(1f)) {
                             val progress = if (totalDuration > 0) (if(isSeeking) seekTime else currentPosition).toFloat() / totalDuration else 0f
-                            Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(Color.White.copy(alpha = 0.3f))) {
+                            Box(modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.2f))) {
                                 Box(modifier = Modifier.fillMaxWidth(progress).fillMaxHeight().background(Color.Red))
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text(formatTime(if (isSeeking) seekTime else currentPosition), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                                Text(formatTime(totalDuration), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = formatTime(if (isSeeking) seekTime else currentPosition), 
+                                    color = Color.White, 
+                                    fontSize = 18.sp, 
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = formatTime(totalDuration), 
+                                    color = Color.White.copy(alpha = 0.6f), 
+                                    fontSize = 18.sp, 
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
@@ -479,7 +523,7 @@ fun NetflixIconButton(
     Surface(
         onClick = onClick,
         modifier = modifier
-            .size(44.dp)
+            .size(48.dp)
             .focusable(),
         shape = CircleShape,
         color = if (isFocused) Color.White else Color.Black.copy(alpha = 0.6f),
@@ -490,7 +534,7 @@ fun NetflixIconButton(
                 imageVector = icon,
                 contentDescription = null,
                 tint = if (isFocused) Color.Black else Color.White,
-                modifier = Modifier.size(24.dp)
+                modifier = Modifier.size(28.dp)
             )
         }
     }
@@ -508,15 +552,15 @@ fun NetflixPlayerButton(
     Surface(
         onClick = onClick,
         modifier = modifier
-            .height(if (compact) 40.dp else 48.dp)
-            .widthIn(min = if (compact) 100.dp else 160.dp)
+            .height(if (compact) 44.dp else 52.dp)
+            .widthIn(min = if (compact) 120.dp else 180.dp)
             .focusable(),
-        shape = RoundedCornerShape(4.dp),
+        shape = RoundedCornerShape(6.dp),
         color = if (isFocused) Color.White else Color.Black.copy(alpha = 0.6f),
         border = if (isFocused) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.8f))
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = if (compact) 16.dp else 24.dp),
+            modifier = Modifier.padding(horizontal = if (compact) 20.dp else 28.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
@@ -524,13 +568,13 @@ fun NetflixPlayerButton(
                 imageVector = icon,
                 contentDescription = null,
                 tint = if (isFocused) Color.Black else Color.White,
-                modifier = Modifier.size(if (compact) 20.dp else 24.dp)
+                modifier = Modifier.size(if (compact) 24.dp else 28.dp)
             )
-            Spacer(Modifier.width(if (compact) 8.dp else 12.dp))
+            Spacer(Modifier.width(if (compact) 10.dp else 14.dp))
             Text(
                 text = text,
                 color = if (isFocused) Color.Black else Color.White,
-                fontSize = if (compact) 14.sp else 16.sp,
+                fontSize = if (compact) 16.sp else 18.sp,
                 fontWeight = FontWeight.Bold
             )
         }

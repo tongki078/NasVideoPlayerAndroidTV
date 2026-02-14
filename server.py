@@ -1,4 +1,4 @@
-import os, subprocess, hashlib, urllib.parse, unicodedata, threading, time, json, re, sys, traceback, shutil, requests, random, mimetypes
+import os, subprocess, hashlib, urllib.parse, unicodedata, threading, time, json, re, sys, traceback, shutil, requests, random, mimetypes, sqlite3
 from flask import Flask, jsonify, send_from_directory, request, Response, redirect, send_file
 from flask_cors import CORS
 from concurrent.futures import ThreadPoolExecutor
@@ -8,7 +8,7 @@ from collections import deque
 app = Flask(__name__)
 CORS(app)
 
-# MIME 타입 추가 등록 (재생 관련 문제 방지)
+# MIME 타입 추가 등록
 if not mimetypes.types_map.get('.mkv'): mimetypes.add_type('video/x-matroska', '.mkv')
 if not mimetypes.types_map.get('.ts'): mimetypes.add_type('video/mp2t', '.ts')
 if not mimetypes.types_map.get('.tp'): mimetypes.add_type('video/mp2t', '.tp')
@@ -17,9 +17,10 @@ if not mimetypes.types_map.get('.tp'): mimetypes.add_type('video/mp2t', '.tp')
 MY_IP = "192.168.0.2"
 DATA_DIR = "/volume2/video/thumbnails"
 CACHE_FILE = "/volume2/video/video_cache.json"
+DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "9.8" # 구조 변경 반영을 위한 버전업
+CACHE_VERSION = "10.0" # SQLite 도입으로 버전 업
 
 # TMDB 관련 전역 메모리 캐시
 TMDB_MEMORY_CACHE = {}
@@ -48,10 +49,11 @@ FFMPEG_PATH = "ffmpeg"
 for p in ["/usr/local/bin/ffmpeg", "/var/packages/ffmpeg/target/bin/ffmpeg", "/usr/bin/ffmpeg"]:
     if os.path.exists(p): FFMPEG_PATH = p; break
 
-GLOBAL_CACHE = {
-    "air": [], "movies": [], "foreigntv": [], "koreantv": [],
-    "animations_all": [], "search_index": [], "home_recommend": [], "version": CACHE_VERSION
-}
+# 메모리 상의 추천 리스트 (DB 조회 후 갱신)
+HOME_RECOMMEND = []
+
+# 매칭 중복 실행 방지 플래그
+IS_METADATA_RUNNING = False
 
 def log(msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -59,6 +61,91 @@ def log(msg):
 
 def nfc(text): return unicodedata.normalize('NFC', text) if text else ""
 def nfd(text): return unicodedata.normalize('NFD', text) if text else ""
+
+# --- [DB 관리] ---
+def get_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db()
+    cursor = conn.cursor()
+    # Series 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS series (
+            path TEXT PRIMARY KEY,
+            category TEXT,
+            name TEXT,
+            posterPath TEXT,
+            year TEXT,
+            overview TEXT,
+            rating TEXT,
+            seasonCount INTEGER,
+            genreIds TEXT,
+            failed INTEGER DEFAULT 0
+        )
+    ''')
+    # Episodes 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS episodes (
+            id TEXT PRIMARY KEY,
+            series_path TEXT,
+            title TEXT,
+            videoUrl TEXT,
+            thumbnailUrl TEXT,
+            FOREIGN KEY (series_path) REFERENCES series (path) ON DELETE CASCADE
+        )
+    ''')
+    # 인덱스 추가
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_category ON series(category)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series ON episodes(series_path)')
+    conn.commit()
+    conn.close()
+    log("🗄️ [DB] 데이터베이스 초기화 완료")
+
+def migrate_json_to_sqlite():
+    if not os.path.exists(CACHE_FILE): return
+    log("🚚 [MIGRATE] JSON 데이터를 SQLite로 이관을 시도합니다...")
+    try:
+        with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        conn = get_db()
+        cursor = conn.cursor()
+
+        series_count = 0
+        episode_count = 0
+        for key in ["air", "movies", "foreigntv", "koreantv", "animations_all"]:
+            category_items = data.get(key, [])
+            log(f"  📂 [MIGRATE] '{key}' 카테고리 이관 중 ({len(category_items)}개 시리즈)")
+            for cat in category_items:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO series (path, category, name, posterPath, year, overview, rating, seasonCount, genreIds, failed)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    cat.get('path'), key, cat.get('name'), cat.get('posterPath'),
+                    cat.get('year'), cat.get('overview'), cat.get('rating'),
+                    cat.get('seasonCount'), json.dumps(cat.get('genreIds', [])),
+                    1 if cat.get('failed') else 0
+                ))
+                series_count += 1
+
+                for m in cat.get('movies', []):
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (m.get('id'), cat.get('path'), m.get('title'), m.get('videoUrl'), m.get('thumbnailUrl')))
+                    episode_count += 1
+
+        conn.commit()
+        conn.close()
+        log(f"✅ [MIGRATE] 이관 완료: 시리즈 {series_count}개, 에피소드 {episode_count}개")
+        os.rename(CACHE_FILE, CACHE_FILE + ".bak")
+        log(f"📦 [MIGRATE] 기존 JSON 파일을 '{CACHE_FILE}.bak'으로 백업했습니다.")
+    except Exception as e:
+        log(f"❌ [MIGRATE] 이관 실패: {str(e)}")
+        traceback.print_exc()
 
 # --- [정규식 및 클리닝] ---
 REGEX_EXT = re.compile(r'\.[a-zA-Z0-9]{2,4}$')
@@ -85,7 +172,7 @@ def clean_title_complex(title):
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned, year
 
-# --- [추가 유틸리티] ---
+# --- [유틸리티] ---
 def load_tmdb_memory_cache():
     if not os.path.exists(TMDB_CACHE_DIR): return
     for f in os.listdir(TMDB_CACHE_DIR):
@@ -132,34 +219,6 @@ def get_series_root_path(path, rel_base):
         curr = parent
     return nfc(os.path.relpath(path, rel_base))
 
-# --- [메모리 실시간 통합 로직] ---
-def merge_folders_to_series_in_memory(items):
-    if not items: return []
-    merged = {}
-    for item in items:
-        raw_name = item.get('name', 'Unknown')
-        pure_name, _ = clean_title_complex(raw_name)
-        if not pure_name: pure_name = raw_name
-
-        if pure_name not in merged:
-            merged[pure_name] = item.copy()
-            merged[pure_name]['name'] = pure_name
-            if 'movies' not in merged[pure_name]: merged[pure_name]['movies'] = []
-        else:
-            if 'movies' in item and item['movies']:
-                existing_ids = {m['id'] for m in merged[pure_name]['movies']}
-                for m in item['movies']:
-                    if m['id'] not in existing_ids:
-                        merged[pure_name]['movies'].append(m)
-            if not merged[pure_name].get('posterPath') and item.get('posterPath'):
-                merged[pure_name].update({k: v for k, v in item.items() if k != 'movies' and k != 'path'})
-
-    result = list(merged.values())
-    for r in result:
-        if 'movies' in r:
-            r['movies'] = sorted(r['movies'], key=lambda x: natural_sort_key(x.get('title', '')))
-    return sorted(result, key=lambda x: natural_sort_key(x.get('name', '')))
-
 # --- [TMDB 및 메타데이터] ---
 def get_tmdb_info_server(title, ignore_cache=False):
     if not title: return {"failed": True}
@@ -193,11 +252,14 @@ def get_tmdb_info_server(title, ignore_cache=False):
     except: pass
     return {"failed": True}
 
-# --- [스캔 및 탐색] ---
-def scan_recursive(bp, prefix, display_name=None):
-    series_map = {}
+# --- [스캔 및 탐색 로직 (SQLite)] ---
+def scan_recursive_to_db(bp, prefix, category):
+    log(f"  📂 '{category}' 카테고리 스캔 시작: {bp}")
     base = nfc(get_real_path(bp)); exts = VIDEO_EXTS; all_files = []
     stack = [base]
+
+    # 1단계: 파일 시스템 뒤지기 (로그 보강)
+    find_count = 0
     while stack:
         curr = stack.pop()
         try:
@@ -205,191 +267,307 @@ def scan_recursive(bp, prefix, display_name=None):
                 for entry in sorted(list(it), key=lambda e: natural_sort_key(e.name)):
                     if entry.is_dir():
                         if not any(ex in entry.name for ex in EXCLUDE_FOLDERS) and not entry.name.startswith('.'): stack.append(entry.path)
-                    elif entry.is_file() and entry.name.lower().endswith(exts): all_files.append(nfc(entry.path))
+                    elif entry.is_file() and entry.name.lower().endswith(exts):
+                        all_files.append(nfc(entry.path))
+                        find_count += 1
+                        if find_count % 1000 == 0:
+                            log(f"    🔎 파일 탐색 중... 현재 {find_count}개 발견")
         except: pass
-    all_files.sort(key=natural_sort_key)
+
+    log(f"  🔍 '{category}' 탐색 완료 (총 {len(all_files)}개). 이제 DB 정보를 갱신합니다.")
+    conn = get_db()
+    cursor = conn.cursor()
+
+    series_map = {}
+    db_update_count = 0
     for fp in all_files:
         dp = nfc(os.path.dirname(fp)); rel_path = get_series_root_path(dp, base)
-        if rel_path not in series_map:
-            name = get_meaningful_name(dp); full_path = display_name if rel_path == "." else f"{display_name}/{rel_path}"
-            series_map[rel_path] = {"name": name, "path": full_path, "movies": [], "genreIds": [], "posterPath": None}
+        full_series_path = f"{category}/{rel_path}"
+
+        if full_series_path not in series_map:
+            name = get_meaningful_name(dp)
+            cursor.execute('INSERT OR IGNORE INTO series (path, category, name) VALUES (?, ?, ?)', (full_series_path, category, name))
+            series_map[full_series_path] = True
+
         movie_id = hashlib.md5(fp.encode()).hexdigest()
-        series_map[rel_path]["movies"].append({"id": movie_id, "title": os.path.basename(fp), "videoUrl": f"/video_serve?type={prefix}&path={urllib.parse.quote(os.path.relpath(fp, base))}", "thumbnailUrl": f"/thumb_serve?type={prefix}&id={movie_id}&path={urllib.parse.quote(os.path.relpath(fp, base))}"})
-    return list(series_map.values())
+        cursor.execute('''
+            INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            movie_id, full_series_path, os.path.basename(fp),
+            f"/video_serve?type={prefix}&path={urllib.parse.quote(os.path.relpath(fp, base))}",
+            f"/thumb_serve?type={prefix}&id={movie_id}&path={urllib.parse.quote(os.path.relpath(fp, base))}"
+        ))
+        db_update_count += 1
+        if db_update_count % 1000 == 0:
+            log(f"    ⏳ DB 업데이트 진행 중... ({db_update_count}/{len(all_files)})")
+            conn.commit() # 중간 커밋: 앱에서 즉시 볼 수 있게 함
 
-def fetch_metadata_async(force_all=False):
-    log("🚀 [METADATA] 백그라운드 매칭 시작")
-    tasks = []
-    for k in ["animations_all", "foreigntv", "koreantv", "movies", "air"]:
-        for cat in GLOBAL_CACHE.get(k, []):
-            if force_all or (not cat.get('posterPath') and not cat.get('failed')):
-                tasks.append(cat)
-    total = len(tasks)
-    if total == 0:
-        log("🏁 [METADATA] 매칭할 대상이 없습니다. (데이터 로딩 중일 수 있습니다.)")
-        return
-    count = 0
-    for cat in tasks:
-        info = get_tmdb_info_server(cat['name'], ignore_cache=force_all)
-        cat.update(info)
-        count += 1
-        if count % 100 == 0 or count == total:
-            log(f"  ⏳ 매칭 중... ({count}/{total}) - {(count/total*100):.1f}% 완료")
-            save_cache()
-        time.sleep(0.05)
-    log("🏁 [METADATA] 모든 작업 완료")
-
-def build_home_recommend():
-    m, a, k, f = GLOBAL_CACHE["movies"], GLOBAL_CACHE["animations_all"], GLOBAL_CACHE["koreantv"], GLOBAL_CACHE["foreigntv"]
-    all_p = list(m + a + k + f); random.shuffle(all_p)
-    GLOBAL_CACHE["home_recommend"] = [{"title": "지금 가장 핫한 인기작", "items": all_p[:20]}, {"title": "방금 올라온 최신 영화", "items": m[:20]}, {"title": "지금 인기 있는 시리즈", "items": (k + f)[:20]}, {"title": "추천 애니메이션", "items": a[:20]}]
+    conn.commit()
+    conn.close()
+    log(f"  ✅ '{category}' 모든 DB 갱신 완료.")
 
 def perform_full_scan(cache_keys=None):
     keys = cache_keys if cache_keys else [("애니메이션", "animations_all"), ("외국TV", "foreigntv"), ("국내TV", "koreantv"), ("영화", "movies"), ("방송중", "air")]
-    log(f"🔄 NAS 전체 재스캔 시작: {keys}")
+    log(f"🔄 [SCAN] NAS 전체 재스캔 시작: {keys}")
     for label, cache_key in keys:
-        log(f"  📂 스캔 중... 카테고리: {label}")
         path, prefix = PATH_MAP[label]
-        GLOBAL_CACHE[cache_key] = scan_recursive(path, prefix, display_name=label)
-    log("🧠 메모리 실시간 통합 수행 중...")
-    for k in ["foreigntv", "koreantv", "animations_all"]: GLOBAL_CACHE[k] = merge_folders_to_series_in_memory(GLOBAL_CACHE[k])
-    build_home_recommend(); save_cache()
+        scan_recursive_to_db(path, prefix, cache_key)
+
+    log("🧠 [SCAN] 추천 리스트 갱신 중...")
+    build_home_recommend()
+    log("🏁 [SCAN] 전체 스캔 작업 완료")
+    # 스캔 후에도 혹시 누락된 매칭이 있다면 실행
     threading.Thread(target=fetch_metadata_async, daemon=True).start()
 
-def save_cache():
-    try:
-        with open(CACHE_FILE, 'w', encoding='utf-8') as f: json.dump(GLOBAL_CACHE, f, ensure_ascii=False)
-    except: pass
+def fetch_metadata_async(force_all=False):
+    global IS_METADATA_RUNNING
+    if IS_METADATA_RUNNING:
+        log("⚠️ [METADATA] 이미 매칭 작업이 진행 중입니다. 중복 실행을 방지합니다.")
+        return
 
-def load_cache():
-    if not os.path.exists(CACHE_FILE): return False
+    IS_METADATA_RUNNING = True
+    log("🚀 [METADATA] 백그라운드 TMDB 매칭 시작")
     try:
-        with open(CACHE_FILE, 'r', encoding='utf-8') as f:
-            d = json.load(f)
-            if d.get("version") == CACHE_VERSION:
-                GLOBAL_CACHE.update(d)
-                log(f"🧠 {CACHE_VERSION} 캐시 로드 완료. 메모리 실시간 통합 중...")
-                for k in ["foreigntv", "koreantv", "animations_all"]: GLOBAL_CACHE[k] = merge_folders_to_series_in_memory(GLOBAL_CACHE[k])
-                return True
-    except: pass
-    return False
+        conn = get_db()
+        cursor = conn.cursor()
+        if force_all:
+            cursor.execute('SELECT path, name FROM series')
+        else:
+            cursor.execute('SELECT path, name FROM series WHERE posterPath IS NULL AND failed = 0')
+
+        tasks = cursor.fetchall()
+        conn.close()
+
+        total = len(tasks)
+        if total == 0:
+            log("🏁 [METADATA] 매칭할 대상이 없습니다.")
+            IS_METADATA_RUNNING = False
+            return
+
+        log(f"📊 [METADATA] 총 {total}개의 항목을 TMDB와 매칭할 예정입니다.")
+
+        count = 0
+        success_count = 0
+        fail_count = 0
+        start_time = time.time()
+
+        for row in tasks:
+            path, name = row['path'], row['name']
+            info = get_tmdb_info_server(name, ignore_cache=force_all)
+
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE series SET
+                    posterPath = ?, year = ?, overview = ?, rating = ?,
+                    seasonCount = ?, genreIds = ?, failed = ?
+                WHERE path = ?
+            ''', (
+                info.get('posterPath'), info.get('year'), info.get('overview'),
+                info.get('rating'), info.get('seasonCount'),
+                json.dumps(info.get('genreIds', [])),
+                1 if info.get('failed') else 0,
+                path
+            ))
+            conn.commit()
+            conn.close()
+
+            count += 1
+            if not info.get('failed'): success_count += 1
+            else: fail_count += 1
+
+            if count % 10 == 0 or count == total:
+                elapsed = time.time() - start_time
+                speed = count / elapsed if elapsed > 0 else 0
+                remaining = (total - count) / speed if speed > 0 else 0
+                log(f"  ⏳ 진행중: {count}/{total} ({(count/total*100):.1f}%) - [성공: {success_count}, 실패: {fail_count}] [남은시간: {int(remaining//60)}분 {int(remaining%60)}초]")
+                if not info.get('failed'): log(f"    ✅ 매칭성공: {name}")
+
+            time.sleep(0.05)
+        log(f"🏁 [METADATA] 모든 작업 완료 (최종 성공: {success_count}, 실패: {fail_count})")
+        build_home_recommend()
+    finally:
+        IS_METADATA_RUNNING = False
+
+def build_home_recommend():
+    global HOME_RECOMMEND
+    log("🏠 [HOME] 추천 리스트 구축 중...")
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+
+        # 포스터 유무와 상관없이 모든 데이터가 노출되도록 조건 완화
+        # 1. 인기작 (랜덤)
+        cursor.execute('SELECT * FROM series ORDER BY RANDOM() LIMIT 20')
+        all_p = [dict(row) for row in cursor.fetchall()]
+        # 2. 영화
+        cursor.execute('SELECT * FROM series WHERE category = "movies" LIMIT 20')
+        m = [dict(row) for row in cursor.fetchall()]
+        # 3. 시리즈
+        cursor.execute('SELECT * FROM series WHERE category IN ("koreantv", "foreigntv") LIMIT 20')
+        kf = [dict(row) for row in cursor.fetchall()]
+
+        # 각 시리즈에 첫 번째 에피소드(movies) 정보 추가 (앱 호환성)
+        for section_items in [all_p, m, kf]:
+            for series in section_items:
+                if series.get('genreIds'): series['genreIds'] = json.loads(series['genreIds'])
+                cursor.execute('SELECT * FROM episodes WHERE series_path = ? LIMIT 1', (series['path'],))
+                ep = cursor.fetchone()
+                series['movies'] = [dict(ep)] if ep else []
+
+        conn.close()
+        HOME_RECOMMEND = [
+            {"title": "지금 가장 핫한 인기작", "items": all_p},
+            {"title": "방금 올라온 최신 영화", "items": m},
+            {"title": "지금 인기 있는 시리즈", "items": kf}
+        ]
+        log(f"🏠 [HOME] 추천 리스트 갱신 완료 (항목수: {len(all_p) + len(m) + len(kf)})")
+    except Exception as e:
+        log(f"❌ [HOME] 추천 리스트 구축 실패: {str(e)}")
 
 # --- [API 엔드포인트] ---
 @app.route('/home')
-def get_home(): return jsonify(GLOBAL_CACHE.get("home_recommend", []))
+def get_home(): return jsonify(HOME_RECOMMEND)
 
-def process_api(data, filter_keyword=None):
-    pool = data
+def get_series_list_api(category, filter_keyword=None):
+    conn = get_db()
+    cursor = conn.cursor()
+    query = 'SELECT * FROM series WHERE category = ?'
+    params = [category]
     if filter_keyword:
-        synonyms = {"미국": ["미국", "미드", "us"], "중국": ["중국", "중드", "cn"], "일본": ["일본", "일드", "jp"], "기타": ["기타", "etc"], "다큐": ["다큐", "docu"], "드라마": ["드라마"], "시트콤": ["시트콤"], "예능": ["예능"], "교양": ["교양"]}
-        targets = [nfc(t).lower() for t in synonyms.get(filter_keyword, [filter_keyword])]
-        pool = [c for c in data if any(t in nfc(c.get('path', '')).lower() or t in nfc(c.get('name', '')).lower() for t in targets)]
-    limit = request.args.get('limit', type=int, default=5000); offset = request.args.get('offset', type=int, default=0)
-    res = pool[offset:offset+limit]
-    if request.args.get('lite') == 'true':
-        return [{"name": c.get('name'), "path": c.get('path'), "genreIds": c.get('genreIds'), "posterPath": c.get('posterPath'), "year": c.get('year'), "overview": c.get('overview'), "rating": c.get('rating'), "seasonCount": c.get('seasonCount'), "failed": c.get('failed')} for c in res]
-    return res
+        query += ' AND (path LIKE ? OR name LIKE ?)'
+        params.extend([f'%{filter_keyword}%', f'%{filter_keyword}%'])
+    cursor.execute(query, params)
+    rows = [dict(r) for r in cursor.fetchall()]
+
+    # 앱 호환성을 위해 각 항목에 에피소드 리스트(movies) 추가
+    for item in rows:
+        if item.get('genreIds'): item['genreIds'] = json.loads(item['genreIds'])
+        cursor.execute('SELECT * FROM episodes WHERE series_path = ? LIMIT 1', (item['path'],))
+        ep = cursor.fetchone()
+        item['movies'] = [dict(ep)] if ep else []
+
+    conn.close()
+    return sorted(rows, key=lambda x: natural_sort_key(x['name']))
+
+def get_series_list_filtered(category, filter_keyword=None):
+    # 기존 process_api에서 사용하던 동의어 로직을 SQLite 쿼리로 재현
+    synonyms = {
+        "미국": ["미국", "미드", "us"],
+        "중국": ["중국", "중드", "cn"],
+        "일본": ["일본", "일드", "jp"],
+        "기타": ["기타", "etc"],
+        "다큐": ["다큐", "docu"],
+        "드라마": ["드라마"],
+        "시트콤": ["시트콤"],
+        "예능": ["예능"],
+        "교양": ["교양"],
+        "uhd": ["uhd", "4k"],
+        "latest": ["latest", "최신"],
+        "title": ["title", "제목"]
+    }
+
+    conn = get_db()
+    cursor = conn.cursor()
+    query = 'SELECT * FROM series WHERE category = ?'
+    params = [category]
+
+    if filter_keyword:
+        targets = synonyms.get(filter_keyword, [filter_keyword])
+        filter_parts = []
+        for t in targets:
+            filter_parts.append("(path LIKE ? OR name LIKE ?)")
+            params.extend([f'%{t}%', f'%{t}%'])
+        query += " AND (" + " OR ".join(filter_parts) + ")"
+
+    cursor.execute(query, params)
+    rows = [dict(r) for r in cursor.fetchall()]
+
+    for item in rows:
+        if item.get('genreIds'): item['genreIds'] = json.loads(item['genreIds'])
+        cursor.execute('SELECT * FROM episodes WHERE series_path = ? LIMIT 1', (item['path'],))
+        ep = cursor.fetchone()
+        item['movies'] = [dict(ep)] if ep else []
+
+    conn.close()
+    return sorted(rows, key=lambda x: natural_sort_key(x['name']))
 
 @app.route('/foreigntv')
-def get_ftv(): return jsonify(process_api(GLOBAL_CACHE["foreigntv"]))
+def get_ftv(): return jsonify(get_series_list_api("foreigntv"))
 @app.route('/ftv_us')
-def get_ftv_us(): return jsonify(process_api(GLOBAL_CACHE["foreigntv"], "미국"))
+def get_ftv_us(): return jsonify(get_series_list_filtered("foreigntv", "미국"))
 @app.route('/ftv_cn')
-def get_ftv_cn(): return jsonify(process_api(GLOBAL_CACHE["foreigntv"], "중국"))
+def get_ftv_cn(): return jsonify(get_series_list_filtered("foreigntv", "중국"))
 @app.route('/ftv_jp')
-def get_ftv_jp(): return jsonify(process_api(GLOBAL_CACHE["foreigntv"], "일본"))
+def get_ftv_jp(): return jsonify(get_series_list_filtered("foreigntv", "일본"))
 @app.route('/ftv_docu')
-def get_ftv_docu(): return jsonify(process_api(GLOBAL_CACHE["foreigntv"], "다큐"))
+def get_ftv_docu(): return jsonify(get_series_list_filtered("foreigntv", "다큐"))
 @app.route('/ftv_etc')
-def get_ftv_etc(): return jsonify(process_api(GLOBAL_CACHE["foreigntv"], "기타"))
+def get_ftv_etc(): return jsonify(get_series_list_filtered("foreigntv", "기타"))
 
 @app.route('/koreantv')
-def get_ktv(): return jsonify(process_api(GLOBAL_CACHE["koreantv"]))
+def get_ktv(): return jsonify(get_series_list_api("koreantv"))
 @app.route('/ktv_drama')
-def get_ktv_drama(): return jsonify(process_api(GLOBAL_CACHE["koreantv"], "드라마"))
+def get_ktv_drama(): return jsonify(get_series_list_filtered("koreantv", "드라마"))
 @app.route('/ktv_sitcom')
-def get_ktv_sitcom(): return jsonify(process_api(GLOBAL_CACHE["koreantv"], "시트콤"))
+def get_ktv_sitcom(): return jsonify(get_series_list_filtered("koreantv", "시트콤"))
 @app.route('/ktv_variety')
-def get_ktv_variety(): return jsonify(process_api(GLOBAL_CACHE["koreantv"], "예능"))
+def get_ktv_variety(): return jsonify(get_series_list_filtered("koreantv", "예능"))
 @app.route('/ktv_edu')
-def get_ktv_edu(): return jsonify(process_api(GLOBAL_CACHE["koreantv"], "교양"))
+def get_ktv_edu(): return jsonify(get_series_list_filtered("koreantv", "교양"))
 @app.route('/ktv_docu')
-def get_ktv_docu(): return jsonify(process_api(GLOBAL_CACHE["koreantv"], "다큐멘터리"))
+def get_ktv_docu(): return jsonify(get_series_list_filtered("koreantv", "다큐멘터리"))
 
 @app.route('/animations_all')
-def get_anim(): return jsonify(process_api(GLOBAL_CACHE["animations_all"]))
+def get_anim(): return jsonify(get_series_list_api("animations_all"))
 @app.route('/anim_raftel')
-def get_anim_r(): return jsonify(process_api(GLOBAL_CACHE["animations_all"], "라프텔"))
+def get_anim_r(): return jsonify(get_series_list_filtered("animations_all", "라프텔"))
 @app.route('/anim_series')
-def get_anim_s(): return jsonify(process_api(GLOBAL_CACHE["animations_all"], "시리즈"))
+def get_anim_s(): return jsonify(get_series_list_filtered("animations_all", "시리즈"))
 
 @app.route('/movies')
-def get_movies():
-    pool = GLOBAL_CACHE["movies"]
-    if "uhd" in request.path: pool = [c for c in pool if "uhd" in (c.get('path') or "").lower() or "4k" in (c.get('path') or "").lower()]
-    elif "title" in request.path: pool = sorted(pool, key=lambda x: natural_sort_key(x.get('name', '')))
-    return jsonify(process_api(pool))
-
-@app.route('/rescan_broken')
-def rescan_broken():
-    log("⚠️ 영화/방송중 카테고리 즉시 재탐색 요청 수신")
-    threading.Thread(target=perform_full_scan, args=([("영화", "movies"), ("방송중", "air")],), daemon=True).start()
-    return jsonify({"status": "success", "message": "영화/방송중 카테고리 재탐색 시작"})
-
-@app.route('/rematch_metadata')
-def rescan_metadata():
-    log("⚠️ TMDB 메타데이터 전체 재매칭 요청 수신")
-    # [원칙 준수 추가] 현재 스캔 중이라 메모리가 비어있을 경우를 대비해 기존 캐시 로드 시도
-    if not any(GLOBAL_CACHE[k] for k in ["movies", "animations_all", "foreigntv", "koreantv", "air"]):
-        log("  💡 현재 메모리가 비어있어 캐시 파일 로드를 시도합니다...")
-        load_cache()
-    threading.Thread(target=fetch_metadata_async, args=(True,), daemon=True).start()
-    return jsonify({"status": "success", "message": "TMDB 메타데이터 전체 재매칭 시작 (백그라운드)"})
+def get_movies(): return jsonify(get_series_list_api("movies"))
+@app.route('/movies_uhd')
+def get_movies_uhd(): return jsonify(get_series_list_filtered("movies", "uhd"))
+@app.route('/movies_latest')
+def get_movies_latest(): return jsonify(get_series_list_filtered("movies", "latest"))
+@app.route('/movies_title')
+def get_movies_title(): return jsonify(get_series_list_filtered("movies", "title"))
 
 @app.route('/api/series_detail')
 def get_series_detail_api():
     path = request.args.get('path')
     if not path: return jsonify(None)
-    for k in ["foreigntv", "koreantv", "animations_all", "movies", "air"]:
-        for series in GLOBAL_CACHE.get(k, []):
-            if series.get('path') == path:
-                res = series.copy()
-                if len(res.get('movies', [])) > 500:
-                    log(f"⚠️ Safe Guard: {path} 에피소드가 너무 많아 500개로 제한하여 전송합니다.")
-                    res['movies'] = res['movies'][:500]
-                return jsonify(res)
-    return jsonify(None)
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM series WHERE path = ?', (path,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify(None)
+    series = dict(row)
+    if series.get('genreIds'): series['genreIds'] = json.loads(series['genreIds'])
+    cursor.execute('SELECT * FROM episodes WHERE series_path = ?', (path,))
+    series['movies'] = sorted([dict(r) for r in cursor.fetchall()], key=lambda x: natural_sort_key(x['title']))
+    conn.close()
+    return jsonify(series)
 
 @app.route('/search')
 def search_videos():
     q = request.args.get('q', '').lower()
     if not q: return jsonify([])
-    res = []
-    for k in ["movies", "animations_all", "foreigntv", "koreantv", "air"]:
-        for cat in GLOBAL_CACHE.get(k, []):
-            if q in cat['name'].lower() or q in cat.get('path','').lower():
-                lite_cat = {k: v for k, v in cat.items() if k != 'movies'}
-                res.append(lite_cat)
-    return jsonify(process_api(res))
-
-@app.route('/list')
-def get_list():
-    path = request.args.get('path'); real_path, type_code = resolve_nas_path(path)
-    if not real_path or not os.path.exists(real_path): return jsonify([])
-    cat_prefix = nfc(path.split('/')[0]); base_dir = PATH_MAP[cat_prefix][0]; res, movies = [], []
-    try:
-        for entry in sorted(os.listdir(real_path), key=natural_sort_key):
-            fe = os.path.join(real_path, entry)
-            if os.path.isdir(fe) and not any(ex in entry for ex in EXCLUDE_FOLDERS):
-                item = {"name": nfc(entry), "path": f"{cat_prefix}/{nfc(os.path.relpath(fe, base_dir))}"}
-                h = hashlib.md5(nfc(get_meaningful_name(fe)).encode()).hexdigest(); item.update(TMDB_MEMORY_CACHE.get(h, {}))
-                res.append(item)
-            elif entry.lower().endswith(VIDEO_EXTS):
-                movie_id = hashlib.md5(fe.encode()).hexdigest()
-                movies.append({"id": movie_id, "title": entry, "videoUrl": f"/video_serve?type={type_code}&path={urllib.parse.quote(os.path.relpath(fe, base_dir))}", "thumbnailUrl": f"/thumb_serve?type={type_code}&id={movie_id}&path={urllib.parse.quote(os.path.relpath(fe, base_dir))}"})
-    except: pass
-    if movies: res.append({"name": os.path.basename(real_path), "path": path, "movies": sorted(movies, key=lambda x: natural_sort_key(x['title']))})
-    return jsonify(res)
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM series WHERE name LIKE ? OR path LIKE ?', (f'%{q}%', f'%{q}%'))
+    rows = [dict(r) for r in cursor.fetchall()]
+    for item in rows:
+        if item.get('genreIds'): item['genreIds'] = json.loads(item['genreIds'])
+        cursor.execute('SELECT * FROM episodes WHERE series_path = ? LIMIT 1', (item['path'],))
+        ep = cursor.fetchone()
+        item['movies'] = [dict(ep)] if ep else []
+    conn.close()
+    return jsonify(rows)
 
 @app.route('/video_serve')
 def video_serve():
@@ -401,22 +579,26 @@ def video_serve():
 
 @app.route('/thumb_serve')
 def thumb_serve():
-    path, prefix, tid = request.args.get('path'), request.args.get('type'), request.args.get('id')
+    path, prefix, tid, t = request.args.get('path'), request.args.get('type'), request.args.get('id'), request.args.get('t', default="300")
     try:
-        base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix); vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path))))
+        base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
+        vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path))))
         if os.path.isdir(vp):
-            fs = sorted([f for f in os.listdir(vp) if f.lower().endswith(VIDEO_EXTS)]); vp = os.path.join(vp, fs[0]) if fs else vp
-        tp = os.path.join(DATA_DIR, f"seek_300_{tid}")
-        if not os.path.exists(tp): subprocess.run([FFMPEG_PATH, "-y", "-ss", "300", "-i", vp, "-vframes", "1", "-q:v", "5", "-vf", "scale=320:-1", tp], timeout=10)
+            fs = sorted([f for f in os.listdir(vp) if f.lower().endswith(VIDEO_EXTS)])
+            vp = os.path.join(vp, fs[0]) if fs else vp
+        tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}.jpg")
+        if not os.path.exists(tp):
+            subprocess.run([FFMPEG_PATH, "-y", "-ss", t, "-i", vp, "-vframes", "1", "-q:v", "5", "-vf", "scale=320:-1", tp], timeout=15)
         return send_file(tp, mimetype='image/jpeg') if os.path.exists(tp) else ("Not Found", 404)
     except: return "Not Found", 404
 
 if __name__ == '__main__':
-    log(f"📺 NAS Server 시작 (버전 {CACHE_VERSION} - 재스캔 및 메타데이터 재사용 모드)")
+    log(f"📺 NAS Server 시작 (SQLite 기반 API 최적화)")
+    init_db()
+    migrate_json_to_sqlite()
     load_tmdb_memory_cache()
-    if not load_cache():
-        # [원칙 준수] 서버 즉시 기동을 위해 백그라운드 스레드로 실행
-        threading.Thread(target=perform_full_scan, daemon=True).start()
-    else:
-        log(f"✅ 기존 버전 {CACHE_VERSION} 캐시 로드 완료")
+    build_home_recommend()
+    # 병렬 실행: 스캔과 매칭을 동시에 시작 (규칙 준수 및 로그 보강)
+    threading.Thread(target=perform_full_scan, daemon=True).start()
+    threading.Thread(target=fetch_metadata_async, daemon=True).start()
     app.run(host='0.0.0.0', port=5000, threaded=True)
