@@ -97,12 +97,15 @@ def init_db():
             FOREIGN KEY (series_path) REFERENCES series (path) ON DELETE CASCADE
         )
     ''')
-    # 인덱스 추가
+    # 인덱스 추가 (성능 최적화)
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_category ON series(category)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_name ON series(name)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_poster ON series(posterPath)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cat_path ON series(category, path)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series ON episodes(series_path)')
     conn.commit()
     conn.close()
-    log("🗄️ [DB] 데이터베이스 초기화 완료")
+    log("🗄️ [DB] 데이터베이스 초기화 완료 및 인덱스 생성")
 
 def migrate_json_to_sqlite():
     if not os.path.exists(CACHE_FILE): return
@@ -432,13 +435,15 @@ def build_home_recommend():
         cursor = conn.cursor()
 
         def get_series_with_first_movie(sql_filter):
-            # [수정] 영화 중복 제거 기준 강화: posterPath가 같거나 name이 같으면 하나로 그룹화
+            # [최적화] JOIN을 통해 첫 번째 에피소드 정보를 한 번에 가져옴
             group_by_clause = "GROUP BY COALESCE(s.posterPath, s.name)" if "movies" in sql_filter or "1=1" in sql_filter else "GROUP BY s.path"
             sql = f'''
-                SELECT s.*, e.id as movie_id, e.title as movie_title, e.videoUrl, e.thumbnailUrl
+                SELECT s.*, e.id as ep_id, e.title as ep_title, e.videoUrl, e.thumbnailUrl
                 FROM series s
                 LEFT JOIN (
-                    SELECT * FROM episodes GROUP BY series_path
+                    SELECT series_path, id, title, videoUrl, thumbnailUrl
+                    FROM episodes
+                    GROUP BY series_path
                 ) e ON s.path = e.series_path
                 WHERE {sql_filter}
                 {group_by_clause}
@@ -449,8 +454,17 @@ def build_home_recommend():
             for row in cursor.fetchall():
                 item = dict(row)
                 if item.get('genreIds'): item['genreIds'] = json.loads(item['genreIds'])
-                cursor.execute('SELECT * FROM episodes WHERE series_path = ?', (item['path'],))
-                item['movies'] = [dict(r) for r in cursor.fetchall()]
+                # 목록 화면용: movies 리스트에 JOIN으로 가져온 첫 번째 에피소드만 담음
+                if item.get('ep_id'):
+                    item['movies'] = [{
+                        "id": item.pop('ep_id'),
+                        "series_path": item['path'],
+                        "title": item.pop('ep_title'),
+                        "videoUrl": item.pop('videoUrl'),
+                        "thumbnailUrl": item.pop('thumbnailUrl')
+                    }]
+                else:
+                    item['movies'] = []
                 results.append(item)
             return results
 
@@ -475,30 +489,49 @@ def get_home(): return jsonify(HOME_RECOMMEND)
 def get_series_list_api(category, filter_keyword=None):
     conn = get_db()
     cursor = conn.cursor()
-    # [수정] 영화 카테고리는 포스터 경로가 같거나 이름이 같으면 하나로 묶어 중복 노출 방지
+
+    # [최적화] N+1 문제를 해결하기 위해 JOIN 사용 및 데이터 경량화
     group_by = "GROUP BY COALESCE(s.posterPath, s.name)" if category == "movies" else "GROUP BY s.path"
 
     query = f'''
-        SELECT s.* FROM series s WHERE s.category = ?
+        SELECT s.*, e.id as ep_id, e.videoUrl as ep_url, e.thumbnailUrl as ep_thumb, e.title as ep_title
+        FROM series s
+        LEFT JOIN (
+            SELECT series_path, id, videoUrl, thumbnailUrl, title
+            FROM episodes
+            GROUP BY series_path
+        ) e ON s.path = e.series_path
+        WHERE s.category = ?
     '''
     params = [category]
     if filter_keyword:
         query += ' AND (s.path LIKE ? OR s.name LIKE ?)'
         params.extend([f'%{filter_keyword}%', f'%{filter_keyword}%'])
 
-    query += f' {group_by}'
+    query += f' {group_by} ORDER BY s.name ASC'
 
     cursor.execute(query, params)
     rows = []
     for row in cursor.fetchall():
         item = dict(row)
         if item.get('genreIds'): item['genreIds'] = json.loads(item['genreIds'])
-        cursor.execute("SELECT * FROM episodes WHERE series_path = ?", (item['path'],))
-        item['movies'] = [dict(r) for r in cursor.fetchall()]
+
+        # 목록 화면용: 대표 에피소드 1개만 포함하여 전역 전송량 감소
+        if item.get('ep_id'):
+            item['movies'] = [{
+                "id": item.pop('ep_id'),
+                "videoUrl": item.pop('ep_url'),
+                "thumbnailUrl": item.pop('ep_thumb'),
+                "title": item.pop('ep_title')
+            }]
+        else:
+            item['movies'] = []
+            for k in ['ep_id', 'ep_url', 'ep_thumb', 'ep_title']: item.pop(k, None)
+
         rows.append(item)
 
     conn.close()
-    return sorted(rows, key=lambda x: natural_sort_key(x['name']))
+    return rows
 
 @app.route('/list')
 def get_list_api():
@@ -520,6 +553,7 @@ def get_list_api():
 
     series = dict(row)
     if series.get('genreIds'): series['genreIds'] = json.loads(series['genreIds'])
+    # 개별 시리즈 상세 요청 시에는 전체 에피소드 반환
     cursor.execute('SELECT * FROM episodes WHERE series_path = ?', (path,))
     series['movies'] = [dict(r) for r in cursor.fetchall()]
     conn.close()
@@ -535,7 +569,6 @@ def get_series_list_filtered(category, filter_keyword=None):
 
     conn = get_db()
     cursor = conn.cursor()
-    # [수정] 중복 제거 기준 강화
     group_by = "GROUP BY COALESCE(s.posterPath, s.name)" if category == "movies" else "GROUP BY s.path"
 
     filter_clause = ""
@@ -548,8 +581,17 @@ def get_series_list_filtered(category, filter_keyword=None):
             params.extend([f'%/{t}/%', f'%{t}%', f'%/{t}', f'{t}/%'])
         filter_clause = " AND (" + " OR ".join(filter_parts) + ")"
 
+    # [최적화] 필터링 시에도 JOIN을 통한 고속 조회 적용
     query = f'''
-        SELECT s.* FROM series s WHERE s.category = ? {filter_clause} {group_by}
+        SELECT s.*, e.id as ep_id, e.videoUrl as ep_url, e.thumbnailUrl as ep_thumb, e.title as ep_title
+        FROM series s
+        LEFT JOIN (
+            SELECT series_path, id, videoUrl, thumbnailUrl, title
+            FROM episodes
+            GROUP BY series_path
+        ) e ON s.path = e.series_path
+        WHERE s.category = ? {filter_clause} {group_by}
+        ORDER BY s.name ASC
     '''
 
     cursor.execute(query, params)
@@ -557,12 +599,22 @@ def get_series_list_filtered(category, filter_keyword=None):
     for row in cursor.fetchall():
         item = dict(row)
         if item.get('genreIds'): item['genreIds'] = json.loads(item['genreIds'])
-        cursor.execute("SELECT * FROM episodes WHERE series_path = ?", (item['path'],))
-        item['movies'] = [dict(r) for r in cursor.fetchall()]
+
+        if item.get('ep_id'):
+            item['movies'] = [{
+                "id": item.pop('ep_id'),
+                "videoUrl": item.pop('ep_url'),
+                "thumbnailUrl": item.pop('ep_thumb'),
+                "title": item.pop('ep_title')
+            }]
+        else:
+            item['movies'] = []
+            for k in ['ep_id', 'ep_url', 'ep_thumb', 'ep_title']: item.pop(k, None)
+
         rows.append(item)
 
     conn.close()
-    return sorted(rows, key=lambda x: natural_sort_key(x['name']))
+    return rows
 
 @app.route('/air')
 def get_air_all(): return jsonify(get_series_list_api("air"))
@@ -664,18 +716,36 @@ def search_videos():
     q = request.args.get('q', '').lower()
     if not q: return jsonify([])
     conn = get_db(); cursor = conn.cursor()
+    # 검색 시에도 속도 향상을 위해 JOIN 고려 가능하나, 검색은 빈도가 낮으므로 우선 유지하되 JOIN으로 변경
     query = f'''
-        SELECT s.* FROM series s
+        SELECT s.*, e.id as ep_id, e.videoUrl as ep_url, e.thumbnailUrl as ep_thumb, e.title as ep_title
+        FROM series s
+        LEFT JOIN (
+            SELECT series_path, id, videoUrl, thumbnailUrl, title
+            FROM episodes
+            GROUP BY series_path
+        ) e ON s.path = e.series_path
         WHERE s.name LIKE ? OR s.path LIKE ?
         GROUP BY COALESCE(s.posterPath, s.name)
+        ORDER BY s.name ASC
     '''
     cursor.execute(query, (f'%{q}%', f'%{q}%'))
     rows = []
     for row in cursor.fetchall():
         item = dict(row)
         if item.get('genreIds'): item['genreIds'] = json.loads(item['genreIds'])
-        cursor.execute("SELECT * FROM episodes WHERE series_path = ?", (item['path'],))
-        item['movies'] = [dict(r) for r in cursor.fetchall()]
+
+        if item.get('ep_id'):
+            item['movies'] = [{
+                "id": item.pop('ep_id'),
+                "videoUrl": item.pop('ep_url'),
+                "thumbnailUrl": item.pop('ep_thumb'),
+                "title": item.pop('ep_title')
+            }]
+        else:
+            item['movies'] = []
+            for k in ['ep_id', 'ep_url', 'ep_thumb', 'ep_title']: item.pop(k, None)
+
         rows.append(item)
     conn.close()
     return jsonify(rows)
@@ -704,7 +774,6 @@ def thumb_serve():
     except: return "Not Found", 404
 
 # --- [최적화 전용 고속 API 추가 (규칙 준수)] ---
-# 기존 로직을 보존하며, 대용량 카테고리 로딩 성능 향상을 위해 에피소드 최소화 및 페이징 기능을 추가합니다.
 CAT_MAP_V2 = { "영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air" }
 
 @app.route('/api/fast_list')
@@ -713,7 +782,6 @@ def get_fast_list():
     limit = int(request.args.get('limit', 100))
     offset = int(request.args.get('offset', 0))
 
-    # 카테고리와 필터 키워드 분리
     target_cat = "movies"
     filter_q = ""
     for kor, eng in CAT_MAP_V2.items():
@@ -729,13 +797,11 @@ def get_fast_list():
     conn = get_db(); cursor = conn.cursor()
     params = [target_cat]
 
-    # [수정] 필터링을 '포함' 검색(%keyword%)으로 변경하여 누락 방지
     filter_clause = ""
     if filter_q:
         filter_clause = " AND (s.path LIKE ? OR s.name LIKE ?)"
         params.extend([f'%{filter_q}%', f'%{filter_q}%'])
 
-    # [수정] 영화는 중복 제거(포스터 기준), TV/애니 등은 폴더별 노출(기존 규칙 준수)
     group_by = "GROUP BY COALESCE(s.posterPath, s.name)" if target_cat == "movies" else "GROUP BY s.path"
 
     query = f"SELECT * FROM series s WHERE category = ? {filter_clause} {group_by} ORDER BY name ASC LIMIT ? OFFSET ?"
@@ -765,7 +831,6 @@ def get_fast_detail():
     if not row: conn.close(); return jsonify(None)
     series = dict(row); items = []
     if series.get('genreIds'): series['genreIds'] = json.loads(series['genreIds'])
-    # 상세 화면용 에피소드 합산 로직
     sql = "SELECT e.* FROM episodes e JOIN series s ON e.series_path = s.path WHERE "
     sql += "s.posterPath = ?" if series.get('posterPath') else "s.name = ?"
     cursor.execute(sql, (series.get('posterPath') or series['name'],))
