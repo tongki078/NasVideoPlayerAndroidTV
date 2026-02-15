@@ -4,7 +4,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
@@ -73,11 +72,10 @@ fun App(driver: SqlDriver) {
     var lastPlaybackPosition by rememberSaveable { mutableLongStateOf(0L) }
     var lastVideoDuration by rememberSaveable { mutableLongStateOf(0L) }
 
-    var selectedSubMode by rememberSaveable(currentScreen) { mutableIntStateOf(0) }
-    val allCategorySections = remember { mutableStateMapOf<String, List<HomeSection>>() }
-    val categoryLoadingStates = remember { mutableStateMapOf<String, Boolean>() }
-    
-    // "전체" 삭제 및 세련된 필터 구성
+    // 세부 탭 상태 (화면별로 기억하되, 화면 전환 시 0으로 초기화하지 않음)
+    val subModeStates = remember { mutableStateMapOf<Screen, Int>() }
+    val selectedSubMode = subModeStates.getOrDefault(currentScreen, 0)
+
     val subModes = when(currentScreen) {
         Screen.MOVIES -> listOf("UHD", "최신", "제목")
         Screen.KOREAN_TV -> listOf("드라마", "예능", "시트콤", "교양", "다큐멘터리")
@@ -87,6 +85,9 @@ fun App(driver: SqlDriver) {
         else -> emptyList()
     }
 
+    val allCategorySections = remember { mutableStateMapOf<String, List<HomeSection>>() }
+    val categoryLoadingStates = remember { mutableStateMapOf<String, Boolean>() }
+    
     LaunchedEffect(currentScreen, selectedSubMode) {
         val cacheKey = "${currentScreen.name}_$selectedSubMode"
         if (!allCategorySections.containsKey(cacheKey)) {
@@ -106,11 +107,16 @@ fun App(driver: SqlDriver) {
                                    else repoImpl.fetchCategorySections(catKey)
                     
                     val filteredSections = if (subModes.isEmpty()) sections 
-                    else sections.map { s -> 
-                        s.copy(items = s.items.filter { it.path?.contains(subModes[selectedSubMode]) == true || it.name?.contains(subModes[selectedSubMode]) == true }) 
-                    }.filter { it.items.isNotEmpty() }
+                    else {
+                        val target = subModes[selectedSubMode]
+                        sections.map { s -> 
+                            s.copy(items = s.items.filter { 
+                                it.path?.contains(target) == true || it.name?.contains(target) == true 
+                            }) 
+                        }.filter { it.items.isNotEmpty() }
+                    }
                     
-                    allCategorySections[cacheKey] = if (filteredSections.isEmpty()) sections else filteredSections
+                    allCategorySections[cacheKey] = if (filteredSections.isEmpty() && selectedSubMode == 0) sections else filteredSections
                 }
             } catch (_: Exception) {} finally { categoryLoadingStates[cacheKey] = false }
         }
@@ -136,20 +142,22 @@ fun App(driver: SqlDriver) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(modifier = Modifier.fillMaxSize()) {
                 if (selectedMovie == null) {
-                    NetflixTopBar(currentScreen) { currentScreen = it; selectedSeries = null; selectedSubMode = 0 }
+                    NetflixTopBar(currentScreen) { screen ->
+                        currentScreen = screen
+                        selectedSeries = null 
+                    }
                     
-                    // 세련된 서브 내비게이션 칩 리스트
                     if (subModes.isNotEmpty()) {
                         LazyRow(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
                             contentPadding = PaddingValues(horizontal = 24.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             itemsIndexed(subModes) { index, title ->
                                 SophisticatedTabChip(
                                     title = title,
                                     isSelected = selectedSubMode == index,
-                                    onClick = { selectedSubMode = index }
+                                    onClick = { subModeStates[currentScreen] = index }
                                 )
                             }
                         }
@@ -216,12 +224,12 @@ private fun SophisticatedTabChip(
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
+    val scale by animateFloatAsState(if (isFocused) 1.12f else 1.0f)
     val backgroundColor by animateColorAsState(
         targetValue = when {
             isFocused -> Color.White
-            isSelected -> Color.Red.copy(alpha = 0.8f)
-            else -> Color.White.copy(alpha = 0.1f)
+            isSelected -> Color.Red
+            else -> Color.White.copy(alpha = 0.15f)
         }
     )
     val contentColor by animateColorAsState(
@@ -231,18 +239,18 @@ private fun SophisticatedTabChip(
     Box(
         modifier = Modifier
             .scale(scale)
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(backgroundColor)
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(horizontal = 20.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = title,
             color = contentColor,
-            fontSize = 13.sp,
+            fontSize = 14.sp,
             fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
         )
     }
