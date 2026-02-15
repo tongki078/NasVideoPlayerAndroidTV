@@ -1,6 +1,7 @@
 package org.nas.videoplayerandroidtv.ui.category
 
 import org.nas.videoplayerandroidtv.domain.model.Series
+import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 
 // 공유 데이터 클래스 정의
 data class ThemeSection(val id: String, val title: String, val seriesList: List<Series>)
@@ -17,8 +18,22 @@ object ThemeConfig {
 suspend fun processThemedSections(result: List<Series>): List<ThemeSection> {
     if (result.isEmpty()) return emptyList()
 
-    // 1. 중복 제거 (가장 먼저 수행)
-    val distinctResult = result.distinctBy { it.fullPath ?: it.title }
+    // 1. 제목 기반 그룹화 (시즌별로 나뉜 영상들을 하나로 묶음)
+    val groupedResult = result.groupBy { 
+        it.title.cleanTitle(includeYear = false) 
+    }.map { (baseTitle, seriesList) ->
+        if (seriesList.size > 1) {
+            // 여러 시즌이 있는 경우 에피소드를 합침
+            seriesList[0].copy(
+                title = baseTitle,
+                episodes = seriesList.flatMap { it.episodes }.distinctBy { it.videoUrl ?: it.id }
+            )
+        } else {
+            seriesList[0]
+        }
+    }
+
+    val distinctResult = groupedResult.distinctBy { it.fullPath ?: it.title }
     val sectionsList = mutableListOf<ThemeSection>()
     val usedPaths = mutableSetOf<String>()
 
