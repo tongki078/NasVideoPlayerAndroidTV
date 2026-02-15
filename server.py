@@ -324,16 +324,38 @@ def get_sections_for_category(cat):
     base_list = _FAST_CATEGORY_CACHE.get(cat, [])
     if not base_list: return []
     sections = []
-    sections.append({"title": "방금 올라온 최신 콘텐츠", "items": base_list[:20]})
+
+    seen_keys = set() # 한 페이지 내 작품 중복 노출 방지
+
+    # 1. 최신 콘텐츠
+    latest_items = base_list[:20]
+    sections.append({"title": "방금 올라온 최신 콘텐츠", "items": latest_items})
+    for item in latest_items: seen_keys.add(item.get('tmdbId') or item.get('name'))
+
     genres = {}
     for item in base_list:
-        # fix: genreNames가 None인 경우 빈 리스트로 처리하여 TypeError 방지
         for g in (item.get('genreNames') or []): genres.setdefault(g, []).append(item)
+
     sorted_genres = sorted(genres.items(), key=lambda x: len(x[1]), reverse=True)
+
     for g_name, g_items in sorted_genres[:5]:
-        sections.append({"title": f"인기 {g_name} 시리즈" if "tv" in cat else f"추천 {g_name} 영화", "items": g_items[:20]})
-    random_picks = random.sample(base_list, min(len(base_list), 20)) if base_list else []
-    sections.append({"title": "이런 콘텐츠는 어떠세요?", "items": random_picks})
+        # 진화: 이미 위쪽 섹션에서 보여준 작품은 아래쪽 장르 섹션에서 제외
+        unique_items = [i for i in g_items if (i.get('tmdbId') or i.get('name')) not in seen_keys]
+
+        # 유니크한게 적으면 그냥 다 보여줌 (화면이 너무 썰렁해지는 것 방지)
+        display_items = unique_items[:20] if len(unique_items) >= 5 else g_items[:20]
+
+        if display_items:
+            sections.append({"title": f"인기 {g_name} 시리즈" if "tv" in cat else f"추천 {g_name} 영화", "items": display_items})
+            for item in display_items: seen_keys.add(item.get('tmdbId') or item.get('name'))
+
+    # 3. 랜덤 추천 (남은 것 중에서)
+    remaining = [i for i in base_list if (i.get('tmdbId') or i.get('name')) not in seen_keys]
+    random_pool = remaining if len(remaining) >= 10 else base_list
+    random_picks = random.sample(random_pool, min(len(random_pool), 20)) if random_pool else []
+    if random_picks:
+        sections.append({"title": "이런 콘텐츠는 어떠세요?", "items": random_picks})
+
     return sections
 
 @app.route('/category_sections')

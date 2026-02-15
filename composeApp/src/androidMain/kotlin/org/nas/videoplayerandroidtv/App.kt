@@ -1,24 +1,36 @@
 package org.nas.videoplayerandroidtv
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.ImageLoader
 import coil3.compose.setSingletonImageLoaderFactory
 import coil3.disk.DiskCache
 import coil3.request.crossfade
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import okio.Path.Companion.toPath
-import org.nas.videoplayerandroidtv.data.SearchHistoryDataSource
-import org.nas.videoplayerandroidtv.data.TmdbCacheDataSource
-import org.nas.videoplayerandroidtv.data.WatchHistoryDataSource
+import org.nas.videoplayerandroidtv.data.*
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.data.repository.VideoRepositoryImpl
 import org.nas.videoplayerandroidtv.domain.model.*
@@ -30,6 +42,7 @@ import org.nas.videoplayerandroidtv.ui.player.VideoPlayerScreen
 import org.nas.videoplayerandroidtv.ui.search.SearchScreen
 import org.nas.videoplayerandroidtv.db.AppDatabase
 import app.cash.sqldelight.db.SqlDriver
+import kotlinx.coroutines.launch
 
 @Composable
 fun App(driver: SqlDriver) {
@@ -37,16 +50,13 @@ fun App(driver: SqlDriver) {
     val repoImpl = repository as VideoRepositoryImpl
     
     setSingletonImageLoaderFactory { ctx -> 
-        ImageLoader.Builder(ctx)
-            .diskCache { DiskCache.Builder().directory(getImageCacheDirectory(ctx).toPath().resolve("coil_cache")).maxSizeBytes(100 * 1024 * 1024).build() }
-            .crossfade(true).build() 
+        ImageLoader.Builder(ctx).diskCache { DiskCache.Builder().directory(getImageCacheDirectory(ctx).toPath().resolve("coil_cache")).maxSizeBytes(100 * 1024 * 1024).build() }.crossfade(true).build() 
     }
     
     val db = remember { AppDatabase(driver) }
     val searchHistoryDataSource = remember { SearchHistoryDataSource(db) }
     val watchHistoryDataSource = remember { WatchHistoryDataSource(db) }
     val tmdbCacheDataSource = remember { TmdbCacheDataSource(db) }
-    
     LaunchedEffect(Unit) { persistentCache = tmdbCacheDataSource }
     
     val recentQueries by searchHistoryDataSource.getRecentQueries().collectAsState(initial = emptyList())
@@ -63,31 +73,50 @@ fun App(driver: SqlDriver) {
     var lastPlaybackPosition by rememberSaveable { mutableLongStateOf(0L) }
     var lastVideoDuration by rememberSaveable { mutableLongStateOf(0L) }
 
-    val allCategorySections = remember { mutableStateMapOf<Screen, List<HomeSection>>() }
-    val categoryLoadingStates = remember { mutableStateMapOf<Screen, Boolean>() }
+    var selectedSubMode by rememberSaveable(currentScreen) { mutableIntStateOf(0) }
+    val allCategorySections = remember { mutableStateMapOf<String, List<HomeSection>>() }
+    val categoryLoadingStates = remember { mutableStateMapOf<String, Boolean>() }
     
-    LaunchedEffect(currentScreen) {
-        if (!allCategorySections.containsKey(currentScreen)) {
-            categoryLoadingStates[currentScreen] = true
+    // "전체" 삭제 및 세련된 필터 구성
+    val subModes = when(currentScreen) {
+        Screen.MOVIES -> listOf("UHD", "최신", "제목")
+        Screen.KOREAN_TV -> listOf("드라마", "예능", "시트콤", "교양", "다큐멘터리")
+        Screen.FOREIGN_TV -> listOf("미국", "중국", "일본", "다큐", "기타")
+        Screen.ANIMATIONS -> listOf("라프텔", "시리즈")
+        Screen.ON_AIR -> listOf("애니메이션", "드라마")
+        else -> emptyList()
+    }
+
+    LaunchedEffect(currentScreen, selectedSubMode) {
+        val cacheKey = "${currentScreen.name}_$selectedSubMode"
+        if (!allCategorySections.containsKey(cacheKey)) {
+            categoryLoadingStates[cacheKey] = true
             try {
-                val sections = when(currentScreen) {
-                    Screen.HOME -> repository.getHomeRecommendations()
-                    Screen.MOVIES -> repoImpl.fetchCategorySections("movies")
-                    Screen.KOREAN_TV -> repoImpl.fetchCategorySections("koreantv")
-                    Screen.FOREIGN_TV -> repoImpl.fetchCategorySections("foreigntv")
-                    Screen.ANIMATIONS -> repoImpl.fetchCategorySections("animations_all")
-                    Screen.ON_AIR -> repoImpl.fetchCategorySections("air")
-                    else -> emptyList()
+                val catKey = when(currentScreen) {
+                    Screen.HOME -> "home"
+                    Screen.MOVIES -> "movies"
+                    Screen.KOREAN_TV -> "koreantv"
+                    Screen.FOREIGN_TV -> "foreigntv"
+                    Screen.ANIMATIONS -> "animations_all"
+                    Screen.ON_AIR -> "air"
+                    else -> ""
                 }
-                allCategorySections[currentScreen] = sections
-            } catch (_: Exception) {
-            } finally {
-                categoryLoadingStates[currentScreen] = false
-            }
+                if (catKey.isNotEmpty()) {
+                    val sections = if (catKey == "home") repository.getHomeRecommendations() 
+                                   else repoImpl.fetchCategorySections(catKey)
+                    
+                    val filteredSections = if (subModes.isEmpty()) sections 
+                    else sections.map { s -> 
+                        s.copy(items = s.items.filter { it.path?.contains(subModes[selectedSubMode]) == true || it.name?.contains(subModes[selectedSubMode]) == true }) 
+                    }.filter { it.items.isNotEmpty() }
+                    
+                    allCategorySections[cacheKey] = if (filteredSections.isEmpty()) sections else filteredSections
+                }
+            } catch (_: Exception) {} finally { categoryLoadingStates[cacheKey] = false }
         }
     }
 
-    val lazyListStates = remember { mutableMapOf<Screen, androidx.compose.foundation.lazy.LazyListState>() }
+    val lazyListStates = remember { mutableMapOf<String, androidx.compose.foundation.lazy.LazyListState>() }
 
     BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME) {
         when {
@@ -107,13 +136,28 @@ fun App(driver: SqlDriver) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(modifier = Modifier.fillMaxSize()) {
                 if (selectedMovie == null) {
-                    NetflixTopBar(currentScreen) { 
-                        currentScreen = it
-                        selectedSeries = null 
+                    NetflixTopBar(currentScreen) { currentScreen = it; selectedSeries = null; selectedSubMode = 0 }
+                    
+                    // 세련된 서브 내비게이션 칩 리스트
+                    if (subModes.isNotEmpty()) {
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            contentPadding = PaddingValues(horizontal = 24.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            itemsIndexed(subModes) { index, title ->
+                                SophisticatedTabChip(
+                                    title = title,
+                                    isSelected = selectedSubMode == index,
+                                    onClick = { selectedSubMode = index }
+                                )
+                            }
+                        }
                     }
                 }
                 
                 Box(Modifier.weight(1f).fillMaxWidth()) {
+                    val currentCacheKey = "${currentScreen.name}_$selectedSubMode"
                     when {
                         selectedMovie != null -> {
                             VideoPlayerScreen(
@@ -135,24 +179,24 @@ fun App(driver: SqlDriver) {
                                 initialDuration = lastVideoDuration, 
                                 onPositionUpdate = { pos: Long -> lastPlaybackPosition = pos }, 
                                 onBackPressed = { selectedSeries = null }, 
-                                onPlay = { movie: Movie, playlist: List<Movie>, pos: Long ->
-                                    selectedMovie = movie; moviePlaylist = playlist; lastPlaybackPosition = pos; 
-                                    saveWatchHistory(movie, selectedSeries?.posterPath, pos, lastVideoDuration, selectedSeries?.title, selectedSeries?.fullPath)
+                                onPlay = { m: Movie, p: List<Movie>, pos: Long ->
+                                    selectedMovie = m; moviePlaylist = p; lastPlaybackPosition = pos; 
+                                    saveWatchHistory(m, selectedSeries?.posterPath, pos, lastVideoDuration, selectedSeries?.title, selectedSeries?.fullPath)
                                 }
                             )
                         }
                         currentScreen == Screen.SEARCH -> {
-                            SearchScreen(searchQuery, { searchQuery = it }, recentQueries, searchResultSeries, isSearchLoading, { q -> scope.launch { searchHistoryDataSource.insertQuery(q, currentTimeMillis()) } }, { q -> scope.launch { searchHistoryDataSource.deleteQuery(q) } }, { selectedSeries = it })
+                            SearchScreen(searchQuery, { searchQuery = it }, recentQueries, searchResultSeries, isSearchLoading, { q: String -> scope.launch { searchHistoryDataSource.insertQuery(q, currentTimeMillis()) } }, { q: String -> scope.launch { searchHistoryDataSource.deleteQuery(q) } }, { selectedSeries = it })
                         }
                         else -> {
                             HomeScreen(
                                 watchHistory = if (currentScreen == Screen.HOME) watchHistory else emptyList(), 
-                                homeSections = allCategorySections[currentScreen] ?: emptyList(),
-                                isLoading = categoryLoadingStates[currentScreen] ?: false,
-                                lazyListState = lazyListStates.getOrPut(currentScreen) { androidx.compose.foundation.lazy.LazyListState() },
+                                homeSections = allCategorySections[currentCacheKey] ?: emptyList(),
+                                isLoading = categoryLoadingStates[currentCacheKey] ?: false,
+                                lazyListState = lazyListStates.getOrPut(currentCacheKey) { androidx.compose.foundation.lazy.LazyListState() },
                                 onSeriesClick = { selectedSeries = it }, 
-                                onPlayClick = { m -> selectedMovie = m; moviePlaylist = listOf(m); lastPlaybackPosition = 0L },
-                                onHistoryClick = { h -> 
+                                onPlayClick = { m: Movie -> selectedMovie = m; moviePlaylist = listOf(m); lastPlaybackPosition = 0L },
+                                onHistoryClick = { h: org.nas.videoplayerandroidtv.data.WatchHistory -> 
                                     selectedSeries = Series(h.seriesTitle ?: h.title, listOf(Movie(h.id, h.title, h.videoUrl, h.thumbnailUrl)), null, h.seriesPath, emptyList(), emptyList(), null, emptyList(), h.posterPath, null, null, null, null)
                                     lastPlaybackPosition = h.lastPosition; lastVideoDuration = h.duration
                                 }
@@ -162,5 +206,44 @@ fun App(driver: SqlDriver) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SophisticatedTabChip(
+    title: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
+    val backgroundColor by animateColorAsState(
+        targetValue = when {
+            isFocused -> Color.White
+            isSelected -> Color.Red.copy(alpha = 0.8f)
+            else -> Color.White.copy(alpha = 0.1f)
+        }
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (isFocused) Color.Black else Color.White
+    )
+
+    Box(
+        modifier = Modifier
+            .scale(scale)
+            .clip(RoundedCornerShape(20.dp))
+            .background(backgroundColor)
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = title,
+            color = contentColor,
+            fontSize = 13.sp,
+            fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
+        )
     }
 }
