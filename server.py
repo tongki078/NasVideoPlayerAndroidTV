@@ -19,7 +19,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "136.5"
+CACHE_VERSION = "137.3"
 
 TMDB_MEMORY_CACHE = {}
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk".strip()
@@ -428,11 +428,16 @@ def fetch_metadata_async(force_all=False):
 
             conn = get_db()
             cursor = conn.cursor()
+            batch_success = 0
+            batch_fail = 0
             for task, info in results:
                 orig_names = task['orig_names']
                 if info.get('failed'):
+                    batch_fail += 1
                     cursor.executemany('UPDATE series SET failed=1 WHERE name=?', [(n,) for n in orig_names])
                 else:
+                    batch_success += 1
+                    log("MATCH", f"성공: {task['clean_title']} -> {info.get('tmdbId')}")
                     up = (
                         info.get('posterPath'), info.get('year'), info.get('overview'),
                         info.get('rating'), info.get('seasonCount'),
@@ -457,17 +462,17 @@ def fetch_metadata_async(force_all=False):
                         eps_to_update = chunked_ep_fetch(orig_names)
                         ep_batch = []
                         for ep_row in eps_to_update:
-                            sn, en = extract_episode_numbers(ep_row['title'])
-                            if en:
-                                ei = info['seasons_data'].get(f"{sn}_{en}")
+                            sn, EN = extract_episode_numbers(ep_row['title'])
+                            if EN:
+                                ei = info['seasons_data'].get(f"{sn}_{EN}")
                                 if ei:
-                                    ep_batch.append((ei.get('overview'), ei.get('air_date'), sn, en, ep_row['id']))
+                                    ep_batch.append((ei.get('overview'), ei.get('air_date'), sn, EN, ep_row['id']))
                         if ep_batch:
                             cursor.executemany('UPDATE episodes SET overview=?, air_date=?, season_number=?, episode_number=? WHERE id=?', ep_batch)
 
             conn.commit()
             conn.close()
-            log("METADATA", f"진행 중... ({round((i+len(batch))/total*100, 1)}%)")
+            log("METADATA", f"배치 완료: 성공 {batch_success} / 실패 {batch_fail} (진행: {round((i+len(batch))/total*100, 1)}%)")
             if (i // batch_size) % 2 == 0:
                 build_all_caches()
 
@@ -479,23 +484,54 @@ def fetch_metadata_async(force_all=False):
         log("METADATA", "프로세스 종료")
 
 # --- [풍성한 섹션화 API] ---
-def get_sections_for_category(cat):
+def get_sections_for_category(cat, kw=None):
+    # 1. 원본 데이터 가져오기
     base_list = _FAST_CATEGORY_CACHE.get(cat, [])
     if not base_list: return []
+
+    # 2. kw(폴더명/키워드) 필터링 (UHD 폴더 등 하위 경로 검색 강화)
+    if kw and kw not in ["전체", "All", "제목"]:
+        target_list = []
+        for i in base_list:
+            # 기본 path 검사
+            if f"/{kw}/" in i['path'] or i['path'].startswith(f"{cat}/{kw}/"):
+                target_list.append(i)
+                continue
+            # 그룹화된 개별 영화/에피소드 경로 검사 (UHD 폴더 등 대응)
+            match = False
+            for m in i.get('movies', []):
+                # videoUrl 예시: /video_serve?type=movies&path=UHD%2FMovie.mp4
+                v_url = urllib.parse.unquote(m.get('videoUrl', ''))
+                if f"path={kw}/" in v_url or f"/{kw}/" in v_url:
+                    match = True
+                    break
+            if match:
+                target_list.append(i)
+    else:
+        target_list = base_list
+
+    if not target_list:
+        log("DEBUG", f"'{cat}' 카테고리 '{kw}' 폴더에 영상이 없습니다.")
+        return []
+
     sections = []
     seen_ids = set()
 
-    # 1. 방금 올라온 최신 콘텐츠 (대폭 증가)
-    latest_items = base_list[:100]
+    # 3. 방금 올라온 최신 콘텐츠 (상단 고정 30개)
+    latest_items = target_list[:30]
     if latest_items:
         sections.append({"title": "방금 올라온 최신 콘텐츠", "items": latest_items})
         for item in latest_items:
             uid = item.get('tmdbId') or item.get('path')
             if uid: seen_ids.add(uid)
 
-    # 2. 장르별 (더 많은 장르 노출)
+    # 4. 장르별 섹션 구성 (임계값 10 -> 5로 하향 조정하여 노출 확대)
+    threshold = 5 if kw and kw not in ["전체", "All", "제목"] else 10
     genres = {}
-    for item in base_list:
+    for item in target_list:
+        uid = item.get('tmdbId') or item.get('path')
+        if uid in seen_ids: continue
+
         g_names = item.get('genreNames') or []
         if not g_names: g_names = ["기타"]
         for g in g_names:
@@ -503,27 +539,28 @@ def get_sections_for_category(cat):
 
     sorted_genres = sorted(genres.items(), key=lambda x: len(x[1]), reverse=True)
 
-    # 상위 10개 장르 노출
-    for g_name, g_items in sorted_genres[:10]:
-        # 장르 섹션 (사용자 요청에 따라 개수 대폭 확대)
-        display_items = g_items[:80]
-        if display_items:
-            sections.append({"title": f"인기 {g_name} 추천", "items": display_items})
+    for g_name, g_items in sorted_genres:
+        if len(g_items) >= threshold:
+            sections.append({"title": f"인기 {g_name} 추천", "items": g_items[:60]})
+            for item in g_items[:60]:
+                uid = item.get('tmdbId') or item.get('path')
+                if uid: seen_ids.add(uid)
+        if len(sections) >= 5: break
 
-    # 3. 전체 리스트 및 랜덤 추천 (누락 방지)
-    remaining = [i for i in base_list if (i.get('tmdbId') or i.get('path')) not in seen_ids]
+    # 5. 나머지 랜덤 추천 (최소 10개 제한 제거하여 누락 방지)
+    remaining = [i for i in target_list if (i.get('tmdbId') or i.get('path')) not in seen_ids]
     if remaining:
-        sections.append({"title": "전체 작품 둘러보기", "items": remaining[:300]})
-    elif len(base_list) > 20:
-        random_picks = random.sample(base_list, min(len(base_list), 100))
-        sections.append({"title": "이런 콘텐츠는 어떠세요?", "items": random_picks})
+        sections.append({"title": "이런 콘텐츠는 어떠세요?", "items": random.sample(remaining, min(len(remaining), 60))})
+    elif not sections:
+        sections.append({"title": "전체 작품 둘러보기", "items": target_list[:100]})
 
     return sections
 
 @app.route('/category_sections')
 def get_category_sections():
     cat = request.args.get('cat', 'movies')
-    return jsonify(get_sections_for_category(cat))
+    kw = request.args.get('kw') # 탭(폴더) 키워드 파라미터 추가
+    return jsonify(get_sections_for_category(cat, kw))
 
 @app.route('/home')
 def get_home():
@@ -532,13 +569,15 @@ def get_home():
 @app.route('/list')
 def get_list():
     p = request.args.get('path', '')
-    m = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
-    cat = m.get(p) or p
+    m = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air", "movies": "movies", "foreigntv": "foreigntv", "koreantv": "koreantv", "animations_all": "animations_all", "air": "air"}
+    cat = m.get(p) or "movies"
+
     bl = _FAST_CATEGORY_CACHE.get(cat, [])
     kw = request.args.get('keyword')
     lim = int(request.args.get('limit', 1000))
     off = int(request.args.get('offset', 0))
-    res = [item for item in bl if not kw or nfc(kw) in item['path']] if kw and kw not in ["전체", "All"] else bl
+
+    res = [item for item in bl if not kw or nfc(kw) in item['path'] or nfc(kw).lower() in item['name'].lower()] if kw and kw not in ["전체", "All"] else bl
     return jsonify(res[off:off+lim])
 
 @app.route('/api/series_detail')
@@ -641,6 +680,7 @@ def _rebuild_fast_memory_cache():
         for row in all_rows:
             item = dict(row)
             ct, year = clean_title_complex(item['name'])
+            # 그룹 키 생성: TMDB ID가 있으면 무조건 ID로, 없으면 정제된 제목과 연도로 확실하게 묶음
             group_key = f"tmdb:{item['tmdbId']}" if item['tmdbId'] else f"name:{ct}_{year}"
             v_url = item.get('videoUrl')
 
@@ -657,6 +697,7 @@ def _rebuild_fast_memory_cache():
                     item.pop(k, None)
                 rows_dict[group_key] = item
             else:
+                # 같은 그룹(작품)이면 에피소드만 추가 (URL 중복은 칼같이 체크)
                 if item.get('ep_id') and v_url and v_url not in group_ep_urls[group_key]:
                     rows_dict[group_key]['movies'].append({"id": item['ep_id'], "videoUrl": v_url, "thumbnailUrl": item['thumbnailUrl'], "title": item['title']})
                     group_ep_urls[group_key].add(v_url)
@@ -679,7 +720,7 @@ def build_home_recommend():
                 unique_map[uid] = item
 
         unique_hot_list = list(unique_map.values())
-        hot_picks = random.sample(unique_hot_list, min(80, len(unique_hot_list))) if unique_hot_list else []
+        hot_picks = random.sample(unique_hot_list, min(60, len(unique_hot_list))) if unique_hot_list else []
         seen_ids = { (p.get('tmdbId') or p.get('path')) for p in hot_picks }
 
         airing_picks = []
@@ -687,7 +728,7 @@ def build_home_recommend():
             uid = item.get('tmdbId') or item.get('path')
             if uid not in seen_ids:
                 airing_picks.append(item)
-                if len(airing_picks) >= 80: break
+                if len(airing_picks) >= 60: break
 
         HOME_RECOMMEND = [
             {"title": "지금 가장 핫한 인기작", "items": hot_picks},
