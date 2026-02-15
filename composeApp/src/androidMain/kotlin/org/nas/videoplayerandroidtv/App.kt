@@ -1,8 +1,6 @@
 package org.nas.videoplayerandroidtv
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.Crossfade
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
@@ -10,7 +8,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
 import coil3.ImageLoader
 import coil3.compose.setSingletonImageLoaderFactory
 import coil3.disk.DiskCache
@@ -26,109 +23,71 @@ import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.data.repository.VideoRepositoryImpl
 import org.nas.videoplayerandroidtv.domain.model.*
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
-import org.nas.videoplayerandroidtv.ui.category.ThemedCategoryScreen
 import org.nas.videoplayerandroidtv.ui.common.NetflixTopBar
 import org.nas.videoplayerandroidtv.ui.detail.SeriesDetailScreen
 import org.nas.videoplayerandroidtv.ui.home.HomeScreen
 import org.nas.videoplayerandroidtv.ui.player.VideoPlayerScreen
 import org.nas.videoplayerandroidtv.ui.search.SearchScreen
-import org.nas.videoplayerandroidtv.ui.category.processThemedSections
-import org.nas.videoplayerandroidtv.ui.category.ThemeSection
 import org.nas.videoplayerandroidtv.db.AppDatabase
 import app.cash.sqldelight.db.SqlDriver
 
 @Composable
 fun App(driver: SqlDriver) {
     val repository: VideoRepository = remember { VideoRepositoryImpl() }
+    val repoImpl = repository as VideoRepositoryImpl
     
-    // Coil 3 안정적인 설정 적용
     setSingletonImageLoaderFactory { ctx -> 
         ImageLoader.Builder(ctx)
-            .diskCache { 
-                DiskCache.Builder()
-                    .directory(getImageCacheDirectory(ctx).toPath().resolve("coil_cache"))
-                    .maxSizeBytes(100 * 1024 * 1024) 
-                    .build() 
-            }
-            .crossfade(true)
-            .build() 
+            .diskCache { DiskCache.Builder().directory(getImageCacheDirectory(ctx).toPath().resolve("coil_cache")).maxSizeBytes(100 * 1024 * 1024).build() }
+            .crossfade(true).build() 
     }
     
     val db = remember { AppDatabase(driver) }
     val searchHistoryDataSource = remember { SearchHistoryDataSource(db) }
     val watchHistoryDataSource = remember { WatchHistoryDataSource(db) }
-    
     val tmdbCacheDataSource = remember { TmdbCacheDataSource(db) }
-    LaunchedEffect(Unit) {
-        persistentCache = tmdbCacheDataSource
-    }
     
-    val recentQueriesState = searchHistoryDataSource.getRecentQueries()
-        .collectAsState(initial = emptyList())
-    val recentQueries by recentQueriesState
-
-    val watchHistoryState = watchHistoryDataSource.getWatchHistory()
-        .collectAsState(initial = emptyList())
-    val watchHistory by watchHistoryState
-
+    LaunchedEffect(Unit) { persistentCache = tmdbCacheDataSource }
+    
+    val recentQueries by searchHistoryDataSource.getRecentQueries().collectAsState(initial = emptyList())
+    val watchHistory by watchHistoryDataSource.getWatchHistory().collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
 
     var currentScreen by rememberSaveable { mutableStateOf(Screen.HOME) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
-    var searchCategory by rememberSaveable { mutableStateOf("전체") }
     var searchResultSeries by remember { mutableStateOf<List<Series>>(emptyList()) }
     var isSearchLoading by remember { mutableStateOf(false) }
-    
-    var lastExecutedQuery by remember { mutableStateOf("") }
-
     var selectedSeries by remember { mutableStateOf<Series?>(null) }
     var selectedMovie by remember { mutableStateOf<Movie?>(null) }
     var moviePlaylist by remember { mutableStateOf<List<Movie>>(emptyList()) }
-    
     var lastPlaybackPosition by rememberSaveable { mutableLongStateOf(0L) }
     var lastVideoDuration by rememberSaveable { mutableLongStateOf(0L) }
 
-    var homeSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
-    var isHomeLoading by remember { mutableStateOf(false) } 
+    val allCategorySections = remember { mutableStateMapOf<Screen, List<HomeSection>>() }
+    val categoryLoadingStates = remember { mutableStateMapOf<Screen, Boolean>() }
     
-    val categoryCache = remember { mutableMapOf<String, List<ThemeSection>>() }
-
-    LaunchedEffect(homeSections) {
-        if (homeSections.isNotEmpty()) {
-            scope.launch(Dispatchers.IO) {
-                val prefetchTargets = listOf(
-                    Triple("영화", Screen.MOVIES, 2),
-                    Triple("애니메이션", Screen.ANIMATIONS, 0)
-                )
-                
-                prefetchTargets.forEach { (name, screen, mode) ->
-                    val cacheKey = "category_${name}_mode_${mode}"
-                    if (!categoryCache.containsKey(cacheKey)) {
-                        try {
-                            val rawData = when(screen) {
-                                Screen.MOVIES -> repository.getLatestMovies(200, 0)
-                                Screen.ANIMATIONS -> repository.getAnimationsRaftel(200, 0)
-                                else -> emptyList()
-                            }
-                            if (rawData.isNotEmpty()) {
-                                val processed = processThemedSections(rawData)
-                                categoryCache[cacheKey] = processed
-                            }
-                        } catch (_: Exception) {}
-                    }
+    LaunchedEffect(currentScreen) {
+        if (!allCategorySections.containsKey(currentScreen)) {
+            categoryLoadingStates[currentScreen] = true
+            try {
+                val sections = when(currentScreen) {
+                    Screen.HOME -> repository.getHomeRecommendations()
+                    Screen.MOVIES -> repoImpl.fetchCategorySections("movies")
+                    Screen.KOREAN_TV -> repoImpl.fetchCategorySections("koreantv")
+                    Screen.FOREIGN_TV -> repoImpl.fetchCategorySections("foreigntv")
+                    Screen.ANIMATIONS -> repoImpl.fetchCategorySections("animations_all")
+                    Screen.ON_AIR -> repoImpl.fetchCategorySections("air")
+                    else -> emptyList()
                 }
+                allCategorySections[currentScreen] = sections
+            } catch (_: Exception) {
+            } finally {
+                categoryLoadingStates[currentScreen] = false
             }
         }
     }
 
-    val homeTvLazyListState = rememberLazyListState()
-    val themedCategoryLazyListState = rememberLazyListState()
-
-    var selectedAirMode by rememberSaveable { mutableIntStateOf(0) }
-    var selectedAniMode by rememberSaveable { mutableIntStateOf(0) }
-    var selectedMovieMode by rememberSaveable { mutableIntStateOf(0) }
-    var selectedForeignTvMode by rememberSaveable { mutableIntStateOf(0) }
-    var selectedKoreanTvMode by rememberSaveable { mutableIntStateOf(0) }
+    val lazyListStates = remember { mutableMapOf<Screen, androidx.compose.foundation.lazy.LazyListState>() }
 
     BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME) {
         when {
@@ -138,72 +97,9 @@ fun App(driver: SqlDriver) {
         }
     }
 
-    val saveWatchHistory: (Movie, String?, Long, Long, String?, String?) -> Unit = 
-        { movie, posterPath, pos, dur, sTitle, sPath ->
+    val saveWatchHistory: (Movie, String?, Long, Long, String?, String?) -> Unit = { movie, posterPath, pos, dur, sTitle, sPath ->
         scope.launch(Dispatchers.Default) {
-            val videoUrl = movie.videoUrl ?: ""
-            val title = movie.title ?: ""
-            val isAni = videoUrl.contains("애니메이션") || title.contains("애니메이션")
-            watchHistoryDataSource.insertWatchHistory(
-                id = movie.id ?: "",
-                title = title,
-                videoUrl = videoUrl,
-                thumbnailUrl = movie.thumbnailUrl ?: "",
-                timestamp = currentTimeMillis(),
-                screenType = if (isAni) "animation" else "movie",
-                pathStackJson = "",
-                posterPath = posterPath,
-                lastPosition = pos,
-                duration = dur,
-                seriesTitle = sTitle,
-                seriesPath = sPath
-            )
-        }
-    }
-
-    val performSearch: suspend (String, String) -> Unit = { query, category ->
-        val trimmedQuery = query.trim()
-        if (trimmedQuery.isNotEmpty()) {
-            isSearchLoading = true
-            try {
-                val results = repository.searchVideos(trimmedQuery, category)
-                searchResultSeries = results
-                lastExecutedQuery = trimmedQuery
-            } catch (e: Exception) {
-                searchResultSeries = emptyList()
-            } finally {
-                isSearchLoading = false
-            }
-        } else {
-            searchResultSeries = emptyList()
-            isSearchLoading = false
-            lastExecutedQuery = ""
-        }
-    }
-
-    LaunchedEffect(currentScreen) {
-        if (currentScreen == Screen.HOME && homeSections.isEmpty()) {
-            isHomeLoading = true
-            try {
-                homeSections = repository.getHomeRecommendations()
-            } catch (_: Exception) {
-            } finally {
-                isHomeLoading = false
-            }
-        }
-    }
-
-    LaunchedEffect(searchQuery, searchCategory) {
-        val trimmed = searchQuery.trim()
-        if (trimmed.isNotEmpty() && trimmed != lastExecutedQuery) {
-            delay(500)
-            if (trimmed != lastExecutedQuery) {
-                performSearch(trimmed, searchCategory)
-            }
-        } else if (trimmed.isEmpty()) {
-            searchResultSeries = emptyList()
-            isSearchLoading = false
-            lastExecutedQuery = ""
+            watchHistoryDataSource.insertWatchHistory(movie.id ?: "", movie.title ?: "", movie.videoUrl ?: "", movie.thumbnailUrl ?: "", currentTimeMillis(), "movie", "", posterPath, pos, dur, sTitle, sPath)
         }
     }
 
@@ -222,20 +118,12 @@ fun App(driver: SqlDriver) {
                         selectedMovie != null -> {
                             VideoPlayerScreen(
                                 movie = selectedMovie!!, 
-                                playlist = moviePlaylist,
-                                initialPosition = lastPlaybackPosition,
-                                onPositionUpdate = { pos, dur -> 
-                                    lastPlaybackPosition = pos 
-                                    lastVideoDuration = dur
-                                    saveWatchHistory(
-                                        selectedMovie!!, 
-                                        selectedSeries?.posterPath, 
-                                        pos, 
-                                        dur,
-                                        selectedSeries?.title,
-                                        selectedSeries?.fullPath
-                                    )
-                                },
+                                playlist = moviePlaylist, 
+                                initialPosition = lastPlaybackPosition, 
+                                onPositionUpdate = { pos: Long, dur: Long -> 
+                                    lastPlaybackPosition = pos; lastVideoDuration = dur; 
+                                    saveWatchHistory(selectedMovie!!, selectedSeries?.posterPath, pos, dur, selectedSeries?.title, selectedSeries?.fullPath)
+                                }, 
                                 onBack = { selectedMovie = null }
                             )
                         }
@@ -243,106 +131,32 @@ fun App(driver: SqlDriver) {
                             SeriesDetailScreen(
                                 series = selectedSeries!!, 
                                 repository = repository, 
-                                initialPlaybackPosition = lastPlaybackPosition,
-                                initialDuration = lastVideoDuration,
-                                onPositionUpdate = { pos -> lastPlaybackPosition = pos },
+                                initialPlaybackPosition = lastPlaybackPosition, 
+                                initialDuration = lastVideoDuration, 
+                                onPositionUpdate = { pos: Long -> lastPlaybackPosition = pos }, 
                                 onBackPressed = { selectedSeries = null }, 
                                 onPlay = { movie: Movie, playlist: List<Movie>, pos: Long ->
-                                    selectedMovie = movie
-                                    moviePlaylist = playlist
-                                    lastPlaybackPosition = pos
-                                    saveWatchHistory(
-                                        movie, 
-                                        selectedSeries?.posterPath, 
-                                        pos, 
-                                        lastVideoDuration,
-                                        selectedSeries?.title,
-                                        selectedSeries?.fullPath
-                                    )
+                                    selectedMovie = movie; moviePlaylist = playlist; lastPlaybackPosition = pos; 
+                                    saveWatchHistory(movie, selectedSeries?.posterPath, pos, lastVideoDuration, selectedSeries?.title, selectedSeries?.fullPath)
                                 }
                             )
                         }
                         currentScreen == Screen.SEARCH -> {
-                            SearchScreen(
-                                query = searchQuery, 
-                                onQueryChange = { searchQuery = it },
-                                recentQueries = recentQueries, 
-                                searchResults = searchResultSeries, 
-                                isLoading = isSearchLoading,
-                                onSaveQuery = { queryText -> 
-                                    scope.launch { 
-                                        searchHistoryDataSource.insertQuery(queryText, currentTimeMillis())
-                                        performSearch(queryText, searchCategory)
-                                    }
-                                },
-                                onDeleteQuery = { queryToDelete -> scope.launch { searchHistoryDataSource.deleteQuery(queryToDelete) } },
-                                onSeriesClick = { selectedSeries = it }
-                            )
-                        }
-                        currentScreen == Screen.HOME -> {
-                            HomeScreen(
-                                watchHistory = watchHistory, 
-                                homeSections = homeSections,
-                                isLoading = isHomeLoading,
-                                lazyListState = homeTvLazyListState,
-                                onSeriesClick = { selectedSeries = it }, 
-                                onPlayClick = { movie ->
-                                    selectedMovie = movie
-                                    moviePlaylist = listOf(movie)
-                                    lastPlaybackPosition = 0L
-                                },
-                                onHistoryClick = { history ->
-                                    selectedSeries = Series(
-                                        title = history.seriesTitle ?: history.title,
-                                        fullPath = history.seriesPath,
-                                        posterPath = history.posterPath,
-                                        episodes = listOf(
-                                            Movie(
-                                                id = history.id,
-                                                title = history.title,
-                                                videoUrl = history.videoUrl,
-                                                thumbnailUrl = history.thumbnailUrl
-                                            )
-                                        )
-                                    )
-                                    lastPlaybackPosition = history.lastPosition
-                                    lastVideoDuration = history.duration
-                                }
-                            )
+                            SearchScreen(searchQuery, { searchQuery = it }, recentQueries, searchResultSeries, isSearchLoading, { q -> scope.launch { searchHistoryDataSource.insertQuery(q, currentTimeMillis()) } }, { q -> scope.launch { searchHistoryDataSource.deleteQuery(q) } }, { selectedSeries = it })
                         }
                         else -> {
-                            val categoryInfo = when (currentScreen) {
-                                Screen.ON_AIR -> Triple("방송중", "방송중", selectedAirMode)
-                                Screen.ANIMATIONS -> Triple("애니메이션", "애니메이션", selectedAniMode)
-                                Screen.MOVIES -> Triple("영화", "영화", selectedMovieMode)
-                                Screen.FOREIGN_TV -> Triple("외국TV", "외국TV", selectedForeignTvMode)
-                                Screen.KOREAN_TV -> Triple("국내TV", "국내TV", selectedKoreanTvMode)
-                                else -> Triple("", "", 0)
-                            }
-                            
-                            val onModeChange: (Int) -> Unit = { mode ->
-                                when (currentScreen) {
-                                    Screen.ON_AIR -> selectedAirMode = mode
-                                    Screen.ANIMATIONS -> selectedAniMode = mode
-                                    Screen.MOVIES -> selectedMovieMode = mode
-                                    Screen.FOREIGN_TV -> selectedForeignTvMode = mode
-                                    Screen.KOREAN_TV -> selectedKoreanTvMode = mode
-                                    else -> {}
+                            HomeScreen(
+                                watchHistory = if (currentScreen == Screen.HOME) watchHistory else emptyList(), 
+                                homeSections = allCategorySections[currentScreen] ?: emptyList(),
+                                isLoading = categoryLoadingStates[currentScreen] ?: false,
+                                lazyListState = lazyListStates.getOrPut(currentScreen) { androidx.compose.foundation.lazy.LazyListState() },
+                                onSeriesClick = { selectedSeries = it }, 
+                                onPlayClick = { m -> selectedMovie = m; moviePlaylist = listOf(m); lastPlaybackPosition = 0L },
+                                onHistoryClick = { h -> 
+                                    selectedSeries = Series(h.seriesTitle ?: h.title, listOf(Movie(h.id, h.title, h.videoUrl, h.thumbnailUrl)), null, h.seriesPath, emptyList(), emptyList(), null, emptyList(), h.posterPath, null, null, null, null)
+                                    lastPlaybackPosition = h.lastPosition; lastVideoDuration = h.duration
                                 }
-                            }
-
-                            if (categoryInfo.first.isNotEmpty()) {
-                                ThemedCategoryScreen(
-                                    categoryName = categoryInfo.first,
-                                    rootPath = categoryInfo.second,
-                                    repository = repository,
-                                    selectedMode = categoryInfo.third,
-                                    onModeChange = onModeChange,
-                                    cache = categoryCache,
-                                    lazyListState = themedCategoryLazyListState,
-                                    onSeriesClick = { selectedSeries = it }
-                                )
-                            }
+                            )
                         }
                     }
                 }
