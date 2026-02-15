@@ -48,6 +48,7 @@ for p in ["/usr/local/bin/ffmpeg", "/var/packages/ffmpeg/target/bin/ffmpeg", "/u
 HOME_RECOMMEND = []
 IS_METADATA_RUNNING = False
 _FAST_CATEGORY_CACHE = {} # 고속 응답용 메모리 캐시
+_DETAIL_CACHE = deque(maxlen=200) # 상세 페이지용 빠른 캐시
 
 def log(msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -448,14 +449,19 @@ def get_ftv_etc(): return jsonify(get_fast_filtered_list("foreigntv", "기타국
 @app.route('/koreantv')
 def get_ktv_all(): return jsonify(get_fast_filtered_list("koreantv"))
 @app.route('/koreantv_drama')
+@app.route('/ktv_drama')
 def get_ktv_dra(): return jsonify(get_fast_filtered_list("koreantv", "드라마"))
 @app.route('/koreantv_sitcom')
+@app.route('/ktv_sitcom')
 def get_ktv_sit(): return jsonify(get_fast_filtered_list("koreantv", "시트콤"))
 @app.route('/koreantv_variety')
+@app.route('/ktv_variety')
 def get_ktv_var(): return jsonify(get_fast_filtered_list("koreantv", "예능"))
 @app.route('/koreantv_edu')
+@app.route('/ktv_edu')
 def get_ktv_edu(): return jsonify(get_fast_filtered_list("koreantv", "교양"))
 @app.route('/koreantv_docu')
+@app.route('/ktv_docu')
 def get_ktv_docu(): return jsonify(get_fast_filtered_list("koreantv", "다큐멘터리"))
 @app.route('/animations_all')
 def get_anim_all(): return jsonify(get_fast_filtered_list("animations_all"))
@@ -476,6 +482,11 @@ def get_mov_tit(): return jsonify(get_fast_filtered_list("movies", "제목"))
 def get_series_detail_api():
     path = request.args.get('path')
     if not path: return jsonify([])
+
+    # 상세 페이지를 위한 메모리 캐시 체크
+    for c_path, data in _DETAIL_CACHE:
+        if c_path == path: return jsonify(data)
+
     conn = get_db(); cursor = conn.cursor(); cursor.execute('SELECT * FROM series WHERE path = ?', (path,)); row = cursor.fetchone()
     if not row: conn.close(); return jsonify([])
     series = dict(row)
@@ -486,7 +497,10 @@ def get_series_detail_api():
     eps = []; seen = set()
     for r in cursor.fetchall():
         if r['videoUrl'] not in seen: eps.append(dict(r)); seen.add(r['videoUrl'])
-    series['movies'] = sorted(eps, key=lambda x: natural_sort_key(x['title'])); conn.close(); return jsonify(series)
+    series['movies'] = sorted(eps, key=lambda x: natural_sort_key(x['title'])); conn.close()
+
+    _DETAIL_CACHE.append((path, series)) # 캐시에 저장
+    return jsonify(series)
 
 @app.route('/search')
 def search_videos():
@@ -530,8 +544,8 @@ def report_db_status():
     except: pass
 
 if __name__ == '__main__':
-    log(f"📺 NAS Server v{CACHE_VERSION} 시작 (초고속 메모리 캐시 모드)"); init_db(); migrate_json_to_db(); report_db_status();
-    # 캐시 생성 및 추천 로직 백그라운드 실행 (서버는 즉시 시작)
+    log(f"[{CACHE_VERSION}] NAS Server 시작 (상세 페이지 고속 캐시 적용)"); init_db(); migrate_json_to_db(); report_db_status();
+    # 캐시 생성 및 추천 로직 백그라운드 실행
     threading.Thread(target=lambda: (build_home_recommend(), _rebuild_fast_memory_cache()), daemon=True).start()
     conn = get_db(); last = ""
     try:

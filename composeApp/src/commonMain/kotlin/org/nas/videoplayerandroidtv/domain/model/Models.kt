@@ -7,11 +7,14 @@ data class Category(
     val name: String? = "",
     val movies: List<Movie>? = emptyList(),
     val path: String? = null,
-    val genreIds: List<Int>? = emptyList(), 
-    val posterPath: String? = null,         
-    val overview: String? = null,           
-    val year: String? = null,               
-    val rating: String? = null              
+    val genreIds: List<Int>? = emptyList(),
+    val genreNames: List<String>? = emptyList(), // 추가: 한글 장르명
+    val director: String? = null,                // 추가: 감독
+    val actors: List<Cast>? = emptyList(),       // 추가: 출연진
+    val posterPath: String? = null,
+    val overview: String? = null,
+    val year: String? = null,
+    val rating: String? = null
 )
 
 @Serializable
@@ -21,8 +24,18 @@ data class Movie(
     val videoUrl: String? = "",
     val thumbnailUrl: String? = null,
     val overview: String? = null,
-    val introStart: Long? = null, // 추가: 인트로 시작 시간 (ms)
-    val introEnd: Long? = null    // 추가: 인트로 종료 시간 (ms)
+    val air_date: String? = null,   // 추가: 방영일
+    val season_number: Int? = null,  // 추가: 시즌 번호
+    val episode_number: Int? = null, // 추가: 에피소드 번호
+    val introStart: Long? = null,
+    val introEnd: Long? = null
+)
+
+@Serializable
+data class Cast(
+    val name: String,
+    val profile: String? = null,
+    val role: String? = null
 )
 
 @Serializable
@@ -36,10 +49,13 @@ data class Series(
     val episodes: List<Movie>,
     val thumbnailUrl: String? = null,
     val fullPath: String? = null,
-    val genreIds: List<Int> = emptyList(), 
-    val posterPath: String? = null,        
-    val year: String? = null,              
-    val overview: String? = null,          
-    val rating: String? = null,            
+    val genreIds: List<Int> = emptyList(),
+    val genreNames: List<String> = emptyList(), // 추가
+    val director: String? = null,              // 추가
+    val actors: List<Cast> = emptyList(),      // 추가
+    val posterPath: String? = null,
+    val year: String? = null,
+    val overview: String? = null,
+    val rating: String? = null,
     val seasonCount: Int? = null
 )

@@ -20,59 +20,17 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
-import org.nas.videoplayerandroidtv.*
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
-import org.nas.videoplayerandroidtv.util.TitleUtils.extractEpisode
-import org.nas.videoplayerandroidtv.util.TitleUtils.extractSeason
 import org.nas.videoplayerandroidtv.util.TitleUtils.prettyTitle
 
 @Composable
-fun EpisodeList(episodes: List<Movie>, metadata: TmdbMetadata?, onPlay: (Movie) -> Unit) {
-    Text(
-        text = "에피소드", 
-        color = Color.White, 
-        fontWeight = FontWeight.Bold, 
-        modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 12.dp), 
-        fontSize = 20.sp
-    )
-    Column(Modifier.padding(horizontal = 8.dp)) {
-        episodes.forEach { ep -> 
-            EpisodeItem(ep, metadata, onPlay = { onPlay(ep) }) 
-        }
-    }
-}
-
-@Composable
-fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
-    var episodeDetails by remember { mutableStateOf<TmdbEpisode?>(null) }
-    var isDetailLoading by remember { mutableStateOf(true) } // 상세 정보 로딩 상태 추가
+fun EpisodeItem(movie: Movie, seriesOverview: String?, onPlay: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.03f else 1f, label = "EpisodeItemScale")
 
-    LaunchedEffect(movie, seriesMeta) {
-        if (seriesMeta?.tmdbId != null && seriesMeta.mediaType == "tv") {
-            isDetailLoading = true
-            val season = movie.title?.extractSeason() ?: 1
-            val episodeNum = movie.title?.extractEpisode()?.filter { it.isDigit() }?.toIntOrNull() ?: 1
-            episodeDetails = fetchTmdbEpisodeDetails(seriesMeta.tmdbId, season, episodeNum)
-            isDetailLoading = false
-        } else {
-            isDetailLoading = false
-        }
-    }
-    
-    // 최종 이미지 URL 결정 (상세 정보 로딩이 끝난 후 확정)
-    val imageUrl = remember(episodeDetails, seriesMeta, isDetailLoading) {
-        if (isDetailLoading) "" // 로딩 중에는 빈 값 유지
-        else {
-            when {
-                episodeDetails?.stillPath != null -> "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_SMALL${episodeDetails?.stillPath}"
-                seriesMeta?.posterUrl != null -> seriesMeta.posterUrl
-                else -> ""
-            }
-        }
-    }
+    // 썸네일 URL: 에피소드 전용 썸네일이 없으면 시리즈 포스터 사용
+    val imageUrl = movie.thumbnailUrl ?: ""
 
     Row(
         modifier = Modifier
@@ -101,8 +59,7 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
                 .width(160.dp)
                 .height(90.dp)
                 .clip(RoundedCornerShape(4.dp))
-                // 상세 정보 로딩 중이거나 이미지가 로딩 중일 때 쉬머 효과 표시
-                .background(shimmerBrush(showShimmer = isDetailLoading || (isImageLoading && imageUrl.isNotEmpty())))
+                .background(shimmerBrush(showShimmer = isImageLoading && imageUrl.isNotEmpty()))
         ) {
             if (imageUrl.isNotEmpty()) {
                 AsyncImage(
@@ -126,8 +83,10 @@ fun EpisodeItem(movie: Movie, seriesMeta: TmdbMetadata?, onPlay: () -> Unit) {
                 overflow = TextOverflow.Ellipsis
             )
             Spacer(Modifier.height(6.dp))
+            // 서버에서 받은 줄거리를 즉시 사용 (없으면 시리즈 전체 줄거리 혹은 기본 문구)
+            val episodeOverview = movie.overview ?: seriesOverview ?: "줄거리 정보가 없습니다."
             Text(
-                text = if (isDetailLoading) "불러오는 중..." else (episodeDetails?.overview ?: "줄거리 정보가 없습니다."),
+                text = episodeOverview,
                 color = Color.Gray, 
                 fontSize = 13.sp, 
                 maxLines = 2, 
