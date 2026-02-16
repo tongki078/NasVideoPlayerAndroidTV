@@ -106,48 +106,63 @@ def nfd(text):
 
 # --- [DB 관리] ---
 def get_db():
+    # 연결 대기 시간을 60초로 설정 (기본값보다 길게)
     conn = sqlite3.connect(DB_FILE, timeout=60)
     conn.row_factory = sqlite3.Row
+
+    # 동시성 향상을 위해 WAL 모드 활성화 시도
+    try:
+        # WAL 모드 설정 시 락이 걸려도 전체 프로세스가 중단되지 않도록 함
+        conn.execute('PRAGMA journal_mode=WAL')
+        # busy_timeout을 한번 더 명시적으로 설정 (밀리초 단위, 30000ms = 30초)
+        conn.execute('PRAGMA busy_timeout = 30000')
+    except sqlite3.OperationalError as e:
+        log("DB_ERROR", f"WAL 모드 설정 실패 (무시하고 계속): {e}")
+    except Exception as e:
+        log("DB_ERROR", f"기타 DB 설정 오류: {e}")
+
     return conn
 
 def init_db():
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS series (path TEXT PRIMARY KEY, category TEXT, name TEXT, posterPath TEXT, year TEXT, overview TEXT, rating TEXT, seasonCount INTEGER, genreIds TEXT, genreNames TEXT, director TEXT, actors TEXT, failed INTEGER DEFAULT 0, tmdbId TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS episodes (id TEXT PRIMARY KEY, series_path TEXT, title TEXT, videoUrl TEXT, thumbnailUrl TEXT, overview TEXT, air_date TEXT, season_number INTEGER, episode_number INTEGER, FOREIGN KEY (series_path) REFERENCES series (path) ON DELETE CASCADE)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS tmdb_cache (h TEXT PRIMARY KEY, data TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS server_config (key TEXT PRIMARY KEY, value TEXT)')
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('CREATE TABLE IF NOT EXISTS series (path TEXT PRIMARY KEY, category TEXT, name TEXT, posterPath TEXT, year TEXT, overview TEXT, rating TEXT, seasonCount INTEGER, genreIds TEXT, genreNames TEXT, director TEXT, actors TEXT, failed INTEGER DEFAULT 0, tmdbId TEXT)')
+        cursor.execute('CREATE TABLE IF NOT EXISTS episodes (id TEXT PRIMARY KEY, series_path TEXT, title TEXT, videoUrl TEXT, thumbnailUrl TEXT, overview TEXT, air_date TEXT, season_number INTEGER, episode_number INTEGER, FOREIGN KEY (series_path) REFERENCES series (path) ON DELETE CASCADE)')
+        cursor.execute('CREATE TABLE IF NOT EXISTS tmdb_cache (h TEXT PRIMARY KEY, data TEXT)')
+        cursor.execute('CREATE TABLE IF NOT EXISTS server_config (key TEXT PRIMARY KEY, value TEXT)')
 
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_category ON series(category)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_name ON series(name)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_tmdbId ON series(tmdbId)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series ON episodes(series_path)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_category ON series(category)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_name ON series(name)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_tmdbId ON series(tmdbId)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series ON episodes(series_path)')
 
-    def add_col_if_missing(table, col, type):
-        cursor.execute(f"PRAGMA table_info({table})")
-        cols = [c[1] for c in cursor.fetchall()]
-        if col not in cols:
-            log("DB", f"컬럼 추가: {table}.{col}")
-            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {type}")
+        def add_col_if_missing(table, col, type):
+            cursor.execute(f"PRAGMA table_info({table})")
+            cols = [c[1] for c in cursor.fetchall()]
+            if col not in cols:
+                log("DB", f"컬럼 추가: {table}.{col}")
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {type}")
 
-    add_col_if_missing('series', 'tmdbId', 'TEXT')
-    add_col_if_missing('series', 'genreNames', 'TEXT')
-    add_col_if_missing('series', 'director', 'TEXT')
-    add_col_if_missing('series', 'actors', 'TEXT')
-    add_col_if_missing('series', 'cleanedName', 'TEXT')
-    add_col_if_missing('series', 'yearVal', 'TEXT')
+        add_col_if_missing('series', 'tmdbId', 'TEXT')
+        add_col_if_missing('series', 'genreNames', 'TEXT')
+        add_col_if_missing('series', 'director', 'TEXT')
+        add_col_if_missing('series', 'actors', 'TEXT')
+        add_col_if_missing('series', 'cleanedName', 'TEXT')
+        add_col_if_missing('series', 'yearVal', 'TEXT')
 
-    add_col_if_missing('episodes', 'overview', 'TEXT')
-    add_col_if_missing('episodes', 'air_date', 'TEXT')
-    add_col_if_missing('episodes', 'season_number', 'INTEGER')
-    add_col_if_missing('episodes', 'episode_number', 'INTEGER')
+        add_col_if_missing('episodes', 'overview', 'TEXT')
+        add_col_if_missing('episodes', 'air_date', 'TEXT')
+        add_col_if_missing('episodes', 'season_number', 'INTEGER')
+        add_col_if_missing('episodes', 'episode_number', 'INTEGER')
 
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cleanedName ON series(cleanedName)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cleanedName ON series(cleanedName)')
 
-    conn.commit()
-    conn.close()
-    log("DB", "시스템 초기화 및 최적화 완료")
-
+        conn.commit()
+        conn.close()
+        log("DB", "시스템 초기화 및 최적화 완료")
+    except sqlite3.OperationalError as e:
+        log("DB", f"초기화 중 락 발생: {e}. 이미 실행 중인 프로세스가 있는지 확인하세요.")
 # --- [유틸리티] ---
 def get_real_path(path):
     if not path or os.path.exists(path): return path
