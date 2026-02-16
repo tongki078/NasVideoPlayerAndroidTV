@@ -3,11 +3,12 @@ package org.nas.videoplayerandroidtv.ui.category
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -63,9 +64,8 @@ fun ThemedCategoryScreen(
         
         isLoading = true
         try {
-            // 1. 네트워크 로드 (IO 스레드)
             val result = withContext(Dispatchers.IO) {
-                val limit = 300 // 충분히 많은 양을 가져옴
+                val limit = 300 
                 when {
                     isMovieScreen -> when (selectedMode) {
                         0 -> repository.getMoviesByTitle(limit, 0)
@@ -75,11 +75,11 @@ fun ThemedCategoryScreen(
                     isAniScreen -> if (selectedMode == 0) repository.getAnimationsRaftel(limit, 0) else repository.getAnimationsSeries(limit, 0)
                     isAirScreen -> if (selectedMode == 0) repository.getAnimationsAir() else repository.getDramasAir()
                     isForeignTVScreen -> when (selectedMode) {
-                        0 -> repository.getFtvUs(limit, 0)   // 미국 드라마
-                        1 -> repository.getFtvJp(limit, 0)   // 일본 드라마
-                        2 -> repository.getFtvCn(limit, 0)   // 중국 드라마
-                        3 -> repository.getFtvEtc(limit, 0)  // 기타국가 드라마
-                        4 -> repository.getFtvDocu(limit, 0) // 다큐
+                        0 -> repository.getFtvUs(limit, 0)
+                        1 -> repository.getFtvJp(limit, 0)
+                        2 -> repository.getFtvCn(limit, 0)
+                        3 -> repository.getFtvEtc(limit, 0)
+                        4 -> repository.getFtvDocu(limit, 0)
                         else -> emptyList()
                     }
                     isKoreanTVScreen -> when (selectedMode) {
@@ -94,10 +94,7 @@ fun ThemedCategoryScreen(
                 }
             }
 
-            // 2. 데이터 분류 연산 (Default 스레드)
             val sections = withContext(Dispatchers.Default) {
-                // [수정] 모든 세부 카테고리 탭에서는 '테마 분류' 대신 '전체 목록'으로 표시
-                // 사용자가 폴더를 선택해서 들어온 것이므로 분류 없이 전체를 보여주는 것이 정확함
                 if (result.isNotEmpty()) {
                     listOf(ThemeSection("all_list", "전체 목록", result))
                 } else {
@@ -117,8 +114,10 @@ fun ThemedCategoryScreen(
     Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         if (modes.isNotEmpty()) {
             LazyRow(
-                modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 12.dp, start = 48.dp, end = 48.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 48.dp, end = 48.dp, top = 20.dp, bottom = 10.dp), // 상하 여백 줄임
+                horizontalArrangement = Arrangement.spacedBy(8.dp), // 아이템 간격 줄임
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 items(modes.size) { index ->
@@ -154,29 +153,47 @@ fun ThemedCategoryScreen(
 private fun CategoryTabItem(text: String, isSelected: Boolean, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     
+    // 심플하고 세련된 Chip 스타일
     val backgroundColor by animateColorAsState(targetValue = when { 
-        isFocused -> Color.White 
-        isSelected -> Color.White.copy(alpha = 0.15f)
-        else -> Color.Transparent 
+        isSelected -> Color.White // 선택 시 흰색 배경
+        isFocused -> Color.White.copy(alpha = 0.2f) // 포커스 시 연한 흰색
+        else -> Color.Transparent // 평소에는 투명
     })
+    
     val textColor by animateColorAsState(targetValue = when { 
-        isFocused -> Color.Black 
-        isSelected -> Color.White 
+        isSelected -> Color.Black // 선택 시 검은 글씨
+        isFocused -> Color.White 
         else -> Color.Gray 
     })
-    val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
+    
+    val borderColor by animateColorAsState(targetValue = when {
+        isSelected || isFocused -> Color.Transparent
+        else -> Color.Gray.copy(alpha = 0.5f) // 선택 안됐을 때 얇은 회색 테두리
+    })
+
+    val scale by animateFloatAsState(if (isFocused) 1.05f else 1.0f)
 
     Box(
         modifier = Modifier
             .scale(scale)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(CircleShape) // 둥근 알약 모양
             .background(backgroundColor)
+            .border(
+                width = 1.dp, 
+                color = borderColor, 
+                shape = CircleShape
+            )
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable { onClick() }
-            .padding(horizontal = 20.dp, vertical = 8.dp), 
+            .padding(horizontal = 12.dp, vertical = 6.dp), // 패딩 대폭 축소 (작고 날렵하게)
         contentAlignment = Alignment.Center
     ) {
-        Text(text = text, color = textColor, fontWeight = if (isFocused || isSelected) FontWeight.Bold else FontWeight.Medium, fontSize = 15.sp)
+        Text(
+            text = text, 
+            color = textColor, 
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium, 
+            fontSize = 11.sp // 텍스트 크기 11sp로 축소
+        )
     }
 }

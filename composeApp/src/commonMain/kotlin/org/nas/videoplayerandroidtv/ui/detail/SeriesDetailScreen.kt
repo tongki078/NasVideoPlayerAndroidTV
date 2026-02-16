@@ -127,13 +127,13 @@ fun SeriesDetailScreen(
 
         Box(modifier = Modifier.fillMaxSize().background(brush = Brush.horizontalGradient(0.0f to Color.Black, 0.5f to Color.Black.copy(alpha = 0.8f), 1.0f to Color.Transparent)))
 
-        Row(modifier = Modifier.fillMaxSize().padding(horizontal = 60.dp).padding(top = 20.dp)) { // 상단 간격 줄임
+        Row(modifier = Modifier.fillMaxSize().padding(horizontal = 60.dp).padding(top = 20.dp)) { 
             Column(modifier = Modifier.weight(1.5f).fillMaxHeight(), verticalArrangement = Arrangement.Center) {
                 Text(
                     text = currentSeries.title.cleanTitle(includeYear = false), 
                     color = Color.White, 
                     style = TextStyle(
-                        fontSize = 25.sp, // 크기 30% 줄임
+                        fontSize = 25.sp, 
                         fontWeight = FontWeight.ExtraBold, 
                         shadow = Shadow(color = Color.Black.copy(alpha = 0.5f), offset = Offset(0f, 4f), blurRadius = 12f), 
                         letterSpacing = (-1).sp
@@ -159,8 +159,8 @@ fun SeriesDetailScreen(
                         Text(
                             text = currentSeries.overview ?: "정보가 없습니다.", 
                             color = Color.White.copy(alpha = 0.7f), 
-                            fontSize = 11.sp, // 크기 30% 줄임
-                            lineHeight = 17.sp, // 줄 간격 조정
+                            fontSize = 11.sp, 
+                            lineHeight = 17.sp, 
                             maxLines = 2, 
                             overflow = TextOverflow.Ellipsis
                         )
@@ -168,7 +168,7 @@ fun SeriesDetailScreen(
                 }
                 Spacer(modifier = Modifier.height(11.dp))
                 if (!state.isLoading && currentSeries.actors.isNotEmpty()) {
-                    Text(text = "출연: " + currentSeries.actors.take(4).joinToString { it.name }, color = Color.White.copy(alpha = 0.4f), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) // 크기 30% 줄임
+                    Text(text = "출연: " + currentSeries.actors.take(4).joinToString { it.name }, color = Color.White.copy(alpha = 0.4f), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) 
                 }
                 
                 Spacer(modifier = Modifier.height(34.dp))
@@ -235,8 +235,16 @@ private fun formatTime(ms: Long): String {
 
 @Composable
 private fun InfoBadge(text: String, color: Color = Color.White.copy(alpha = 0.15f), textColor: Color = Color.White, isOutlined: Boolean = false) {
-    Surface(color = if (isOutlined) Color.Transparent else color, shape = RoundedCornerShape(4.dp), border = if (isOutlined) BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)) else null, modifier = Modifier.padding(end = 8.dp)) {
-        Text(text = text, color = textColor, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)) // 크기 30% 줄임
+    Box(
+        modifier = Modifier
+            .padding(end = 8.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (isOutlined) Color.Transparent else color)
+            .then(if (isOutlined) Modifier.border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(4.dp)) else Modifier)
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center // 수직/수평 중앙 정렬
+    ) {
+        Text(text = text, color = textColor, fontSize = 9.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -274,9 +282,11 @@ private fun PremiumTvButton(
             .wrapContentWidth()
             .shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(10.dp), spotColor = Color.White.copy(alpha = 0.4f))
     ) {
-        Box(modifier = Modifier.wrapContentWidth()) {
+        Box(modifier = Modifier.wrapContentWidth(), contentAlignment = Alignment.Center) { 
             Row(
-                modifier = Modifier.padding(horizontal = 17.dp).fillMaxHeight(), // 패딩 줄임
+                modifier = Modifier
+                    .padding(horizontal = 17.dp)
+                    .fillMaxHeight(),
                 verticalAlignment = Alignment.CenterVertically, 
                 horizontalArrangement = Arrangement.Center
             ) {
