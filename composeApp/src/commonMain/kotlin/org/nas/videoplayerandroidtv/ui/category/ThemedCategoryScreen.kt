@@ -46,7 +46,7 @@ fun ThemedCategoryScreen(
         isAirScreen -> listOf("라프텔 애니메이션", "드라마")
         isAniScreen -> listOf("라프텔", "시리즈")
         isMovieScreen -> listOf("제목", "UHD", "최신")
-        isForeignTVScreen -> listOf("미국 드라마", "중국 드라마", "일본 드라마", "기타국가 드라마", "다큐")
+        isForeignTVScreen -> listOf("미국 드라마", "일본 드라마", "중국 드라마", "기타국가 드라마", "다큐")
         isKoreanTVScreen -> listOf("드라마", "시트콤", "예능", "교양", "다큐멘터리")
         else -> emptyList()
     }
@@ -65,7 +65,7 @@ fun ThemedCategoryScreen(
         try {
             // 1. 네트워크 로드 (IO 스레드)
             val result = withContext(Dispatchers.IO) {
-                val limit = 150 // 개수 최적화
+                val limit = 300 // 충분히 많은 양을 가져옴
                 when {
                     isMovieScreen -> when (selectedMode) {
                         0 -> repository.getMoviesByTitle(limit, 0)
@@ -75,14 +75,20 @@ fun ThemedCategoryScreen(
                     isAniScreen -> if (selectedMode == 0) repository.getAnimationsRaftel(limit, 0) else repository.getAnimationsSeries(limit, 0)
                     isAirScreen -> if (selectedMode == 0) repository.getAnimationsAir() else repository.getDramasAir()
                     isForeignTVScreen -> when (selectedMode) {
-                        0 -> repository.getFtvUs(limit, 0); 1 -> repository.getFtvCn(limit, 0)
-                        2 -> repository.getFtvJp(limit, 0); 3 -> repository.getFtvEtc(limit, 0)
-                        4 -> repository.getFtvDocu(limit, 0); else -> emptyList()
+                        0 -> repository.getFtvUs(limit, 0)   // 미국 드라마
+                        1 -> repository.getFtvJp(limit, 0)   // 일본 드라마
+                        2 -> repository.getFtvCn(limit, 0)   // 중국 드라마
+                        3 -> repository.getFtvEtc(limit, 0)  // 기타국가 드라마
+                        4 -> repository.getFtvDocu(limit, 0) // 다큐
+                        else -> emptyList()
                     }
                     isKoreanTVScreen -> when (selectedMode) {
-                        0 -> repository.getKtvDrama(limit, 0); 1 -> repository.getKtvSitcom(limit, 0)
-                        2 -> repository.getKtvVariety(limit, 0); 3 -> repository.getKtvEdu(limit, 0)
-                        4 -> repository.getKtvDocu(limit, 0); else -> emptyList()
+                        0 -> repository.getKtvDrama(limit, 0)
+                        1 -> repository.getKtvSitcom(limit, 0)
+                        2 -> repository.getKtvVariety(limit, 0)
+                        3 -> repository.getKtvEdu(limit, 0)
+                        4 -> repository.getKtvDocu(limit, 0)
+                        else -> emptyList()
                     }
                     else -> emptyList()
                 }
@@ -90,7 +96,13 @@ fun ThemedCategoryScreen(
 
             // 2. 데이터 분류 연산 (Default 스레드)
             val sections = withContext(Dispatchers.Default) {
-                processThemedSections(result)
+                // [수정] 모든 세부 카테고리 탭에서는 '테마 분류' 대신 '전체 목록'으로 표시
+                // 사용자가 폴더를 선택해서 들어온 것이므로 분류 없이 전체를 보여주는 것이 정확함
+                if (result.isNotEmpty()) {
+                    listOf(ThemeSection("all_list", "전체 목록", result))
+                } else {
+                    emptyList()
+                }
             }
 
             themedSections = sections

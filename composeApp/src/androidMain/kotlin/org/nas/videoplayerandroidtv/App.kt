@@ -76,9 +76,9 @@ fun App(driver: SqlDriver) {
     val selectedSubMode = subModeStates.getOrDefault(currentScreen, 0)
 
     val subModes = when(currentScreen) {
-        Screen.MOVIES -> listOf("UHD", "최신", "제목")
-        Screen.KOREAN_TV -> listOf("드라마", "예능", "시트콤", "교양", "다큐멘터리")
-        Screen.FOREIGN_TV -> listOf("미국", "중국", "일본", "다큐", "기타")
+        Screen.MOVIES -> listOf("제목", "UHD", "최신")
+        Screen.KOREAN_TV -> listOf("드라마", "시트콤", "예능", "교양", "다큐멘터리")
+        Screen.FOREIGN_TV -> listOf("미국 드라마", "일본 드라마", "중국 드라마", "기타국가 드라마", "다큐")
         Screen.ANIMATIONS -> listOf("라프텔", "시리즈")
         Screen.ON_AIR -> listOf("라프텔 애니메이션", "드라마")
         else -> emptyList()
@@ -146,8 +146,8 @@ fun App(driver: SqlDriver) {
                                     isSelected = selectedSubMode == index, 
                                     onClick = { 
                                         subModeStates[currentScreen] = index
-                                        selectedSeries = null // 상세 화면 닫기
-                                        selectedMovie = null // 플레이어 닫기
+                                        selectedSeries = null 
+                                        selectedMovie = null
                                     }
                                 )
                             }
@@ -189,16 +189,15 @@ fun App(driver: SqlDriver) {
                         }
                         else -> {
                             HomeScreen(
+                                currentScreen = currentScreen, // [수정] 현재 화면 정보 전달
                                 watchHistory = if (currentScreen == Screen.HOME) watchHistory else emptyList(), 
                                 homeSections = allCategorySections[currentCacheKey] ?: emptyList(),
                                 isLoading = categoryLoadingStates[currentCacheKey] ?: false,
                                 lazyListState = lazyListStates.getOrPut(currentCacheKey) { androidx.compose.foundation.lazy.LazyListState() },
                                 onSeriesClick = { selectedSeries = it }, 
-                                // 즉시 재생 핸들러
                                 onPlayClick = { m: Movie -> 
                                     selectedMovie = m; moviePlaylist = listOf(m); lastPlaybackPosition = 0L 
                                 },
-                                // 시청 기록 클릭 시 즉시 재생
                                 onHistoryClick = { h: org.nas.videoplayerandroidtv.data.WatchHistory -> 
                                     val movie = Movie(h.id, h.title, h.videoUrl, h.thumbnailUrl)
                                     selectedMovie = movie

@@ -23,7 +23,36 @@ class VideoRepositoryImpl : VideoRepository {
         return isGenericTitle(n) || n.contains("Search Results", ignoreCase = true)
     }
 
-    // [수정] keyword 파라미터를 추가하여 서버 측 필터링을 지원하도록 변경
+    private fun Category.toSeries() = Series(
+        title = name ?: "",
+        episodes = movies ?: emptyList(),
+        fullPath = path,
+        posterPath = posterPath,
+        genreIds = genreIds ?: emptyList(),
+        genreNames = genreNames ?: emptyList(),
+        director = director,
+        actors = actors ?: emptyList(),
+        overview = overview,
+        year = year,
+        rating = rating
+    )
+
+    private suspend fun getCategoryListAsSeries(path: String, keyword: String? = null, limit: Int = 150, offset: Int = 0): List<Series> = try {
+        val response = client.get("$baseUrl/list") {
+            parameter("path", path)
+            if (!keyword.isNullOrBlank()) {
+                parameter("keyword", keyword)
+            }
+            parameter("limit", limit)
+            parameter("offset", offset)
+        }.body<List<Category>>()
+        
+        response.filter { !isGenericFolder(it.name) }.map { it.toSeries() }
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        emptyList()
+    }
+
     suspend fun fetchCategorySections(categoryKey: String, keyword: String? = null): List<HomeSection> = try {
         val response = client.get("$baseUrl/category_sections") {
             parameter("cat", categoryKey)
@@ -70,20 +99,7 @@ class VideoRepositoryImpl : VideoRepository {
         val response = client.get("$baseUrl/api/series_detail") {
             parameter("path", path)
         }.body<Category>()
-        
-        Series(
-            title = response.name ?: "",
-            episodes = response.movies ?: emptyList(),
-            fullPath = response.path,
-            posterPath = response.posterPath,
-            genreIds = response.genreIds ?: emptyList(),
-            genreNames = response.genreNames ?: emptyList(),
-            director = response.director,
-            actors = response.actors ?: emptyList(),
-            overview = response.overview,
-            year = response.year,
-            rating = response.rating
-        )
+        response.toSeries()
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         null
@@ -98,31 +114,44 @@ class VideoRepositoryImpl : VideoRepository {
         response
     } catch (e: Exception) { emptyList() }
 
+    // --- [카테고리 매핑 수정] ---
+
+    // 방송중
+    override suspend fun getAnimationsAir(): List<Series> = getCategoryListAsSeries("방송중", "라프텔 애니메이션")
+    override suspend fun getDramasAir(): List<Series> = getCategoryListAsSeries("방송중", "드라마")
+
+    // 애니 (서버 PATH_MAP에 맞춤: "일본 애니메이션")
+    override suspend fun getAnimationsRaftel(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("일본 애니메이션", "라프텔", limit, offset)
+    override suspend fun getAnimationsSeries(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("일본 애니메이션", "시리즈", limit, offset)
+    override suspend fun getAnimationsAll(): List<Series> = getCategoryListAsSeries("일본 애니메이션", null)
+
+    // 영화
+    override suspend fun getMoviesByTitle(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("영화", "제목", limit, offset)
+    override suspend fun getUhdMovies(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("영화", "UHD", limit, offset)
+    override suspend fun getLatestMovies(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("영화", "최신", limit, offset)
+    override suspend fun getPopularMovies(limit: Int, offset: Int): List<Series> = getLatestMovies(limit, offset)
+
+    // 외국TV
+    override suspend fun getFtvUs(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("외국TV", "미국 드라마", limit, offset)
+    override suspend fun getFtvJp(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("외국TV", "일본 드라마", limit, offset)
+    override suspend fun getFtvCn(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("외국TV", "중국 드라마", limit, offset)
+    override suspend fun getFtvEtc(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("외국TV", "기타국가 드라마", limit, offset)
+    override suspend fun getFtvDocu(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("외국TV", "다큐", limit, offset)
+
+    // 국내TV
+    override suspend fun getKtvDrama(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("국내TV", "드라마", limit, offset)
+    override suspend fun getKtvSitcom(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("국내TV", "시트콤", limit, offset)
+    override suspend fun getKtvVariety(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("국내TV", "예능", limit, offset)
+    override suspend fun getKtvEdu(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("국내TV", "교양", limit, offset)
+    override suspend fun getKtvDocu(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("국내TV", "다큐멘터리", limit, offset)
+
+    // 기타 (기존 인터페이스 유지)
     override suspend fun getCategoryVideoCount(path: String): Int = 0
     override suspend fun searchVideos(query: String, category: String): List<Series> = emptyList()
-    override suspend fun getLatestMovies(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getPopularMovies(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getUhdMovies(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getMoviesByTitle(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getAnimations(): List<Series> = emptyList()
-    override suspend fun getAnimationsAll(): List<Series> = emptyList()
-    override suspend fun getAnimationsRaftel(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getAnimationsSeries(limit: Int, offset: Int): List<Series> = emptyList()
+    override suspend fun getAnimations(): List<Series> = getAnimationsAll()
     override suspend fun getDramas(): List<Series> = emptyList()
-    override suspend fun getAnimationsAir(): List<Series> = emptyList()
-    override suspend fun getDramasAir(): List<Series> = emptyList()
-    override suspend fun getLatestForeignTV(): List<Series> = emptyList()
-    override suspend fun getPopularForeignTV(): List<Series> = emptyList()
-    override suspend fun getFtvUs(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getFtvCn(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getFtvJp(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getFtvDocu(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getFtvEtc(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getLatestKoreanTV(): List<Series> = emptyList()
-    override suspend fun getPopularKoreanTV(): List<Series> = emptyList()
-    override suspend fun getKtvDrama(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getKtvSitcom(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getKtvVariety(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getKtvEdu(limit: Int, offset: Int): List<Series> = emptyList()
-    override suspend fun getKtvDocu(limit: Int, offset: Int): List<Series> = emptyList()
+    override suspend fun getLatestForeignTV(): List<Series> = getCategoryListAsSeries("외국TV", null)
+    override suspend fun getPopularForeignTV(): List<Series> = getLatestForeignTV()
+    override suspend fun getLatestKoreanTV(): List<Series> = getCategoryListAsSeries("국내TV", null)
+    override suspend fun getPopularKoreanTV(): List<Series> = getLatestKoreanTV()
 }
