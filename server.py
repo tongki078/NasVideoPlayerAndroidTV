@@ -178,15 +178,17 @@ def migrate_json_to_db():
 REGEX_EXT = re.compile(r'\.[a-zA-Z0-9]{2,4}$')
 REGEX_YEAR = re.compile(r'\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)')
 REGEX_CH_PREFIX = re.compile(r'^\[(?:KBS|SBS|MBC|tvN|JTBC|OCN|Mnet|TV조선|채널A|MBN|ENA|KBS2|KBS1|CH\d+|TV|Netflix|Disney\+|AppleTV|NET|Wavve|Tving|Coupang)\]\s*')
-REGEX_TECHNICAL_TAGS = re.compile(r'(?i)[.\s_-](?!(?:\d+\b))(\d{3,4}p|2160p|FHD|QHD|UHD|4K|Bluray|Blu-ray|WEB-DL|WEBRip|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AVC|AAC\d?|DTS-?H?D?|AC3|DDP\d?|DD\+\d?|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|HDR(?:10)?(?:\+)?|Vision|Dolby|NF|AMZN|HMAX|DSNP|AppleTV?|Disney|PCOK|playWEB|ATVP|HULU|HDTV|HD|KBS|SBS|MBC|TVN|JTBC|NEXT|ST|SW|KL|YT|MVC|KN|FLUX|hallowed|PiRaTeS|Jadewind|Movie|pt\s*\d+|KOREAN|KOR|ITALIAN|JAPANESE|JPN|CHINESE|CHN|ENGLISH|ENG|USA|HK|TW|FRENCH|GERMAN|SPANISH|THAI|VIETNAMESE|WEB|DL|TVRip|HDR10Plus|IMAX|Unrated|REMASTERED|Criterion|NonDRM|BRRip|1080i|720i|국어|Mandarin|Cantonese|FanSub|VFQ|VF|2CH|5\.1CH|8m|2398|PROPER|PROMO|LIMITED|RM4K|DC|THEATRICAL|EXTENDED|FINAL|DUB|KORDUB|JAPDUB|ENGDUB|ARROW|EDITION|SPECIAL|COLLECTION|RETAIL|TVING|WAVVE|Coupang|CP|B-Global|TrueHD|E-AC3|EAC3|DV|Dual-Audio|Multi-Audio|Multi-Sub)(\b|$|[.\s_-])')
+# [개선] 기술적 태그: 한글 단어 일부를 태그로 오해하지 않도록 경계 조건 강화
+REGEX_TECHNICAL_TAGS = re.compile(r'(?i)[.\s_-](?!(?:\d+\b))(\d{3,4}p|2160p|FHD|QHD|UHD|4K|Bluray|Blu-ray|WEB-DL|WEBRip|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AVC|AAC\d?|DTS-?H?D?|AC3|DDP\d?|DD\+\d?|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|HDR(?:10)?(?:\+)?|Vision|Dolby|NF|AMZN|HMAX|DSNP|AppleTV?|Disney|PCOK|playWEB|ATVP|HULU|HDTV|HD|KBS|SBS|MBC|TVN|JTBC|NEXT|ST|SW|KL|YT|MVC|KN|FLUX|hallowed|PiRaTeS|Jadewind|Movie|pt\s*\d+|KOREAN|KOR|ITALIAN|JAPANESE|JPN|CHINESE|CHN|ENGLISH|ENG|USA|HK|TW|FRENCH|GERMAN|SPANISH|THAI|VIETNAMESE|WEB|DL|TVRip|HDR10Plus|IMAX|Unrated|REMASTERED|Criterion|NonDRM|BRRip|1080i|720i|국어|Mandarin|Cantonese|FanSub|VFQ|VF|2CH|5\.1CH|8m|2398|PROPER|PROMO|LIMITED|RM4K|DC|THEATRICAL|EXTENDED|FINAL|DUB|KORDUB|JAPDUB|ENGDUB|ARROW|EDITION|SPECIAL|COLLECTION|RETAIL|TVING|WAVVE|Coupang|CP|B-Global|TrueHD|E-AC3|EAC3|DV|Dual-Audio|Multi-Audio|Multi-Sub)(?:\b|[.\s_-]|$)')
 
-REGEX_EP_MARKER_STRICT = re.compile(r'(?i)(?:^|[.\s_-]|[가-힣\u3040-\u30ff\u4e00-\u9fff])(?:第?\s*S(\d+)E(\d+)(?:[-~]E?\d+)?|第?\s*S(\d+)|第?\s*E(\d+)(?:[-~]\d+)?|\d+\s*(?:화|회|기|부|話)|Season\s*\d+|Part\s*\d+|pt\s*\d+|Episode\s*\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+|시즌\s*\d+|[상하]부|최종화|\d{6}|\d{8})')
+# [개선] 에피소드 마커: 날짜(\d{6}, \d{8}) 오탐 방지를 위해 제거하고 순수 에피소드 패턴만 유지
+REGEX_EP_MARKER_STRICT = re.compile(r'(?i)(?:(?<=[\uac00-\ud7af\u3040-\u30ff\u4e00-\u9fff])|[.\s_-]|^)(?:第?\s*S(\d+)E(\d+)(?:[-~]E?\d+)?|第?\s*S(\d+)|第?\s*E(\d+)(?:[-~]\d+)?|\d+\s*(?:화|회|기|부|話)|Season\s*\d+|Part\s*\d+|pt\s*\d+|Episode\s*\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+|시즌\s*\d+|[상하]부|최종화)(?:\b|[.\s_-]|$)')
 
 REGEX_DATE_YYMMDD = re.compile(r'(?<!\d)\d{6}(?!\d)')
 REGEX_FORBIDDEN_CONTENT = re.compile(r'(?i)(Storyboard|Behind the Scenes|Making of|Deleted Scenes|Alternate Scenes|Gag Reel|Gag Menu|Digital Hits|Trailer|Bonus|Extras|Gallery|Production|Visual Effects|VFX|등급고지|예고편|개봉버전|인터뷰|삭제장면|(?<!\S)[상하](?!\S))')
 REGEX_FORBIDDEN_TITLE = re.compile(r'(?i)^\s*(Season\s*\d+|Part\s*\d+|EP\s*\d+|\d+화|\d+회|\d+기|시즌\s*\d+|S\d+|E\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+|Specials?|Extras?|Bonus|미분류|기타|새\s*폴더|VIDEO|GDS3|GDRIVE|NAS|share|영화|외국TV|국내TV|애니메이션|방송중|제목|UHD|최신|최신작|최신영화|4K|1080P|720P)\s*$', re.I)
 
-REGEX_BRACKETS = re.compile(r'\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\)|$)|\{.*?(?:\)|$)|\【.*?(?:\】|$)|\『.*?(?:\』|$)|\「.*?(?:\」|$)|\（.*?(?:\）|$)')
+REGEX_BRACKETS = re.compile(r'\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\)|$)|\【.*?(?:\】|$)|\『.*?(?:\』|$)|\「.*?(?:\」|$)|\（.*?(?:\）|$)')
 REGEX_TMDB_HINT = re.compile(r'\{tmdb[\s-]*(\d+)\}')
 REGEX_JUNK_KEYWORDS = re.compile(r'(?i)\s*(?:더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|익스텐디드|등급고지|예고편|(?<!\S)[상하](?!\S))\s*')
 
@@ -204,34 +206,45 @@ def clean_title_complex(title):
     cleaned = REGEX_EXT.sub('', orig_title)
     cleaned = REGEX_CH_PREFIX.sub('', cleaned)
     cleaned = REGEX_TMDB_HINT.sub('', cleaned)
-    if '.' in cleaned:
-        cleaned = cleaned.replace('.', ' ')
 
+    # [수정] 연도 정보 미리 추출 (브래킷 제거 전)
+    year_match = REGEX_YEAR.search(cleaned)
+    year = year_match.group().replace('(', '').replace(')', '') if year_match else None
+
+    # [수정] 마커 확인 시 제목이 너무 많이 잘려나가는 것을 방지
     ep_match = REGEX_EP_MARKER_STRICT.search(cleaned)
     if ep_match:
-        if ep_match.start() < 5:
-            cleaned = cleaned[ep_match.end():].strip()
+        # [개선] EP 마커 앞부분이 2자 미만이거나 한글이 포함되지 않은 경우만 뒷부분을 취함
+        pre = cleaned[:ep_match.start()].strip()
+        if len(pre) >= 2 and not REGEX_FORBIDDEN_TITLE.match(pre):
+            cleaned = pre
+        elif len(pre) >= 1 and any('\uac00' <= c <= '\ud7af' for c in pre):
+            cleaned = pre
         else:
-            cleaned = cleaned[:ep_match.start()].strip()
+            # 앞부분이 의미 없으면 마커 이후를 보되, 이후도 너무 짧으면 원본 제목 활용 고려
+            post = cleaned[ep_match.end():].strip()
+            if len(post) >= 2: cleaned = post
+            else: cleaned = pre if pre else post
 
     tech_match = REGEX_TECHNICAL_TAGS.search(cleaned)
     if tech_match:
-        cleaned = cleaned[:tech_match.start()].strip()
+        # [개선] 기술 태그에 의해 제목이 너무 짧아지면(1자 이하) 자르지 않음
+        pre_tech = cleaned[:tech_match.start()].strip()
+        if len(pre_tech) >= 2:
+            cleaned = pre_tech
 
+    # [개선] 숫자 분리 로직: 날짜나 연도가 깨지지 않도록 한글/영어 경계만 처리
     cleaned = re.sub(r'([가-힣\u3040-\u30ff\u4e00-\u9fff])([a-zA-Z])', r'\1 \2', cleaned)
     cleaned = re.sub(r'([a-zA-Z])([가-힣\u3040-\u30ff\u4e00-\u9fff])', r'\1 \2', cleaned)
-    cleaned = re.sub(r'([가-힣\u3040-\u30ff\u4e00-\u9fff\w])(\d+)', r'\1 \2', cleaned)
-    cleaned = re.sub(r'(\d+)([가-힣\u3040-\u30ff\u4e00-\u9fff\w])', r'\1 \2', cleaned)
 
     cleaned = REGEX_DATE_YYMMDD.sub(' ', cleaned)
-    year_match = REGEX_YEAR.search(cleaned)
-    year = year_match.group().replace('(', '').replace(')', '') if year_match else None
     cleaned = REGEX_YEAR.sub(' ', cleaned)
 
+    # 정제 후 너무 짧아진 경우 브래킷 내부에서 대체 제목 찾기
     if len(cleaned.strip()) < 2:
         brackets = re.findall(r'\[(.*?)\]|\((.*?)\)|（(.*?)）', orig_title)
         for b in brackets:
-            inner = (b[0] or b[1] or b[2]).strip()
+            inner = (b[0] or b[1] or b[2] or "").strip()
             if len(inner) >= 2 and not REGEX_TECHNICAL_TAGS.search(inner) and not REGEX_FORBIDDEN_TITLE.match(inner):
                 cleaned = inner
                 break
@@ -239,13 +252,15 @@ def clean_title_complex(title):
     cleaned = REGEX_BRACKETS.sub(' ', cleaned)
     cleaned = cleaned.replace("(자막)", "").replace("(더빙)", "").replace("[자막]", "").replace("[더빙]", "").replace("（자막）", "").replace("（더빙）", "")
     cleaned = REGEX_JUNK_KEYWORDS.sub(' ', cleaned)
+
+    # [수정] 점(.)을 무조건 제거하기 전에 공백으로 변환 (숫자 보호 위해 특수문자 처리에서 다룸)
     cleaned = REGEX_SPECIAL_CHARS.sub(' ', cleaned)
     cleaned = REGEX_LEADING_INDEX.sub('', cleaned)
-    cleaned = re.sub(r'([가-힣a-zA-Z\u3040-\u30ff\u4e00-\u9fff])(\d+)$', r'\1 \2', cleaned)
     cleaned = REGEX_SPACES.sub(' ', cleaned).strip()
 
     if len(cleaned) < 1:
-        return "", None
+        # 최종 정제 실패 시 원본 제목에서 확장자만 떼고 반환 (최후의 수단)
+        return nfc(os.path.splitext(orig_title)[0]), year
     return nfc(cleaned), year
 
 def extract_episode_numbers(filename):
@@ -303,11 +318,12 @@ def get_tmdb_info_server(title, ignore_cache=False):
     base_params = {"include_adult": "true", "region": "KR"}
 
     def perform_search(query, lang=None, m_type='multi', search_year=None):
-        if not query or len(query) < 2: return []
+        if not query or len(query) < 1: return []
         params = {**base_params, "query": query}
         if lang: params["language"] = lang
         if search_year:
-            params['year' if m_type != 'tv' else 'first_air_date_year'] = search_year
+            params['year' if m_type == 'movie' else 'first_air_date_year' if m_type == 'tv' else 'year'] = search_year
+            if m_type == 'multi': params['year'] = search_year
         try:
             r = requests.get(f"{TMDB_BASE_URL}/search/{m_type}", params=params, headers=headers, timeout=10)
             return r.json().get('results', []) if r.status_code == 200 else []
@@ -360,24 +376,34 @@ def get_tmdb_info_server(title, ignore_cache=False):
                 best_match = rank_results(results, ct, year)
 
             if not best_match:
-                parts = re.split(r'[-:]', ct)
-                if len(parts) > 1 and len(parts[0].strip()) >= 2:
-                    main_title = parts[0].strip()
-                    log("TMDB", f"🔄 주제목 검색: '{main_title}'")
-                    results = perform_search(main_title, "ko-KR", "multi", year)
-                    best_match = rank_results(results, main_title, year)
+                # [개선] 한글 제목만 추출하여 검색 (특수문자/영어 제외)
+                ko_only = "".join(re.findall(r'[가-힣\s]+', ct)).strip()
+                if ko_only and ko_only != ct and len(ko_only) >= 2:
+                    log("TMDB", f"🔄 한글 부분 재검색: '{ko_only}'")
+                    results = perform_search(ko_only, "ko-KR", "multi", year)
+                    best_match = rank_results(results, ko_only, year)
 
             if not best_match:
-                cjk_only = "".join(re.findall(r'[가-힣\u3040-\u30ff\u4e00-\u9fff\s]+', ct)).strip()
-                if cjk_only and len(cjk_only) >= 2 and cjk_only != ct:
-                    results = perform_search(cjk_only, "ko-KR", "multi", year)
-                    best_match = rank_results(results, cjk_only, year)
+                # [수정] 원어(일어/한자) 부분 추출 검색 추가
+                cjk_parts = re.findall(r'[\u3040-\u30ff\u4e00-\u9fff]+', title)
+                for part in cjk_parts:
+                    if len(part) >= 2:
+                        log("TMDB", f"🔄 원어 부분 검색: '{part}'")
+                        results = perform_search(part, None, "multi", year)
+                        best_match = rank_results(results, part, year)
+                        if best_match: break
 
             if not best_match:
-                en_only = "".join(re.findall(r'[a-zA-Z\s]+', ct)).strip()
-                if en_only and len(en_only) >= 3:
-                    results = perform_search(en_only, "ko-KR", "multi", year)
-                    best_match = rank_results(results, en_only, year)
+                # [수정] 하이픈(-)이나 콜론(:)으로 구분된 부분 검색 시도
+                parts = re.split(r'[-:～]', ct)
+                if len(parts) > 1:
+                    for p in parts:
+                        sub_title = p.strip()
+                        if len(sub_title) >= 2 and not REGEX_FORBIDDEN_TITLE.match(sub_title):
+                            log("TMDB", f"🔄 부분 제목 검색: '{sub_title}'")
+                            results = perform_search(sub_title, "ko-KR", "multi", year)
+                            best_match = rank_results(results, sub_title, year)
+                            if best_match: break
 
         if best_match:
             m_type, t_id = best_match.get('media_type') or ('movie' if best_match.get('title') else 'tv'), best_match.get('id')
