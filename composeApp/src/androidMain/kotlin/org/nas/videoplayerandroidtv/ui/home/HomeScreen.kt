@@ -69,7 +69,7 @@ fun HomeScreen(
                 items = section.items.filter { item: Category ->
                     val name = (item.name ?: "").trim()
                     if (isGenericTitle(name)) return@filter false
-                    true // [수정] 다큐멘터리/교양 강제 필터링 제거 (서버 데이터를 믿음)
+                    true
                 }
             )
         }.filter { it.items.isNotEmpty() }
@@ -98,9 +98,8 @@ fun HomeScreen(
             state = lazyListState,
             contentPadding = PaddingValues(bottom = 60.dp)
         ) {
-            // [수정] 모든 탭(Screen)에서 히어로 슬라이드 부활
-            if (heroItem != null) {
-                item(key = "hero_section") {
+            item(key = "hero_section") {
+                if (heroItem != null) {
                     AnimatedContent(
                         targetState = heroItem,
                         transitionSpec = {
@@ -128,6 +127,9 @@ fun HomeScreen(
                             horizontalPadding = standardMargin
                         )
                     }
+                } else if (isLoading) {
+                    // [UX 개선] 로딩 중에 상단 슬라이드 자리를 스켈레톤으로 유지하여 레이아웃 튐 방지
+                    SkeletonHero()
                 }
             }
 
