@@ -174,18 +174,28 @@ fun HomeScreen(
                         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) { 
                             SectionTitle("시청 중인 콘텐츠", standardMargin)
                             
-                            LazyRow(
+                            NetflixTvPivotRow(
                                 state = historyRowState,
-                                contentPadding = PaddingValues(horizontal = standardMargin),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                modifier = Modifier.fillMaxWidth().height(220.dp)
-                            ) {
-                                itemsIndexed(watchHistory, key = { _, h -> h.id }) { _, history ->
-                                    NetflixWatchHistoryItem(
-                                        history = history,
-                                        onClick = { onHistoryClick(history) }
-                                    )
-                                }
+                                items = watchHistory, 
+                                marginValue = standardMargin,
+                                rowKey = rowKey,
+                                rowFocusIndices = rowFocusIndices,
+                                keySelector = { history -> "history_${history.id}" }
+                            ) { history, index, rowState, focusRequester, marginPx, focusedIndex ->
+                                NetflixPivotItem(
+                                    title = history.title, 
+                                    posterPath = history.posterPath,
+                                    initialVideoUrl = null, // 시청 기록은 바로 재생하므로 미리보기 불필요 시
+                                    categoryPath = history.seriesPath,
+                                    repository = repository,
+                                    index = index,
+                                    focusedIndex = focusedIndex,
+                                    state = rowState,
+                                    marginPx = marginPx,
+                                    focusRequester = focusRequester,
+                                    overview = null, // 상세 정보는 내부에서 fetch
+                                    onClick = { onHistoryClick(history) }
+                                )
                             }
                         }
                     }
@@ -243,89 +253,6 @@ fun HomeScreen(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun NetflixWatchHistoryItem(
-    history: WatchHistory,
-    onClick: () -> Unit
-) {
-    var isFocused by remember { mutableStateOf(false) }
-    
-    Column(
-        modifier = Modifier
-            .width(140.dp)
-            .onFocusChanged { isFocused = it.isFocused }
-            .focusable()
-            .clickable(onClick = onClick)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(180.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .border(
-                    width = if (isFocused) 3.dp else 0.dp,
-                    color = if (isFocused) Color.White else Color.Transparent,
-                    shape = RoundedCornerShape(4.dp)
-                )
-        ) {
-            TmdbAsyncImage(
-                title = history.title,
-                posterPath = history.posterPath,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
-
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(if (isFocused) Color.Black.copy(alpha = 0.2f) else Color.Transparent),
-                contentAlignment = Alignment.Center
-            ) {
-                Surface(
-                    shape = CircleShape,
-                    color = Color.Black.copy(alpha = 0.6f),
-                    border = BorderStroke(1.dp, Color.White),
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.padding(8.dp)
-                    )
-                }
-            }
-
-            val progress = if (history.duration > 0) history.lastPosition.toFloat() / history.duration else 0f
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(4.dp)
-                    .background(Color.Gray.copy(alpha = 0.5f))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .fillMaxHeight()
-                        .background(Color.Red)
-                )
-            }
-        }
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        Text(
-            text = history.title.cleanTitle(), // 정제된 제목 적용
-            color = if (isFocused) Color.White else Color.Gray,
-            fontSize = 13.sp,
-            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }
 

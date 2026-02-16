@@ -33,7 +33,6 @@ const val TMDB_BACKDROP_SIZE = "w780"
 
 private val tmdbClient = HttpClient {
     install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
-    // [최적화] TMDB API 응답 압축 해제 지원
     install(ContentEncoding) {
         gzip()
         deflate()
@@ -58,6 +57,7 @@ data class TmdbResult(
     @SerialName("media_type") val mediaType: String? = null,
     val overview: String? = null,
     @SerialName("genre_ids") val genreIds: List<Int>? = null,
+    @SerialName("vote_average") val voteAverage: Double? = 0.0,
     @SerialName("vote_count") val voteCount: Int? = 0,
     @SerialName("popularity") val popularity: Double? = 0.0,
     @SerialName("release_date") val releaseDate: String? = null,
@@ -71,8 +71,7 @@ data class TmdbMetadata(
     val backdropUrl: String? = null,
     val overview: String? = null,
     val genreIds: List<Int> = emptyList(),
-    val title: String? = null,
-    val year: String? = null
+    val title: String? = null
 )
 
 @Serializable
@@ -220,8 +219,7 @@ private suspend fun searchTmdbCore(query: String, language: String?, endpoint: S
             val posterUrl = "$TMDB_IMAGE_BASE$TMDB_POSTER_SIZE_MEDIUM${bestMatch.posterPath}"
             val backdropUrl = bestMatch.backdropPath?.let { "$TMDB_IMAGE_BASE$TMDB_BACKDROP_SIZE$it" }
             val mediaType = bestMatch.mediaType ?: (if (bestMatch.title != null) "movie" else "tv")
-            val resultYear = (bestMatch.releaseDate ?: bestMatch.firstAirDate ?: "").take(4)
-            Pair(TmdbMetadata(tmdbId = bestMatch.id, mediaType = mediaType, posterUrl = posterUrl, backdropUrl = backdropUrl, overview = bestMatch.overview, genreIds = bestMatch.genreIds ?: emptyList(), title = bestMatch.name ?: bestMatch.title, year = resultYear), null)
+            Pair(TmdbMetadata(tmdbId = bestMatch.id, mediaType = mediaType, posterUrl = posterUrl, backdropUrl = backdropUrl, overview = bestMatch.overview, genreIds = bestMatch.genreIds ?: emptyList(), title = bestMatch.name ?: bestMatch.title), null)
         } else Pair(null, null)
     } catch (e: Exception) { Pair(null, e) }
 }
