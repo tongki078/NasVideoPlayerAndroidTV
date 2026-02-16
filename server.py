@@ -9,10 +9,10 @@ from io import BytesIO
 app = Flask(__name__)
 CORS(app)
 
-# MIME 타입 추가 등록
-if not mimetypes.types_map.get('.mkv'): mimetypes.add_type('video/x-matroska', '.mkv')
-if not mimetypes.types_map.get('.ts'): mimetypes.add_type('video/mp2t', '.ts')
-if not mimetypes.types_map.get('.tp'): mimetypes.add_type('video/mp2t', '.tp')
+# MIME 타입 추가 등록 (강제 적용)
+mimetypes.add_type('video/x-matroska', '.mkv')
+mimetypes.add_type('video/mp2t', '.ts')
+mimetypes.add_type('video/mp2t', '.tp')
 
 # --- [최적화: Gzip 압축 함수 추가] ---
 def gzip_response(data):
