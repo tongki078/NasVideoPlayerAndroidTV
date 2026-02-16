@@ -80,7 +80,7 @@ fun App(driver: SqlDriver) {
         Screen.KOREAN_TV -> listOf("드라마", "예능", "시트콤", "교양", "다큐멘터리")
         Screen.FOREIGN_TV -> listOf("미국", "중국", "일본", "다큐", "기타")
         Screen.ANIMATIONS -> listOf("라프텔", "시리즈")
-        Screen.ON_AIR -> listOf("애니메이션", "드라마")
+        Screen.ON_AIR -> listOf("라프텔 애니메이션", "드라마")
         else -> emptyList()
     }
 
@@ -135,12 +135,21 @@ fun App(driver: SqlDriver) {
                     NetflixTopBar(currentScreen) { screen ->
                         currentScreen = screen
                         selectedSeries = null 
+                        selectedMovie = null
                     }
                     
                     if (subModes.isNotEmpty()) {
                         LazyRow(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentPadding = PaddingValues(horizontal = 48.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             itemsIndexed(subModes) { index, title ->
-                                SophisticatedTabChip(title = title, isSelected = selectedSubMode == index, onClick = { subModeStates[currentScreen] = index })
+                                SophisticatedTabChip(
+                                    title = title, 
+                                    isSelected = selectedSubMode == index, 
+                                    onClick = { 
+                                        subModeStates[currentScreen] = index
+                                        selectedSeries = null // 상세 화면 닫기
+                                        selectedMovie = null // 플레이어 닫기
+                                    }
+                                )
                             }
                         }
                     }
