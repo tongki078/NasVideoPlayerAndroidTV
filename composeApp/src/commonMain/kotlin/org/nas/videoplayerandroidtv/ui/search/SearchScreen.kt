@@ -15,11 +15,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +38,7 @@ import org.nas.videoplayerandroidtv.data.SearchHistory
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
+import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 
 @Composable
 fun SearchScreen(
@@ -129,8 +130,7 @@ fun SearchScreen(
             if (isLoading) {
                 LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth().height(3.dp).align(Alignment.TopCenter),
-                    color = Color.Red,
-                    trackColor = Color.Transparent
+                    color = Color.Red, trackColor = Color.Transparent
                 )
             }
         }
@@ -251,10 +251,10 @@ private fun SearchGridItem(series: Series, onSeriesClick: (Series) -> Unit) {
             )
         }
         
-        // 포커스 시 제목 표시
+        // 포커스 시 제목 표시 - 정제된 제목 사용
         if (isFocused) {
             Text(
-                text = series.title,
+                text = series.title.cleanTitle(),
                 color = Color.White,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,

@@ -39,6 +39,7 @@ import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.util.TitleUtils.isGenericTitle
+import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 
 @Composable
@@ -89,18 +90,16 @@ fun HomeScreen(
 
     // --- [다이내믹 히어로 로직 추가] ---
     val heroPool = remember(combinedSections) {
-        // "인기작" 섹션이나 첫 번째 섹션에서 최대 10개의 아이템을 히어로 후보로 선정
         val poolSource = combinedSections.find { it.title.contains("인기작") } ?: combinedSections.firstOrNull()
         poolSource?.items?.take(10) ?: emptyList()
     }
 
     var currentHeroIndex by remember { mutableStateOf(0) }
 
-    // 10초마다 다음 히어로 아이템으로 전환
     LaunchedEffect(heroPool) {
         if (heroPool.size > 1) {
             while (true) {
-                delay(10000) // 10초 대기
+                delay(10000) 
                 currentHeroIndex = (currentHeroIndex + 1) % heroPool.size
             }
         }
@@ -115,7 +114,6 @@ fun HomeScreen(
             contentPadding = PaddingValues(bottom = 60.dp)
         ) {
             item(key = "hero_section") {
-                // 부드러운 전환을 위해 AnimatedContent 사용
                 AnimatedContent(
                     targetState = heroItem,
                     transitionSpec = {
@@ -321,7 +319,7 @@ private fun NetflixWatchHistoryItem(
         Spacer(modifier = Modifier.height(8.dp))
         
         Text(
-            text = history.title,
+            text = history.title.cleanTitle(), // 정제된 제목 적용
             color = if (isFocused) Color.White else Color.Gray,
             fontSize = 13.sp,
             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,

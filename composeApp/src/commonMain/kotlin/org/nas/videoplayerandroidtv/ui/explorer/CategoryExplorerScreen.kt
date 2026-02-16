@@ -23,9 +23,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.nas.videoplayerandroidtv.domain.model.Category
 import org.nas.videoplayerandroidtv.domain.model.Series
+import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
+import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 
 @Composable
 fun CategoryExplorerScreen(
@@ -46,7 +48,7 @@ fun CategoryExplorerScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         Text(
-            text = pathStack.last(),
+            text = pathStack.last().cleanTitle(),
             modifier = Modifier.padding(16.dp),
             color = Color.White,
             fontSize = 22.sp,
@@ -77,7 +79,7 @@ fun CategoryExplorerScreen(
                 LazyColumn {
                     items(items) { item ->
                         ListItem(
-                            headlineContent = { Text(item.name ?: "", color = Color.White) },
+                            headlineContent = { Text((item.name ?: "").cleanTitle(), color = Color.White) },
                             leadingContent = { Icon(Icons.AutoMirrored.Filled.List, null, tint = Color.Gray) },
                             trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Color.Gray) },
                             modifier = Modifier.clickable { pathStack = pathStack + (item.name ?: "") },
@@ -110,7 +112,7 @@ private fun ExplorerSkeletonGrid() {
     }
 }
 
-private fun List<org.nas.videoplayerandroidtv.domain.model.Movie>.groupBySeries(): List<Series> = 
-    this.groupBy { (it.title ?: "").replace(Regex("(?i)[.\\s_](?:S\\d+E\\d+|S\\d+|E\\d+|\\d+\\s*(?:화|회|기)|Season\\s*\\d+|Part\\s*\\d+).*"), "").trim() }
+private fun List<Movie>.groupBySeries(): List<Series> = 
+    this.groupBy { (it.title ?: "").cleanTitle(includeYear = false) }
         .map { (title, eps) -> Series(title, eps.sortedBy { it.title ?: "" }) }
         .sortedBy { it.title }
