@@ -45,7 +45,7 @@ fun HomeScreen(
     isLoading: Boolean,
     lazyListState: LazyListState, 
     onSeriesClick: (Series) -> Unit,
-    @Suppress("UNUSED_PARAMETER") onPlayClick: (Movie) -> Unit,
+    onPlayClick: (Movie) -> Unit,
     onHistoryClick: (WatchHistory) -> Unit = {}
 ) {
     val repository: VideoRepository = remember { VideoRepositoryImpl() }
@@ -103,14 +103,35 @@ fun HomeScreen(
                         fullPath = heroItem.path, 
                         posterPath = heroItem.posterPath, 
                         genreIds = heroItem.genreIds ?: emptyList(),
+                        genreNames = heroItem.genreNames ?: emptyList(),
+                        director = heroItem.director,
+                        actors = heroItem.actors ?: emptyList(),
                         overview = heroItem.overview,
                         year = heroItem.year,
                         rating = heroItem.rating
                     )
+                    
+                    val heroHistory = watchHistory.find { 
+                        it.seriesPath == heroItem.path || it.title == heroItem.name 
+                    }
+
                     HeroSection(
                         series = heroSeries,
-                        onWatchClick = { onSeriesClick(heroSeries) },
-                        onInfoClick = { onSeriesClick(heroSeries) },
+                        watchHistory = heroHistory,
+                        onWatchClick = { 
+                            if (heroHistory != null) {
+                                onHistoryClick(heroHistory)
+                            } else {
+                                // [UX 개선] 시청 기록이 없으면 첫 에피소드 즉시 재생 시도
+                                val firstEpisode = heroSeries.episodes.firstOrNull()
+                                if (firstEpisode != null) {
+                                    onPlayClick(firstEpisode)
+                                } else {
+                                    // 에피소드가 없으면 어쩔 수 없이 상세 페이지로 이동
+                                    onSeriesClick(heroSeries)
+                                }
+                            }
+                        },
                         horizontalPadding = standardMargin
                     )
                 } else {
@@ -178,7 +199,19 @@ fun HomeScreen(
                                 year = item.year,
                                 rating = item.rating,
                                 onClick = { 
-                                    onSeriesClick(Series(title = item.name ?: "", episodes = item.movies ?: emptyList(), fullPath = item.path, posterPath = item.posterPath, genreIds = item.genreIds ?: emptyList(), overview = item.overview, year = item.year, rating = item.rating))
+                                    onSeriesClick(Series(
+                                        title = item.name ?: "", 
+                                        episodes = item.movies ?: emptyList(), 
+                                        fullPath = item.path, 
+                                        posterPath = item.posterPath, 
+                                        genreIds = item.genreIds ?: emptyList(),
+                                        genreNames = item.genreNames ?: emptyList(),
+                                        director = item.director,
+                                        actors = item.actors ?: emptyList(),
+                                        overview = item.overview, 
+                                        year = item.year, 
+                                        rating = item.rating
+                                    ))
                                 }
                             )
                         }
@@ -279,6 +312,9 @@ private fun List<Series>.toCategories(): List<Category> {
             path = series.fullPath,
             posterPath = series.posterPath,
             genreIds = series.genreIds,
+            genreNames = series.genreNames,
+            director = series.director,
+            actors = series.actors,
             overview = series.overview,
             year = series.year,
             rating = series.rating,

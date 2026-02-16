@@ -12,6 +12,9 @@ interface VideoRepository {
     suspend fun getCategoryVideoCount(path: String): Int
     suspend fun searchVideos(query: String, category: String = "전체"): List<Series>
     
+    // [추가] 시리즈 상세 정보 가져오기 (에피소드 포함)
+    suspend fun getSeriesDetail(path: String): Series?
+
     suspend fun getLatestMovies(limit: Int = 20, offset: Int = 0): List<Series>
     suspend fun getPopularMovies(limit: Int = 20, offset: Int = 0): List<Series>
     suspend fun getUhdMovies(limit: Int = 20, offset: Int = 0): List<Series>

@@ -66,7 +66,38 @@ class VideoRepositoryImpl : VideoRepository {
         emptyList()
     }
 
-    override suspend fun getCategoryList(path: String, limit: Int, offset: Int): List<Category> = emptyList()
+    override suspend fun getSeriesDetail(path: String): Series? = try {
+        val response = client.get("$baseUrl/api/series_detail") {
+            parameter("path", path)
+        }.body<Category>()
+        
+        Series(
+            title = response.name ?: "",
+            episodes = response.movies ?: emptyList(),
+            fullPath = response.path,
+            posterPath = response.posterPath,
+            genreIds = response.genreIds ?: emptyList(),
+            genreNames = response.genreNames ?: emptyList(),
+            director = response.director,
+            actors = response.actors ?: emptyList(),
+            overview = response.overview,
+            year = response.year,
+            rating = response.rating
+        )
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        null
+    }
+
+    override suspend fun getCategoryList(path: String, limit: Int, offset: Int): List<Category> = try {
+        val response = client.get("$baseUrl/list") {
+            parameter("path", path)
+            parameter("limit", limit)
+            parameter("offset", offset)
+        }.body<List<Category>>()
+        response
+    } catch (e: Exception) { emptyList() }
+
     override suspend fun getCategoryVideoCount(path: String): Int = 0
     override suspend fun searchVideos(query: String, category: String): List<Series> = emptyList()
     override suspend fun getLatestMovies(limit: Int, offset: Int): List<Series> = emptyList()

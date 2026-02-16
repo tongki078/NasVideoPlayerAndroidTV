@@ -72,7 +72,6 @@ fun App(driver: SqlDriver) {
     var lastPlaybackPosition by rememberSaveable { mutableLongStateOf(0L) }
     var lastVideoDuration by rememberSaveable { mutableLongStateOf(0L) }
 
-    // 세부 탭 상태
     val subModeStates = remember { mutableStateMapOf<Screen, Int>() }
     val selectedSubMode = subModeStates.getOrDefault(currentScreen, 0)
 
@@ -103,7 +102,6 @@ fun App(driver: SqlDriver) {
                     else -> ""
                 }
                 if (catKey.isNotEmpty()) {
-                    // [최적화] 서버 측 필터링을 위해 현재 탭의 이름을 kw로 전달 ('전체' 제거됨)
                     val subModeTitle = if (subModes.isNotEmpty()) subModes[selectedSubMode] else null
                     val sections = if (catKey == "home") repository.getHomeRecommendations() 
                                    else repoImpl.fetchCategorySections(catKey, subModeTitle)
@@ -140,17 +138,9 @@ fun App(driver: SqlDriver) {
                     }
                     
                     if (subModes.isNotEmpty()) {
-                        LazyRow(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                            contentPadding = PaddingValues(horizontal = 24.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
+                        LazyRow(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentPadding = PaddingValues(horizontal = 48.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             itemsIndexed(subModes) { index, title ->
-                                SophisticatedTabChip(
-                                    title = title,
-                                    isSelected = selectedSubMode == index,
-                                    onClick = { subModeStates[currentScreen] = index }
-                                )
+                                SophisticatedTabChip(title = title, isSelected = selectedSubMode == index, onClick = { subModeStates[currentScreen] = index })
                             }
                         }
                     }
@@ -195,10 +185,17 @@ fun App(driver: SqlDriver) {
                                 isLoading = categoryLoadingStates[currentCacheKey] ?: false,
                                 lazyListState = lazyListStates.getOrPut(currentCacheKey) { androidx.compose.foundation.lazy.LazyListState() },
                                 onSeriesClick = { selectedSeries = it }, 
-                                onPlayClick = { m: Movie -> selectedMovie = m; moviePlaylist = listOf(m); lastPlaybackPosition = 0L },
+                                // 즉시 재생 핸들러
+                                onPlayClick = { m: Movie -> 
+                                    selectedMovie = m; moviePlaylist = listOf(m); lastPlaybackPosition = 0L 
+                                },
+                                // 시청 기록 클릭 시 즉시 재생
                                 onHistoryClick = { h: org.nas.videoplayerandroidtv.data.WatchHistory -> 
-                                    selectedSeries = Series(h.seriesTitle ?: h.title, listOf(Movie(h.id, h.title, h.videoUrl, h.thumbnailUrl)), null, h.seriesPath, emptyList(), emptyList(), null, emptyList(), h.posterPath, null, null, null, null)
-                                    lastPlaybackPosition = h.lastPosition; lastVideoDuration = h.duration
+                                    val movie = Movie(h.id, h.title, h.videoUrl, h.thumbnailUrl)
+                                    selectedMovie = movie
+                                    moviePlaylist = listOf(movie)
+                                    lastPlaybackPosition = h.lastPosition
+                                    lastVideoDuration = h.duration
                                 }
                             )
                         }
@@ -216,34 +213,18 @@ private fun SophisticatedTabChip(
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isFocused) 1.12f else 1.0f)
-    val backgroundColor by animateColorAsState(
-        targetValue = when {
-            isFocused -> Color.White
-            isSelected -> Color.Red
-            else -> Color.White.copy(alpha = 0.15f)
-        }
-    )
-    val contentColor by animateColorAsState(
-        targetValue = if (isFocused) Color.Black else Color.White
-    )
+    val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
+    
+    val backgroundColor by animateColorAsState(targetValue = when { isFocused -> Color.White; isSelected -> Color.White.copy(alpha = 0.2f); else -> Color.Transparent })
+    val contentColor by animateColorAsState(targetValue = if (isFocused) Color.Black else Color.White)
 
-    Box(
-        modifier = Modifier
-            .scale(scale)
-            .clip(RoundedCornerShape(24.dp))
-            .background(backgroundColor)
-            .onFocusChanged { isFocused = it.isFocused }
-            .focusable()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = title,
-            color = contentColor,
-            fontSize = 14.sp,
-            fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
-        )
+    Box(modifier = Modifier.scale(scale).clip(RoundedCornerShape(8.dp)).background(backgroundColor).onFocusChanged { isFocused = it.isFocused }.focusable().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text = title, color = contentColor, fontSize = 15.sp, fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium)
+            if (isSelected && !isFocused) {
+                Spacer(Modifier.height(4.dp))
+                Box(modifier = Modifier.size(width = 16.dp, height = 2.dp).background(Color.Red))
+            }
+        }
     }
 }
