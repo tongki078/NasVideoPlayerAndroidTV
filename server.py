@@ -29,7 +29,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "137.12" # 버전 업그레이드
+CACHE_VERSION = "137.16" # 버전 업그레이드
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -69,6 +69,8 @@ _SECTION_CACHE = {} # 카테고리 섹션 결과 캐시 추가
 _DETAIL_CACHE = deque(maxlen=200)
 
 THUMB_SEMAPHORE = threading.Semaphore(4)
+# [추가] 백그라운드 썸네일 생성을 위한 전용 스레드 풀
+THUMB_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 
 def log(tag, msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -726,8 +728,22 @@ def get_series_detail_api():
             seen.add(r['videoUrl'])
     series['movies'] = sorted(eps, key=lambda x: natural_sort_key(x['title']))
     conn.close()
+
+    # [획기적 개선] 상세 정보 로딩 시 백그라운드에서 썸네일 선제 생성 시작
+    for ep in series['movies']:
+        THUMB_EXECUTOR.submit(pre_generate_individual_task, ep['thumbnailUrl'])
+
     _DETAIL_CACHE.append((path, series))
     return gzip_response(series)
+
+# [추가] 백그라운드 썸네일 생성을 위한 헬퍼 함수
+def pre_generate_individual_task(ep_thumb_url):
+    try:
+        u = urllib.parse.urlparse(ep_thumb_url)
+        q = urllib.parse.parse_qs(u.query)
+        if 'path' in q and 'type' in q and 'id' in q:
+            _generate_thumb_file(q['path'][0], q['type'][0], q['id'][0], q.get('t', ['300'])[0], q.get('w', ['320'])[0])
+    except: pass
 
 @app.route('/search')
 def search_videos():
@@ -780,21 +796,50 @@ def video_serve():
     except:
         return "Not Found", 404
 
-@app.route('/thumb_serve')
-def thumb_serve():
-    path, prefix, tid, t = request.args.get('path'), request.args.get('type'), request.args.get('id'), request.args.get('t', default="300")
+# [추가/개선] 썸네일 생성 공통 함수 (속도 최적화 및 파라미터화)
+def _generate_thumb_file(path_raw, prefix, tid, t, w):
+    tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{w}.jpg")
+    if os.path.exists(tp): return tp
+
     try:
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
-        vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path))))
-        tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}.jpg")
-        if not os.path.exists(tp):
-            with THUMB_SEMAPHORE:
-                # [수정] MKV 탐색 최적화 및 정확한 프레임 추출을 위해 -map 0:v:0 복구
-                # -ss를 -i 앞에 두어 속도 개선, -frames:v 1로 단일 프레임 추출
-                subprocess.run([FFMPEG_PATH, "-y", "-ss", t, "-i", vp, "-frames:v", "1", "-map", "0:v:0", "-an", "-sn", "-q:v", "5", "-vf", "scale=480:-1:flags=fast_bilinear", "-threads", "1", tp], timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return send_file(tp, mimetype='image/jpeg') if os.path.exists(tp) else ("Not Found", 404)
+        vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
+        if not os.path.exists(vp): return None
+
+        with THUMB_SEMAPHORE:
+            if os.path.exists(tp): return tp
+            # [획기적 최적화] -noaccurate_seek 및 -ss 위치 조정으로 탐색 속도 극대화
+            # scale 알고리즘 fast_bilinear 사용 및 품질 밸런스 조정
+            subprocess.run([
+                FFMPEG_PATH, "-y",
+                "-ss", t,
+                "-noaccurate_seek",
+                "-i", vp,
+                "-frames:v", "1",
+                "-map", "0:v:0",
+                "-an", "-sn",
+                "-q:v", "7",
+                "-vf", f"scale={w}:-1:flags=fast_bilinear",
+                "-threads", "1",
+                tp
+            ], timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return tp if os.path.exists(tp) else None
     except:
-        return "Not Found", 404
+        return None
+
+@app.route('/thumb_serve')
+def thumb_serve():
+    path, prefix, tid = request.args.get('path'), request.args.get('type'), request.args.get('id')
+    t = request.args.get('t', default="300")
+    w = request.args.get('w', default="480")
+
+    tp = _generate_thumb_file(path, prefix, tid, t, w)
+    if tp and os.path.exists(tp):
+        resp = make_response(send_file(tp, mimetype='image/jpeg'))
+        # [획기적] 브라우저/클라이언트 캐싱 1년 적용. 다음 로딩 시 네트워크 요청 없음
+        resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        return resp
+    return "Not Found", 404
 
 @app.route('/api/status')
 def get_server_status():

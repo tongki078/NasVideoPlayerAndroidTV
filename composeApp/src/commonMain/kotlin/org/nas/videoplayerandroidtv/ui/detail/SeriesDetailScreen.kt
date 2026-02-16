@@ -35,7 +35,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.ImageRequest
 import kotlinx.coroutines.*
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.domain.model.Movie
@@ -60,6 +63,7 @@ fun SeriesDetailScreen(
 ) {
     var state by remember { mutableStateOf(SeriesDetailState(isLoading = true)) }
     var currentSeries by remember { mutableStateOf(series) }
+    val context = LocalPlatformContext.current
     
     val playButtonFocusRequester = remember { FocusRequester() }
     val resumeButtonFocusRequester = remember { FocusRequester() }
@@ -77,6 +81,22 @@ fun SeriesDetailScreen(
             loadSeasons(fullSeries, repository)
         }
         state = state.copy(seasons = seasons, isLoading = false)
+        
+        // [획기적 개선] 상세 정보를 불러온 직후, 모든 에피소드 썸네일을 클라이언트에서 사전 로드(Prefetch)
+        // 이를 통해 회차 목록을 열었을 때 이미 이미지가 메모리/디스크 캐시에 존재하게 함
+        if (seasons.isNotEmpty()) {
+            val imageLoader = SingletonImageLoader.get(context)
+            seasons.forEach { season ->
+                season.episodes.forEach { episode ->
+                    episode.thumbnailUrl?.let { url ->
+                        val request = ImageRequest.Builder(context)
+                            .data(url)
+                            .build()
+                        imageLoader.enqueue(request)
+                    }
+                }
+            }
+        }
     }
 
     LaunchedEffect(state.isLoading) {
@@ -162,7 +182,7 @@ fun SeriesDetailScreen(
                             val seasonNum = epTitle.extractSeason()
                             val episodeStr = epTitle.extractEpisode()
                             PremiumTvButton(
-                                text = if (episodeStr != null) "시즌 $seasonNum : $episodeStr 이어보기" else "계속 시청", 
+                                text = if (episodeStr != null) "시즌 $seasonNum : $episodeStr 이어보기" else "계속 시청" ,
                                 icon = Icons.Default.PlayArrow, 
                                 isPrimary = true, 
                                 progress = if (initialDuration > 0) initialPlaybackPosition.toFloat() / initialDuration else 0f,
@@ -329,17 +349,14 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
     val collectedEpisodes = mutableListOf<Movie>()
     collectedEpisodes.addAll(series.episodes)
     
-    // 에피소드 가공 시 썸네일 경로를 완벽하게 보정
     val totalMovies = collectedEpisodes.distinctBy { it.videoUrl ?: it.id ?: it.title }.map { movie ->
         val updatedVideoUrl = if (movie.videoUrl?.startsWith("http") == false) {
             NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl
         } else movie.videoUrl
         
-        // 썸네일 보정: 에피소드 썸네일 우선, 없으면 시리즈 포스터 사용
         val rawThumb = if (!movie.thumbnailUrl.isNullOrEmpty()) movie.thumbnailUrl else series.posterPath
         val updatedThumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
             if (rawThumb.startsWith("/")) {
-                // 서버 이미지인지 TMDB 이미지인지 판단
                 if (rawThumb.contains("thumb_serve") || rawThumb.contains("video_serve")) {
                     // 회차 목록용 썸네일은 가로 320으로 최적화 요청
                     NasApiClient.BASE_URL + rawThumb + (if (rawThumb.contains("?")) "&" else "?") + "w=320"
