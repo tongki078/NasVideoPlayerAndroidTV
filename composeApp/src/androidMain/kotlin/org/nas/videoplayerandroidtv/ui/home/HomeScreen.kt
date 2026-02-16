@@ -145,7 +145,7 @@ fun HomeScreen(
                         HeroSection(
                             series = heroSeries,
                             watchHistory = heroHistory,
-                            onWatchClick = { 
+                            onPlayClick = { 
                                 if (heroHistory != null) {
                                     onHistoryClick(heroHistory)
                                 } else {
@@ -153,6 +153,9 @@ fun HomeScreen(
                                     if (firstEpisode != null) onPlayClick(firstEpisode)
                                     else onSeriesClick(heroSeries)
                                 }
+                            },
+                            onDetailClick = {
+                                onSeriesClick(heroSeries)
                             },
                             horizontalPadding = standardMargin
                         )

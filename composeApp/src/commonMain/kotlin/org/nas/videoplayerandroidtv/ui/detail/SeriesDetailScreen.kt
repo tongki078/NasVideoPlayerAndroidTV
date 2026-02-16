@@ -111,7 +111,18 @@ fun SeriesDetailScreen(
 
         Row(modifier = Modifier.fillMaxSize().padding(horizontal = 60.dp, vertical = 40.dp)) {
             Column(modifier = Modifier.weight(1.5f).fillMaxHeight(), verticalArrangement = Arrangement.Center) {
-                Text(text = currentSeries.title.cleanTitle(includeYear = false), color = Color.White, style = TextStyle(fontSize = 52.sp, fontWeight = FontWeight.ExtraBold, shadow = Shadow(color = Color.Black.copy(alpha = 0.5f), offset = Offset(0f, 4f), blurRadius = 12f), letterSpacing = (-1).sp), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    text = currentSeries.title.cleanTitle(includeYear = false), 
+                    color = Color.White, 
+                    style = TextStyle(
+                        fontSize = 36.sp, 
+                        fontWeight = FontWeight.ExtraBold, 
+                        shadow = Shadow(color = Color.Black.copy(alpha = 0.5f), offset = Offset(0f, 4f), blurRadius = 12f), 
+                        letterSpacing = (-1).sp
+                    ), 
+                    maxLines = 1, 
+                    overflow = TextOverflow.Ellipsis
+                )
                 Spacer(modifier = Modifier.height(18.dp))
                 Row(modifier = Modifier.height(28.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (state.isLoading) {
@@ -124,15 +135,52 @@ fun SeriesDetailScreen(
                     }
                 }
                 Spacer(modifier = Modifier.height(24.dp))
-                Box(modifier = Modifier.heightIn(max = 120.dp).fillMaxWidth()) {
+                
+                Box(modifier = Modifier.wrapContentHeight().fillMaxWidth()) {
                     if (!state.isLoading) {
-                        Text(text = currentSeries.overview ?: "정보가 없습니다.", color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp, lineHeight = 24.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            text = currentSeries.overview ?: "정보가 없습니다.", 
+                            color = Color.White.copy(alpha = 0.7f), 
+                            fontSize = 16.sp, 
+                            lineHeight = 24.sp, 
+                            maxLines = 2, 
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
                 if (!state.isLoading && currentSeries.actors.isNotEmpty()) {
                     Text(text = "출연: " + currentSeries.actors.take(4).joinToString { it.name }, color = Color.White.copy(alpha = 0.4f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
+                
+                // 시청 중인 프로그레스바 추가
+                if (initialPlaybackPosition > 0 && initialDuration > 0) {
+                    Spacer(modifier = Modifier.height(24.dp))
+                    val progress = initialPlaybackPosition.toFloat() / initialDuration
+                    Column(modifier = Modifier.width(320.dp)) {
+                        Text(
+                            text = "시청 중: ${formatTime(initialPlaybackPosition)} / ${formatTime(initialDuration)}",
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(Color.White.copy(alpha = 0.2f))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(progress.coerceIn(0f, 1f))
+                                    .fillMaxHeight()
+                                    .background(Color.Red)
+                            )
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(36.dp))
                 
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -145,7 +193,7 @@ fun SeriesDetailScreen(
                                 text = if (episodeStr != null) "시즌 $seasonNum : $episodeStr 이어보기" else "계속 시청", 
                                 icon = Icons.Default.PlayArrow, 
                                 isPrimary = true, 
-                                progress = if (initialDuration > 0) initialPlaybackPosition.toFloat() / initialDuration else 0f,
+                                progress = null, // 위에서 별도로 표시하므로 버튼 내부 프로그레스는 제거
                                 modifier = Modifier.focusRequester(resumeButtonFocusRequester), 
                                 onClick = { onPlay(playableEpisode, allEpisodes, initialPlaybackPosition) }
                             )
@@ -184,6 +232,15 @@ fun SeriesDetailScreen(
             }
         }
     }
+}
+
+private fun formatTime(ms: Long): String {
+    val totalSec = ms / 1000
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    val s = totalSec % 60
+    return if (h > 0) "${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}"
+    else "${m}:${s.toString().padStart(2, '0')}"
 }
 
 @Composable

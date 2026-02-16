@@ -29,7 +29,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "137.11" # 버전 업그레이드 (Overview 캐싱 추가)
+CACHE_VERSION = "137.12" # 버전 업그레이드
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -789,7 +789,11 @@ def thumb_serve():
         tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}.jpg")
         if not os.path.exists(tp):
             with THUMB_SEMAPHORE:
-                subprocess.run([FFMPEG_PATH, "-y", "-skip_frame", "nokey", "-ss", t, "-i", vp, "-frames:v", "1", "-an", "-sn", "-map", "0:v:0", "-q:v", "6", "-vf", "scale=320:-1:flags=fast_bilinear", "-threads", "1", tp], timeout=8, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # [수정] MKV 및 고화질 영상 탐색 최적화
+                # -an -sn 제외 및 -map 0:v:0 대신 -map 0:v:? 사용 고려
+                # -skip_frame nokey는 빠르지만 정확도가 떨어질 수 있음. -ss를 -i 앞에 두어 속도 개선.
+                # MKV 스킵 이슈 해결을 위해 fastseek 방식 대신 slowseek 병합 시도
+                subprocess.run([FFMPEG_PATH, "-y", "-ss", t, "-i", vp, "-frames:v", "1", "-an", "-sn", "-q:v", "6", "-vf", "scale=320:-1:flags=fast_bilinear", "-threads", "1", tp], timeout=12, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return send_file(tp, mimetype='image/jpeg') if os.path.exists(tp) else ("Not Found", 404)
     except:
         return "Not Found", 404

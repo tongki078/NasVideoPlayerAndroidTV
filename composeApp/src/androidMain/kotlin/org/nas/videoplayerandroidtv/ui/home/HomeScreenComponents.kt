@@ -34,7 +34,8 @@ import org.nas.videoplayerandroidtv.data.WatchHistory
 fun HeroSection(
     series: Series, 
     watchHistory: WatchHistory? = null, 
-    onWatchClick: () -> Unit, 
+    onPlayClick: () -> Unit,
+    onDetailClick: () -> Unit,
     horizontalPadding: androidx.compose.ui.unit.Dp
 ) {
     val title = series.title
@@ -98,13 +99,21 @@ fun HeroSection(
                     watchHistory.lastPosition.toFloat() / watchHistory.duration
                 } else null
 
-                // 중복되는 '상세 정보' 버튼을 제거하고 메인 액션 버튼만 유지
                 HeroButton(
-                    text = if (isContinuing) "계속 시청" else "시청하기",
+                    text = if (isContinuing) "계속 시청" else "재생",
                     icon = Icons.Default.PlayArrow,
                     isPrimary = true,
                     progress = progress,
-                    onClick = onWatchClick
+                    onClick = onPlayClick
+                )
+
+                Spacer(Modifier.width(16.dp))
+
+                HeroButton(
+                    text = "상세 정보",
+                    icon = Icons.Default.Info,
+                    isPrimary = false,
+                    onClick = onDetailClick
                 )
             }
         }
