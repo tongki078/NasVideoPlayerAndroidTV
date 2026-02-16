@@ -139,7 +139,14 @@ fun App(driver: SqlDriver) {
                     }
                     
                     if (subModes.isNotEmpty()) {
-                        LazyRow(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentPadding = PaddingValues(horizontal = 48.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        LazyRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp), // 상하 여백을 8dp로 균일하게 설정
+                            contentPadding = PaddingValues(horizontal = 48.dp), 
+                            horizontalArrangement = Arrangement.spacedBy(16.dp), 
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             itemsIndexed(subModes) { index, title ->
                                 SophisticatedTabChip(
                                     title = title, 
@@ -189,7 +196,7 @@ fun App(driver: SqlDriver) {
                         }
                         else -> {
                             HomeScreen(
-                                currentScreen = currentScreen, // [수정] 현재 화면 정보 전달
+                                currentScreen = currentScreen, 
                                 watchHistory = if (currentScreen == Screen.HOME) watchHistory else emptyList(), 
                                 homeSections = allCategorySections[currentCacheKey] ?: emptyList(),
                                 isLoading = categoryLoadingStates[currentCacheKey] ?: false,
@@ -221,18 +228,35 @@ private fun SophisticatedTabChip(
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
+    val scale by animateFloatAsState(if (isFocused) 1.05f else 1.0f)
     
-    val backgroundColor by animateColorAsState(targetValue = when { isFocused -> Color.White; isSelected -> Color.White.copy(alpha = 0.2f); else -> Color.Transparent })
-    val contentColor by animateColorAsState(targetValue = if (isFocused) Color.Black else Color.White)
+    val backgroundColor by animateColorAsState(targetValue = when { 
+        isFocused -> Color.White.copy(alpha = 0.1f)
+        else -> Color.Transparent 
+    })
+    
+    val contentColor by animateColorAsState(targetValue = when { 
+        isSelected -> Color.White 
+        isFocused -> Color.White 
+        else -> Color.Gray 
+    })
 
-    Box(modifier = Modifier.scale(scale).clip(RoundedCornerShape(8.dp)).background(backgroundColor).onFocusChanged { isFocused = it.isFocused }.focusable().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = title, color = contentColor, fontSize = 15.sp, fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium)
-            if (isSelected && !isFocused) {
-                Spacer(Modifier.height(4.dp))
-                Box(modifier = Modifier.size(width = 16.dp, height = 2.dp).background(Color.Red))
-            }
-        }
+    Box(
+        modifier = Modifier
+            .scale(scale)
+            .clip(RoundedCornerShape(4.dp))
+            .background(backgroundColor)
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = title, 
+            color = contentColor, 
+            fontSize = 11.sp, 
+            fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
+        )
     }
 }

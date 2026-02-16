@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -127,8 +128,20 @@ fun SeriesDetailScreen(
 
         Box(modifier = Modifier.fillMaxSize().background(brush = Brush.horizontalGradient(0.0f to Color.Black, 0.5f to Color.Black.copy(alpha = 0.8f), 1.0f to Color.Transparent)))
 
-        Row(modifier = Modifier.fillMaxSize().padding(horizontal = 60.dp).padding(top = 20.dp)) { 
-            Column(modifier = Modifier.weight(1.5f).fillMaxHeight(), verticalArrangement = Arrangement.Center) {
+        // [수정] 상단 패딩을 줄이고, Row의 높이를 fillMaxHeight로 채우지 않고 필요한 만큼만 쓰도록 하거나
+        // Column의 정렬을 Top으로 확실하게 설정.
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 60.dp)
+                .padding(top = 40.dp) // 상단 패딩을 100dp -> 40dp로 축소 (App.kt 구조상 이미 TopBar 아래에 있음)
+        ) { 
+            Column(
+                modifier = Modifier
+                    .weight(1.5f)
+                    .fillMaxHeight(), // 높이를 꽉 채우되
+                verticalArrangement = Arrangement.Top // 내용은 위쪽부터 정렬
+            ) {
                 Text(
                     text = currentSeries.title.cleanTitle(includeYear = false), 
                     color = Color.White, 
@@ -242,9 +255,16 @@ private fun InfoBadge(text: String, color: Color = Color.White.copy(alpha = 0.15
             .background(if (isOutlined) Color.Transparent else color)
             .then(if (isOutlined) Modifier.border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(4.dp)) else Modifier)
             .padding(horizontal = 7.dp, vertical = 2.dp),
-        contentAlignment = Alignment.Center // 수직/수평 중앙 정렬
+        contentAlignment = Alignment.Center 
     ) {
-        Text(text = text, color = textColor, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+        Text(
+            text = text, 
+            color = textColor, 
+            fontSize = 8.sp, 
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center, 
+            lineHeight = 8.sp
+        )
     }
 }
 
@@ -278,7 +298,7 @@ private fun PremiumTvButton(
         modifier = modifier
             .onFocusChanged { isFocused = it.isFocused }
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .height(36.dp) // 높이 줄임
+            .height(36.dp) 
             .wrapContentWidth()
             .shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(10.dp), spotColor = Color.White.copy(alpha = 0.4f))
     ) {
@@ -286,13 +306,13 @@ private fun PremiumTvButton(
             Row(
                 modifier = Modifier
                     .padding(horizontal = 17.dp)
-                    .fillMaxHeight(),
+                    .fillMaxHeight(), 
                 verticalAlignment = Alignment.CenterVertically, 
                 horizontalArrangement = Arrangement.Center
             ) {
-                Icon(imageVector = icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(15.dp)) // 아이콘 크기 줄임
+                Icon(imageVector = icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(15.dp)) 
                 Spacer(modifier = Modifier.width(7.dp))
-                Text(text = text, color = contentColor, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) // 텍스트 크기 줄임
+                Text(text = text, color = contentColor, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) 
             }
             
             if (progress != null && progress > 0f) {
@@ -300,7 +320,7 @@ private fun PremiumTvButton(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .height(3.dp) // 높이 줄임
+                        .height(3.dp)
                         .background(if (isFocused) Color.Red else Color.Red.copy(alpha = 0.8f))
                 )
             }

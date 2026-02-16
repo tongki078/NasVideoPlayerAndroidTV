@@ -6,6 +6,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
@@ -141,12 +142,12 @@ private fun HeroButton(
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isFocused) 1.08f else 1.0f)
+    val scale by animateFloatAsState(if (isFocused) 1.05f else 1.0f)
     
     val backgroundColor by animateColorAsState(when { 
         isFocused -> Color.White 
-        isPrimary -> Color.White.copy(alpha = 0.95f)
-        else -> Color.White.copy(alpha = 0.15f) 
+        isPrimary -> Color.White.copy(alpha = 0.9f)
+        else -> Color.White.copy(alpha = 0.2f) 
     })
     val contentColor by animateColorAsState(when { 
         isFocused -> Color.Black 
@@ -156,7 +157,7 @@ private fun HeroButton(
 
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(4.dp), // 심플한 사각형 모서리
         color = backgroundColor,
         modifier = Modifier
             .graphicsLayer { 
@@ -164,19 +165,19 @@ private fun HeroButton(
                 scaleY = scale
             }
             .onFocusChanged { isFocused = it.isFocused }
-            .height(44.dp)
-            .widthIn(min = 140.dp)
-            .shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(10.dp), spotColor = Color.White.copy(alpha = 0.5f))
+            .height(36.dp) // 높이 축소
+            .widthIn(min = 120.dp) // 최소 너비 축소
+            .shadow(if (isFocused) 10.dp else 0.dp, RoundedCornerShape(4.dp), spotColor = Color.White.copy(alpha = 0.5f))
     ) {
         Box(contentAlignment = Alignment.Center) {
             Row(
-                modifier = Modifier.padding(horizontal = 24.dp).fillMaxHeight(),
+                modifier = Modifier.padding(horizontal = 16.dp).fillMaxHeight(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
-                Icon(icon, null, tint = contentColor, modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(10.dp))
-                Text(text = text, color = contentColor, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Icon(icon, null, tint = contentColor, modifier = Modifier.size(18.dp)) // 아이콘 크기 축소
+                Spacer(Modifier.width(8.dp))
+                Text(text = text, color = contentColor, fontWeight = FontWeight.Bold, fontSize = 13.sp) // 폰트 크기 축소
             }
             
             if (progress != null && progress > 0f) {
@@ -184,7 +185,7 @@ private fun HeroButton(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .height(3.5.dp)
+                        .height(3.dp)
                         .background(if (isFocused) Color.Red else Color.Red.copy(alpha = 0.8f))
                 )
             }

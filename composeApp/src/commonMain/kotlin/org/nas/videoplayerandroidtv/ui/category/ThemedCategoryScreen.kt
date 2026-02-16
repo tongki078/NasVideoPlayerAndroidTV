@@ -116,8 +116,8 @@ fun ThemedCategoryScreen(
             LazyRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 48.dp, end = 48.dp, top = 20.dp, bottom = 10.dp), // 상하 여백 줄임
-                horizontalArrangement = Arrangement.spacedBy(8.dp), // 아이템 간격 줄임
+                    .padding(start = 48.dp, end = 48.dp, top = 20.dp, bottom = 10.dp), 
+                horizontalArrangement = Arrangement.spacedBy(8.dp), 
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 items(modes.size) { index ->
@@ -153,22 +153,21 @@ fun ThemedCategoryScreen(
 private fun CategoryTabItem(text: String, isSelected: Boolean, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     
-    // 심플하고 세련된 Chip 스타일
     val backgroundColor by animateColorAsState(targetValue = when { 
-        isSelected -> Color.White // 선택 시 흰색 배경
-        isFocused -> Color.White.copy(alpha = 0.2f) // 포커스 시 연한 흰색
-        else -> Color.Transparent // 평소에는 투명
+        isSelected -> Color.White 
+        isFocused -> Color.White.copy(alpha = 0.2f)
+        else -> Color.Transparent 
     })
     
     val textColor by animateColorAsState(targetValue = when { 
-        isSelected -> Color.Black // 선택 시 검은 글씨
+        isSelected -> Color.Black 
         isFocused -> Color.White 
         else -> Color.Gray 
     })
     
     val borderColor by animateColorAsState(targetValue = when {
         isSelected || isFocused -> Color.Transparent
-        else -> Color.Gray.copy(alpha = 0.5f) // 선택 안됐을 때 얇은 회색 테두리
+        else -> Color.Gray.copy(alpha = 0.5f) 
     })
 
     val scale by animateFloatAsState(if (isFocused) 1.05f else 1.0f)
@@ -176,7 +175,7 @@ private fun CategoryTabItem(text: String, isSelected: Boolean, onClick: () -> Un
     Box(
         modifier = Modifier
             .scale(scale)
-            .clip(CircleShape) // 둥근 알약 모양
+            .clip(CircleShape)
             .background(backgroundColor)
             .border(
                 width = 1.dp, 
@@ -186,14 +185,14 @@ private fun CategoryTabItem(text: String, isSelected: Boolean, onClick: () -> Un
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 6.dp), // 패딩 대폭 축소 (작고 날렵하게)
+            .padding(horizontal = 12.dp, vertical = 6.dp), // 패딩을 대폭 줄임
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text, 
             color = textColor, 
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium, 
-            fontSize = 11.sp // 텍스트 크기 11sp로 축소
+            fontSize = 10.sp // 텍스트 크기를 10.sp로 더 줄임
         )
     }
 }

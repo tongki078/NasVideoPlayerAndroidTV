@@ -116,8 +116,9 @@ fun HomeScreen(
                             series = heroSeries,
                             watchHistory = heroHistory,
                             onPlayClick = { 
-                                if (heroHistory != null) onHistoryClick(heroHistory)
-                                else {
+                                if (heroHistory != null && heroHistory.lastPosition > 0) {
+                                    onHistoryClick(heroHistory)
+                                } else {
                                     val firstEpisode = heroSeries.episodes.firstOrNull()
                                     if (firstEpisode != null) onPlayClick(firstEpisode)
                                     else onSeriesClick(heroSeries)
@@ -128,7 +129,6 @@ fun HomeScreen(
                         )
                     }
                 } else if (isLoading) {
-                    // [UX 개선] 로딩 중에 상단 슬라이드 자리를 스켈레톤으로 유지하여 레이아웃 튐 방지
                     SkeletonHero()
                 }
             }
