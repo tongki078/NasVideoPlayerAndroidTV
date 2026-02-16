@@ -429,10 +429,20 @@ fun VideoPlayerScreen(
                                     val baseUrl = NasApiClient.BASE_URL
                                     val timeSec = timestamp / 1000
                                     val thumbRequest = remember(currentMovie.id, timestamp) {
-                                        val originalThumb = currentMovie.thumbnailUrl ?: ""
-                                        // server.py가 t 파라미터를 지원하도록 수정됨
-                                        val finalUrl = if (originalThumb.contains("?")) "$baseUrl$originalThumb&t=$timeSec"
-                                                      else "$baseUrl$originalThumb?t=$timeSec"
+                                        val videoUrl = currentMovie.videoUrl ?: ""
+                                        val finalUrl = if (videoUrl.contains("video_serve")) {
+                                            videoUrl.replace("video_serve", "thumb_serve")
+                                                .let { url ->
+                                                    if (url.contains("?")) "$url&id=${currentMovie.id}&t=$timeSec"
+                                                    else "$url?id=${currentMovie.id}&t=$timeSec"
+                                                }
+                                                .let { url ->
+                                                    if (url.startsWith("http")) url else "$baseUrl$url"
+                                                }
+                                        } else {
+                                            val originalThumb = currentMovie.thumbnailUrl ?: ""
+                                            if (originalThumb.startsWith("http")) originalThumb else "$baseUrl$originalThumb"
+                                        }
                                         ImageRequest.Builder(context)
                                             .data(finalUrl)
                                             .crossfade(true)

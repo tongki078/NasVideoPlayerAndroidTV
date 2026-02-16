@@ -153,7 +153,7 @@ fun SeriesDetailScreen(
                     Text(text = "출연: " + currentSeries.actors.take(4).joinToString { it.name }, color = Color.White.copy(alpha = 0.4f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 
-                // 시청 중인 프로그레스바 추가
+                // 시청 중인 프로그레스바
                 if (initialPlaybackPosition > 0 && initialDuration > 0) {
                     Spacer(modifier = Modifier.height(24.dp))
                     val progress = initialPlaybackPosition.toFloat() / initialDuration
@@ -193,7 +193,7 @@ fun SeriesDetailScreen(
                                 text = if (episodeStr != null) "시즌 $seasonNum : $episodeStr 이어보기" else "계속 시청", 
                                 icon = Icons.Default.PlayArrow, 
                                 isPrimary = true, 
-                                progress = null, // 위에서 별도로 표시하므로 버튼 내부 프로그레스는 제거
+                                progress = if (initialDuration > 0) initialPlaybackPosition.toFloat() / initialDuration else 0f,
                                 modifier = Modifier.focusRequester(resumeButtonFocusRequester), 
                                 onClick = { onPlay(playableEpisode, allEpisodes, initialPlaybackPosition) }
                             )

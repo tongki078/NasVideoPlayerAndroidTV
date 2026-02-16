@@ -789,11 +789,9 @@ def thumb_serve():
         tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}.jpg")
         if not os.path.exists(tp):
             with THUMB_SEMAPHORE:
-                # [수정] MKV 및 고화질 영상 탐색 최적화
-                # -an -sn 제외 및 -map 0:v:0 대신 -map 0:v:? 사용 고려
-                # -skip_frame nokey는 빠르지만 정확도가 떨어질 수 있음. -ss를 -i 앞에 두어 속도 개선.
-                # MKV 스킵 이슈 해결을 위해 fastseek 방식 대신 slowseek 병합 시도
-                subprocess.run([FFMPEG_PATH, "-y", "-ss", t, "-i", vp, "-frames:v", "1", "-an", "-sn", "-q:v", "6", "-vf", "scale=320:-1:flags=fast_bilinear", "-threads", "1", tp], timeout=12, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # [수정] MKV 탐색 최적화 및 정확한 프레임 추출을 위해 -map 0:v:0 복구
+                # -ss를 -i 앞에 두어 속도 개선, -frames:v 1로 단일 프레임 추출
+                subprocess.run([FFMPEG_PATH, "-y", "-ss", t, "-i", vp, "-frames:v", "1", "-map", "0:v:0", "-an", "-sn", "-q:v", "5", "-vf", "scale=480:-1:flags=fast_bilinear", "-threads", "1", tp], timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return send_file(tp, mimetype='image/jpeg') if os.path.exists(tp) else ("Not Found", 404)
     except:
         return "Not Found", 404
