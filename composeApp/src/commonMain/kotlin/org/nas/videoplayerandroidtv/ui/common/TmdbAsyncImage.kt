@@ -21,6 +21,8 @@ import coil3.compose.AsyncImagePainter
 import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
+import coil3.request.crossfade
+import coil3.size.Size
 import org.nas.videoplayerandroidtv.*
 import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 
@@ -64,10 +66,16 @@ fun TmdbAsyncImage(
         }
     }
 
+    // [최적화] ImageRequest 설정: 교차 페이드 활성화 및 저사양 기기 메모리 최적화
+    val context = LocalPlatformContext.current
     val painter = rememberAsyncImagePainter(
-        model = ImageRequest.Builder(LocalPlatformContext.current)
-            .data(finalImageUrl)
-            .build()
+        model = remember(finalImageUrl) {
+            ImageRequest.Builder(context)
+                .data(finalImageUrl)
+                .crossfade(true)
+                .size(if (isLarge) Size(500, 750) else Size(342, 513)) // 화면 크기에 맞는 다운샘플링
+                .build()
+        }
     )
 
     val painterState by painter.state.collectAsState()

@@ -5,6 +5,7 @@ import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.plugins.compression.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -32,6 +33,11 @@ const val TMDB_BACKDROP_SIZE = "w780"
 
 private val tmdbClient = HttpClient {
     install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
+    // [최적화] TMDB API 응답 압축 해제 지원
+    install(ContentEncoding) {
+        gzip()
+        deflate()
+    }
     install(HttpTimeout) { requestTimeoutMillis = 15000; connectTimeoutMillis = 10000; socketTimeoutMillis = 15000 }
     defaultRequest { 
         header("User-Agent", "Ktor-Client")

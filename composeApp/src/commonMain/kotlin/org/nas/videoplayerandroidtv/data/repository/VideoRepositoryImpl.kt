@@ -23,10 +23,13 @@ class VideoRepositoryImpl : VideoRepository {
         return isGenericTitle(n) || n.contains("Search Results", ignoreCase = true)
     }
 
-    // 외부에서 접근 가능하도록 public으로 변경
-    suspend fun fetchCategorySections(categoryKey: String): List<HomeSection> = try {
+    // [수정] keyword 파라미터를 추가하여 서버 측 필터링을 지원하도록 변경
+    suspend fun fetchCategorySections(categoryKey: String, keyword: String? = null): List<HomeSection> = try {
         val response = client.get("$baseUrl/category_sections") {
             parameter("cat", categoryKey)
+            if (keyword != null && keyword != "전체" && keyword != "All") {
+                parameter("kw", keyword)
+            }
         }.body<List<HomeSection>>()
         
         response.map { section ->

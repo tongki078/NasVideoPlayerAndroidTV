@@ -72,7 +72,7 @@ fun App(driver: SqlDriver) {
     var lastPlaybackPosition by rememberSaveable { mutableLongStateOf(0L) }
     var lastVideoDuration by rememberSaveable { mutableLongStateOf(0L) }
 
-    // 세부 탭 상태 (화면별로 기억하되, 화면 전환 시 0으로 초기화하지 않음)
+    // 세부 탭 상태
     val subModeStates = remember { mutableStateMapOf<Screen, Int>() }
     val selectedSubMode = subModeStates.getOrDefault(currentScreen, 0)
 
@@ -103,20 +103,12 @@ fun App(driver: SqlDriver) {
                     else -> ""
                 }
                 if (catKey.isNotEmpty()) {
+                    // [최적화] 서버 측 필터링을 위해 현재 탭의 이름을 kw로 전달 ('전체' 제거됨)
+                    val subModeTitle = if (subModes.isNotEmpty()) subModes[selectedSubMode] else null
                     val sections = if (catKey == "home") repository.getHomeRecommendations() 
-                                   else repoImpl.fetchCategorySections(catKey)
+                                   else repoImpl.fetchCategorySections(catKey, subModeTitle)
                     
-                    val filteredSections = if (subModes.isEmpty()) sections 
-                    else {
-                        val target = subModes[selectedSubMode]
-                        sections.map { s -> 
-                            s.copy(items = s.items.filter { 
-                                it.path?.contains(target) == true || it.name?.contains(target) == true 
-                            }) 
-                        }.filter { it.items.isNotEmpty() }
-                    }
-                    
-                    allCategorySections[cacheKey] = if (filteredSections.isEmpty() && selectedSubMode == 0) sections else filteredSections
+                    allCategorySections[cacheKey] = sections
                 }
             } catch (_: Exception) {} finally { categoryLoadingStates[cacheKey] = false }
         }
