@@ -29,7 +29,6 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, onPlay: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.03f else 1f, label = "EpisodeItemScale")
 
-    // 썸네일 URL: 에피소드 전용 썸네일이 없으면 시리즈 포스터 사용
     val imageUrl = movie.thumbnailUrl ?: ""
 
     Row(
@@ -44,7 +43,7 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, onPlay: () -> Unit) {
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable(onClick = onPlay)
-            .background(if (isFocused) Color.White.copy(alpha = 0.15f) else Color.Transparent, RoundedCornerShape(8.dp))
+            .background(if (isFocused) Color.White.copy(alpha = 0.1f) else Color.Transparent, RoundedCornerShape(8.dp))
             .border(
                 width = 2.dp,
                 color = if (isFocused) Color.White else Color.Transparent,
@@ -54,19 +53,21 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, onPlay: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         var isImageLoading by remember { mutableStateOf(true) }
+        
+        // 썸네일 영역: 이미지가 없어도 기본 배경색을 주어 영역 확보
         Box(
             modifier = Modifier
                 .width(160.dp)
                 .height(90.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(shimmerBrush(showShimmer = isImageLoading && imageUrl.isNotEmpty()))
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color.DarkGray.copy(alpha = 0.3f))
         ) {
             if (imageUrl.isNotEmpty()) {
                 AsyncImage(
                     model = imageUrl,
                     contentDescription = movie.title ?: "",
                     onState = { state -> isImageLoading = state is AsyncImagePainter.State.Loading },
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().background(shimmerBrush(showShimmer = isImageLoading)),
                     contentScale = ContentScale.Crop
                 )
             }
@@ -76,18 +77,17 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, onPlay: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(
                 text = (movie.title ?: "").prettyTitle(),
-                color = if (isFocused) Color.Yellow else Color.White, 
+                color = if (isFocused) Color.White else Color.White.copy(alpha = 0.9f), 
                 fontSize = 16.sp, 
                 fontWeight = FontWeight.Bold, 
                 maxLines = 1, 
                 overflow = TextOverflow.Ellipsis
             )
             Spacer(Modifier.height(6.dp))
-            // 서버에서 받은 줄거리를 즉시 사용 (없으면 시리즈 전체 줄거리 혹은 기본 문구)
             val episodeOverview = movie.overview ?: seriesOverview ?: "줄거리 정보가 없습니다."
             Text(
                 text = episodeOverview,
-                color = Color.Gray, 
+                color = Color.White.copy(alpha = 0.5f),
                 fontSize = 13.sp, 
                 maxLines = 2, 
                 overflow = TextOverflow.Ellipsis, 

@@ -1,5 +1,7 @@
 package org.nas.videoplayerandroidtv.ui.home
 
+import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import org.nas.videoplayerandroidtv.data.WatchHistory
 import org.nas.videoplayerandroidtv.data.repository.VideoRepositoryImpl
 import org.nas.videoplayerandroidtv.domain.model.Category
@@ -84,10 +87,26 @@ fun HomeScreen(
         }.filter { it.items.isNotEmpty() }
     }
 
-    val heroItem = remember(combinedSections) { 
-        combinedSections.find { it.title.contains("인기작") }?.items?.firstOrNull() 
-        ?: combinedSections.firstOrNull()?.items?.firstOrNull()
+    // --- [다이내믹 히어로 로직 추가] ---
+    val heroPool = remember(combinedSections) {
+        // "인기작" 섹션이나 첫 번째 섹션에서 최대 10개의 아이템을 히어로 후보로 선정
+        val poolSource = combinedSections.find { it.title.contains("인기작") } ?: combinedSections.firstOrNull()
+        poolSource?.items?.take(10) ?: emptyList()
     }
+
+    var currentHeroIndex by remember { mutableStateOf(0) }
+
+    // 10초마다 다음 히어로 아이템으로 전환
+    LaunchedEffect(heroPool) {
+        if (heroPool.size > 1) {
+            while (true) {
+                delay(10000) // 10초 대기
+                currentHeroIndex = (currentHeroIndex + 1) % heroPool.size
+            }
+        }
+    }
+
+    val heroItem = heroPool.getOrNull(currentHeroIndex)
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         LazyColumn(
@@ -96,46 +115,50 @@ fun HomeScreen(
             contentPadding = PaddingValues(bottom = 60.dp)
         ) {
             item(key = "hero_section") {
-                if (heroItem != null) {
-                    val heroSeries = Series(
-                        title = heroItem.name ?: "", 
-                        episodes = heroItem.movies ?: emptyList(), 
-                        fullPath = heroItem.path, 
-                        posterPath = heroItem.posterPath, 
-                        genreIds = heroItem.genreIds ?: emptyList(),
-                        genreNames = heroItem.genreNames ?: emptyList(),
-                        director = heroItem.director,
-                        actors = heroItem.actors ?: emptyList(),
-                        overview = heroItem.overview,
-                        year = heroItem.year,
-                        rating = heroItem.rating
-                    )
-                    
-                    val heroHistory = watchHistory.find { 
-                        it.seriesPath == heroItem.path || it.title == heroItem.name 
-                    }
+                // 부드러운 전환을 위해 AnimatedContent 사용
+                AnimatedContent(
+                    targetState = heroItem,
+                    transitionSpec = {
+                        fadeIn(animationSpec = tween(1000)) togetherWith fadeOut(animationSpec = tween(1000))
+                    },
+                    label = "HeroTransition"
+                ) { targetItem ->
+                    if (targetItem != null) {
+                        val heroSeries = Series(
+                            title = targetItem.name ?: "", 
+                            episodes = targetItem.movies ?: emptyList(), 
+                            fullPath = targetItem.path, 
+                            posterPath = targetItem.posterPath, 
+                            genreIds = targetItem.genreIds ?: emptyList(),
+                            genreNames = targetItem.genreNames ?: emptyList(),
+                            director = targetItem.director,
+                            actors = targetItem.actors ?: emptyList(),
+                            overview = targetItem.overview,
+                            year = targetItem.year,
+                            rating = targetItem.rating
+                        )
+                        
+                        val heroHistory = watchHistory.find { 
+                            it.seriesPath == targetItem.path || it.title == targetItem.name 
+                        }
 
-                    HeroSection(
-                        series = heroSeries,
-                        watchHistory = heroHistory,
-                        onWatchClick = { 
-                            if (heroHistory != null) {
-                                onHistoryClick(heroHistory)
-                            } else {
-                                // [UX 개선] 시청 기록이 없으면 첫 에피소드 즉시 재생 시도
-                                val firstEpisode = heroSeries.episodes.firstOrNull()
-                                if (firstEpisode != null) {
-                                    onPlayClick(firstEpisode)
+                        HeroSection(
+                            series = heroSeries,
+                            watchHistory = heroHistory,
+                            onWatchClick = { 
+                                if (heroHistory != null) {
+                                    onHistoryClick(heroHistory)
                                 } else {
-                                    // 에피소드가 없으면 어쩔 수 없이 상세 페이지로 이동
-                                    onSeriesClick(heroSeries)
+                                    val firstEpisode = heroSeries.episodes.firstOrNull()
+                                    if (firstEpisode != null) onPlayClick(firstEpisode)
+                                    else onSeriesClick(heroSeries)
                                 }
-                            }
-                        },
-                        horizontalPadding = standardMargin
-                    )
-                } else {
-                    SkeletonHero()
+                            },
+                            horizontalPadding = standardMargin
+                        )
+                    } else {
+                        SkeletonHero()
+                    }
                 }
             }
 

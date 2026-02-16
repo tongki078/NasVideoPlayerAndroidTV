@@ -96,7 +96,9 @@ fun SeriesDetailScreen(
     val playableEpisode = allEpisodes.firstOrNull()
 
     Box(modifier = Modifier.fillMaxSize().background(color = Color.Black)) {
-        val backdropUrl = currentSeries.posterPath?.let { if (it.startsWith("http")) it else "https://image.tmdb.org/t/p/original$it" }
+        val backdropUrl = currentSeries.posterPath?.let { 
+            if (it.startsWith("http")) it else if (it.startsWith("/")) "https://image.tmdb.org/t/p/original$it" else "${NasApiClient.BASE_URL}/$it"
+        }
         AnimatedContent(targetState = backdropUrl, transitionSpec = { fadeIn(animationSpec = tween(1000)) togetherWith fadeOut(animationSpec = tween(1000)) }, label = "BackdropTransition") { url ->
             if (url != null) {
                 AsyncImage(model = url, contentDescription = null, modifier = Modifier.fillMaxSize().alpha(0.4f), contentScale = ContentScale.Crop)
@@ -287,10 +289,29 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, series
 private suspend fun loadSeasons(series: Series, repository: VideoRepository): List<Season> = coroutineScope {
     val collectedEpisodes = mutableListOf<Movie>()
     collectedEpisodes.addAll(series.episodes)
+    
+    // 에피소드 가공 시 썸네일 경로를 완벽하게 보정
     val totalMovies = collectedEpisodes.distinctBy { it.videoUrl ?: it.id ?: it.title }.map { movie ->
-        if (movie.videoUrl?.startsWith("http") == false) {
-            movie.copy(videoUrl = NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl)
-        } else movie
+        val updatedVideoUrl = if (movie.videoUrl?.startsWith("http") == false) {
+            NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl
+        } else movie.videoUrl
+        
+        // 썸네일 보정: 에피소드 썸네일 우선, 없으면 시리즈 포스터 사용
+        val rawThumb = if (!movie.thumbnailUrl.isNullOrEmpty()) movie.thumbnailUrl else series.posterPath
+        val updatedThumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
+            if (rawThumb.startsWith("/")) {
+                // 서버 이미지인지 TMDB 이미지인지 판단
+                if (rawThumb.contains("thumb_serve") || rawThumb.contains("video_serve")) {
+                    NasApiClient.BASE_URL + rawThumb
+                } else {
+                    "https://image.tmdb.org/t/p/w500$rawThumb"
+                }
+            } else {
+                NasApiClient.BASE_URL + "/" + rawThumb
+            }
+        } else rawThumb
+        
+        movie.copy(videoUrl = updatedVideoUrl, thumbnailUrl = updatedThumbUrl)
     }
     val seasonsMap = totalMovies.groupBy { it.title?.extractSeason() ?: 1 }
     seasonsMap.map { (num, eps) -> Season(number = num, name = "시즌 $num", episodes = eps.sortedWith(compareBy { it.title?.extractEpisode()?.filter { c -> c.isDigit() }?.toIntOrNull() ?: 0 })) }.sortedBy { it.number }
