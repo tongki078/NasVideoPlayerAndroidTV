@@ -153,35 +153,7 @@ fun SeriesDetailScreen(
                     Text(text = "출연: " + currentSeries.actors.take(4).joinToString { it.name }, color = Color.White.copy(alpha = 0.4f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 
-                // 시청 중인 프로그레스바
-                if (initialPlaybackPosition > 0 && initialDuration > 0) {
-                    Spacer(modifier = Modifier.height(24.dp))
-                    val progress = initialPlaybackPosition.toFloat() / initialDuration
-                    Column(modifier = Modifier.width(320.dp)) {
-                        Text(
-                            text = "시청 중: ${formatTime(initialPlaybackPosition)} / ${formatTime(initialDuration)}",
-                            color = Color.White.copy(alpha = 0.6f),
-                            fontSize = 13.sp,
-                            modifier = Modifier.padding(bottom = 6.dp)
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(4.dp)
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(Color.White.copy(alpha = 0.2f))
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(progress.coerceIn(0f, 1f))
-                                    .fillMaxHeight()
-                                    .background(Color.Red)
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(36.dp))
+                Spacer(modifier = Modifier.height(48.dp))
                 
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     if (!state.isLoading && playableEpisode != null) {
@@ -280,7 +252,7 @@ private fun PremiumTvButton(
         modifier = modifier
             .onFocusChanged { isFocused = it.isFocused }
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .height(44.dp)
+            .height(52.dp)
             .wrapContentWidth()
             .shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(10.dp), spotColor = Color.White.copy(alpha = 0.4f))
     ) {
@@ -300,7 +272,7 @@ private fun PremiumTvButton(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .height(3.5.dp)
+                        .height(4.dp)
                         .background(if (isFocused) Color.Red else Color.Red.copy(alpha = 0.8f))
                 )
             }
@@ -323,7 +295,17 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, series
                     items(state.seasons.size) { index ->
                         val isSelected = index == state.selectedSeasonIndex
                         var isFocused by remember { mutableStateOf(false) }
-                        Surface(onClick = { onSeasonChange(index) }, color = if (isFocused) Color.White else if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent, shape = RoundedCornerShape(8.dp), border = BorderStroke(width = 2.dp, color = if (isFocused) Color.White else Color.Transparent), modifier = Modifier.fillMaxWidth().onFocusChanged { isFocused = it.isFocused }.then(if (index == state.selectedSeasonIndex) Modifier.focusRequester(focusRequester) else Modifier).focusable()) {
+                        Surface(
+                            onClick = { onSeasonChange(index) }, 
+                            color = if (isFocused) Color.White else if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent, 
+                            shape = RoundedCornerShape(8.dp), 
+                            border = BorderStroke(width = 2.dp, color = if (isFocused) Color.White else Color.Transparent), 
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { isFocused = it.isFocused }
+                                .then(if (index == state.selectedSeasonIndex) Modifier.focusRequester(focusRequester) else Modifier)
+                                .focusable()
+                        ) {
                             Text(text = state.seasons[index].name, color = if (isFocused) Color.Black else Color.White, modifier = Modifier.padding(16.dp), fontSize = 18.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium)
                         }
                     }
@@ -359,12 +341,13 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
             if (rawThumb.startsWith("/")) {
                 // 서버 이미지인지 TMDB 이미지인지 판단
                 if (rawThumb.contains("thumb_serve") || rawThumb.contains("video_serve")) {
-                    NasApiClient.BASE_URL + rawThumb
+                    // 회차 목록용 썸네일은 가로 320으로 최적화 요청
+                    NasApiClient.BASE_URL + rawThumb + (if (rawThumb.contains("?")) "&" else "?") + "w=320"
                 } else {
                     "https://image.tmdb.org/t/p/w500$rawThumb"
                 }
             } else {
-                NasApiClient.BASE_URL + "/" + rawThumb
+                NasApiClient.BASE_URL + "/" + rawThumb + "?w=320"
             }
         } else rawThumb
         
