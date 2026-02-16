@@ -62,6 +62,13 @@ for p in ["/usr/local/bin/ffmpeg", "/var/packages/ffmpeg/target/bin/ffmpeg", "/u
         FFMPEG_PATH = p
         break
 
+# [추가] FFprobe 경로 설정 (스토리보드 생성용)
+FFPROBE_PATH = "ffprobe"
+for p in ["/usr/local/bin/ffprobe", "/var/packages/ffmpeg/target/bin/ffprobe", "/usr/bin/ffprobe"]:
+    if os.path.exists(p):
+        FFPROBE_PATH = p
+        break
+
 HOME_RECOMMEND = []
 IS_METADATA_RUNNING = False
 _FAST_CATEGORY_CACHE = {}
@@ -69,6 +76,7 @@ _SECTION_CACHE = {} # 카테고리 섹션 결과 캐시 추가
 _DETAIL_CACHE = deque(maxlen=200)
 
 THUMB_SEMAPHORE = threading.Semaphore(4)
+STORYBOARD_SEMAPHORE = threading.Semaphore(2) # [추가] 스토리보드 생성용 세마포어
 THUMB_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 
 def log(tag, msg):
@@ -873,6 +881,75 @@ def thumb_serve():
         resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
         return resp
     return "Not Found", 404
+
+# --- [복원된 기능: 스킵 네비게이션용 스토리보드 생성] ---
+def get_video_duration(path):
+    try:
+        result = subprocess.run([FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return float(result.stdout)
+    except: return 0
+
+@app.route('/storyboard')
+def gen_seek_thumbnails():
+    """
+    비디오의 전체 구간을 미리볼 수 있는 스프라이트 시트(스토리보드)를 생성하여 반환합니다.
+    ExoPlayer 등 클라이언트에서 탐색 바(seek bar) 이동 시 썸네일을 표시하는 데 사용됩니다.
+    """
+    path_raw = request.args.get('path')
+    prefix = request.args.get('type')
+    if not path_raw or not prefix: return "Bad Request", 400
+
+    try:
+        base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
+        vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
+        if not os.path.exists(vp): return "Not Found", 404
+
+        # 파일명 기반 해시 생성 (캐시용)
+        file_hash = hashlib.md5(vp.encode()).hexdigest()
+        sb_path = os.path.join(DATA_DIR, f"sb_{file_hash}.jpg")
+
+        # 이미 생성된 스토리보드가 있으면 반환
+        if os.path.exists(sb_path):
+            resp = make_response(send_file(sb_path, mimetype='image/jpeg'))
+            resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+            return resp
+
+        # 생성 중 충돌 방지를 위한 락(Lock)
+        with STORYBOARD_SEMAPHORE:
+            if os.path.exists(sb_path): # 락 획득 후 다시 확인
+                 return send_file(sb_path, mimetype='image/jpeg')
+
+            duration = get_video_duration(vp)
+            if duration == 0: return "Duration Error", 500
+
+            # 10x10 그리드, 100개의 썸네일 생성
+            interval = duration / 100
+
+            # FFmpeg 명령어로 타일(Sprite Sheet) 생성
+            # fps=1/interval: interval 초마다 1프레임 추출
+            # scale=160:-1: 너비 160px로 리사이징 (높이 비율 유지)
+            # tile=10x10: 10행 10열로 합치기
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-i", vp,
+                "-vf", f"fps=1/{interval},scale=160:-1,tile=10x10",
+                "-frames:v", "1",
+                "-q:v", "5", # JPEG 품질
+                sb_path
+            ]
+
+            log("STORYBOARD", f"썸네일 생성 시작: {os.path.basename(vp)} (Duration: {duration}s)")
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+
+            if os.path.exists(sb_path):
+                log("STORYBOARD", f"생성 완료: {os.path.basename(sb_path)}")
+                return send_file(sb_path, mimetype='image/jpeg')
+            else:
+                log("STORYBOARD", "생성 실패")
+                return "Generation Failed", 500
+    except Exception as e:
+        log("STORYBOARD", f"에러 발생: {str(e)}")
+        return "Internal Server Error", 500
 
 @app.route('/api/status')
 def get_server_status():

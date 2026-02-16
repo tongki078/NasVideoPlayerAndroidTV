@@ -82,8 +82,6 @@ fun SeriesDetailScreen(
         }
         state = state.copy(seasons = seasons, isLoading = false)
         
-        // [획기적 개선] 상세 정보를 불러온 직후, 모든 에피소드 썸네일을 클라이언트에서 사전 로드(Prefetch)
-        // 이를 통해 회차 목록을 열었을 때 이미 이미지가 메모리/디스크 캐시에 존재하게 함
         if (seasons.isNotEmpty()) {
             val imageLoader = SingletonImageLoader.get(context)
             seasons.forEach { season ->
@@ -129,13 +127,13 @@ fun SeriesDetailScreen(
 
         Box(modifier = Modifier.fillMaxSize().background(brush = Brush.horizontalGradient(0.0f to Color.Black, 0.5f to Color.Black.copy(alpha = 0.8f), 1.0f to Color.Transparent)))
 
-        Row(modifier = Modifier.fillMaxSize().padding(horizontal = 60.dp, vertical = 40.dp)) {
+        Row(modifier = Modifier.fillMaxSize().padding(horizontal = 60.dp).padding(top = 20.dp)) { // 상단 간격 줄임
             Column(modifier = Modifier.weight(1.5f).fillMaxHeight(), verticalArrangement = Arrangement.Center) {
                 Text(
                     text = currentSeries.title.cleanTitle(includeYear = false), 
                     color = Color.White, 
                     style = TextStyle(
-                        fontSize = 36.sp, 
+                        fontSize = 25.sp, // 크기 30% 줄임
                         fontWeight = FontWeight.ExtraBold, 
                         shadow = Shadow(color = Color.Black.copy(alpha = 0.5f), offset = Offset(0f, 4f), blurRadius = 12f), 
                         letterSpacing = (-1).sp
@@ -143,8 +141,8 @@ fun SeriesDetailScreen(
                     maxLines = 1, 
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(18.dp))
-                Row(modifier = Modifier.height(28.dp), verticalAlignment = Alignment.CenterVertically) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(modifier = Modifier.height(20.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (state.isLoading) {
                         Box(modifier = Modifier.width(100.dp).fillMaxHeight().clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)))
                     } else {
@@ -154,26 +152,26 @@ fun SeriesDetailScreen(
                         currentSeries.genreNames.take(3).forEach { InfoBadge(text = it, color = Color.White.copy(alpha = 0.15f)) }
                     }
                 }
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(16.dp))
                 
                 Box(modifier = Modifier.wrapContentHeight().fillMaxWidth()) {
                     if (!state.isLoading) {
                         Text(
                             text = currentSeries.overview ?: "정보가 없습니다.", 
                             color = Color.White.copy(alpha = 0.7f), 
-                            fontSize = 16.sp, 
-                            lineHeight = 24.sp, 
+                            fontSize = 11.sp, // 크기 30% 줄임
+                            lineHeight = 17.sp, // 줄 간격 조정
                             maxLines = 2, 
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(11.dp))
                 if (!state.isLoading && currentSeries.actors.isNotEmpty()) {
-                    Text(text = "출연: " + currentSeries.actors.take(4).joinToString { it.name }, color = Color.White.copy(alpha = 0.4f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(text = "출연: " + currentSeries.actors.take(4).joinToString { it.name }, color = Color.White.copy(alpha = 0.4f), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) // 크기 30% 줄임
                 }
                 
-                Spacer(modifier = Modifier.height(48.dp))
+                Spacer(modifier = Modifier.height(34.dp))
                 
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     if (!state.isLoading && playableEpisode != null) {
@@ -238,7 +236,7 @@ private fun formatTime(ms: Long): String {
 @Composable
 private fun InfoBadge(text: String, color: Color = Color.White.copy(alpha = 0.15f), textColor: Color = Color.White, isOutlined: Boolean = false) {
     Surface(color = if (isOutlined) Color.Transparent else color, shape = RoundedCornerShape(4.dp), border = if (isOutlined) BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)) else null, modifier = Modifier.padding(end = 8.dp)) {
-        Text(text = text, color = textColor, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp))
+        Text(text = text, color = textColor, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)) // 크기 30% 줄임
     }
 }
 
@@ -272,19 +270,19 @@ private fun PremiumTvButton(
         modifier = modifier
             .onFocusChanged { isFocused = it.isFocused }
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .height(52.dp)
+            .height(36.dp) // 높이 줄임
             .wrapContentWidth()
             .shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(10.dp), spotColor = Color.White.copy(alpha = 0.4f))
     ) {
         Box(modifier = Modifier.wrapContentWidth()) {
             Row(
-                modifier = Modifier.padding(horizontal = 24.dp).fillMaxHeight(), 
+                modifier = Modifier.padding(horizontal = 17.dp).fillMaxHeight(), // 패딩 줄임
                 verticalAlignment = Alignment.CenterVertically, 
                 horizontalArrangement = Arrangement.Center
             ) {
-                Icon(imageVector = icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(22.dp))
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(text = text, color = contentColor, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Icon(imageVector = icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(15.dp)) // 아이콘 크기 줄임
+                Spacer(modifier = Modifier.width(7.dp))
+                Text(text = text, color = contentColor, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) // 텍스트 크기 줄임
             }
             
             if (progress != null && progress > 0f) {
@@ -292,7 +290,7 @@ private fun PremiumTvButton(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .height(4.dp)
+                        .height(3.dp) // 높이 줄임
                         .background(if (isFocused) Color.Red else Color.Red.copy(alpha = 0.8f))
                 )
             }
@@ -306,12 +304,12 @@ private data class SeriesDetailState(val seasons: List<Season> = emptyList(), va
 @Composable
 private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, seriesOverview: String?, focusRequester: FocusRequester, onSeasonChange: (Int) -> Unit, onEpisodeClick: (Movie) -> Unit, onClose: () -> Unit) {
     Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-        Row(modifier = Modifier.fillMaxSize().padding(60.dp)) {
+        Row(modifier = Modifier.fillMaxSize().padding(42.dp)) { // 패딩 줄임
             Column(modifier = Modifier.weight(0.35f)) {
-                Text(text = seriesTitle.cleanTitle(includeYear = false), color = Color.White, style = TextStyle(fontSize = 32.sp, fontWeight = FontWeight.Bold, lineHeight = 42.sp, shadow = Shadow(color = Color.Black, offset = Offset(2f, 2f), blurRadius = 4f)), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Spacer(modifier = Modifier.height(8.dp)); Text(text = "시즌 ${state.seasons.size}개", color = Color.Gray, fontSize = 18.sp)
-                Spacer(modifier = Modifier.height(40.dp))
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.weight(1f)) {
+                Text(text = seriesTitle.cleanTitle(includeYear = false), color = Color.White, style = TextStyle(fontSize = 22.sp, fontWeight = FontWeight.Bold, lineHeight = 29.sp, shadow = Shadow(color = Color.Black, offset = Offset(2f, 2f), blurRadius = 4f)), maxLines = 2, overflow = TextOverflow.Ellipsis) // 크기 30% 줄임
+                Spacer(modifier = Modifier.height(6.dp)); Text(text = "시즌 ${state.seasons.size}개", color = Color.Gray, fontSize = 13.sp) // 크기 30% 줄임
+                Spacer(modifier = Modifier.height(28.dp))
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) { // 간격 줄임
                     items(state.seasons.size) { index ->
                         val isSelected = index == state.selectedSeasonIndex
                         var isFocused by remember { mutableStateOf(false) }
@@ -322,22 +320,23 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, series
                             border = BorderStroke(width = 2.dp, color = if (isFocused) Color.White else Color.Transparent), 
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .height(35.dp) // 높이 절반으로 줄임
                                 .onFocusChanged { isFocused = it.isFocused }
                                 .then(if (index == state.selectedSeasonIndex) Modifier.focusRequester(focusRequester) else Modifier)
                                 .focusable()
                         ) {
-                            Text(text = state.seasons[index].name, color = if (isFocused) Color.Black else Color.White, modifier = Modifier.padding(16.dp), fontSize = 18.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium)
+                            Text(text = state.seasons[index].name, color = if (isFocused) Color.Black else Color.White, modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp), fontSize = 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium) // 크기 30% 줄임
                         }
                     }
                 }
                 LaunchedEffect(Unit) { delay(150); try { focusRequester.requestFocus() } catch(_: Exception) {} }
             }
-            Spacer(modifier = Modifier.width(60.dp))
+            Spacer(modifier = Modifier.width(42.dp))
             Column(modifier = Modifier.weight(0.65f)) {
-                Text(text = state.seasons.getOrNull(state.selectedSeasonIndex)?.name ?: "회차 정보", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(24.dp))
+                Text(text = state.seasons.getOrNull(state.selectedSeasonIndex)?.name ?: "회차 정보", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold) // 크기 30% 줄임
+                Spacer(Modifier.height(17.dp))
                 val episodes = state.seasons.getOrNull(state.selectedSeasonIndex)?.episodes ?: emptyList()
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(11.dp), contentPadding = PaddingValues(bottom = 28.dp)) { // 간격/패딩 줄임
                     items(episodes) { movie -> EpisodeItem(movie = movie, seriesOverview = seriesOverview, onPlay = { onEpisodeClick(movie) }) }
                 }
             }
@@ -358,7 +357,6 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
         val updatedThumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
             if (rawThumb.startsWith("/")) {
                 if (rawThumb.contains("thumb_serve") || rawThumb.contains("video_serve")) {
-                    // 회차 목록용 썸네일은 가로 320으로 최적화 요청
                     NasApiClient.BASE_URL + rawThumb + (if (rawThumb.contains("?")) "&" else "?") + "w=320"
                 } else {
                     "https://image.tmdb.org/t/p/w500$rawThumb"

@@ -29,7 +29,7 @@ fun NetflixTopBar(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .height(64.dp)
+            .height(32.dp) // 높이를 30% 더 줄임
             .padding(horizontal = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -39,7 +39,7 @@ fun NetflixTopBar(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
             Text(
                 text = "N",
                 color = Color.Red,
-                fontSize = 32.sp,
+                fontSize = 20.sp, // 크기 조정
                 fontWeight = FontWeight.Black,
                 modifier = Modifier.padding(end = 8.dp)
             )
@@ -76,54 +76,41 @@ private fun TopBarItem(
     var isFocused by remember { mutableStateOf(false) }
     val isSelected = currentScreen == screen
     
-    // [디자인 개선] 선택되었다고 해서 배경을 빨간색으로 채우지 않고, 더 세련된 효과 부여
-    val backgroundColor by animateColorAsState(
-        when {
-            isFocused -> Color.White // 포커스 시 흰색 배경
-            else -> Color.Transparent
-        }
-    )
-    
+    // [디자인 단순화] 포커스 시 배경색 변경 제거
     val contentColor by animateColorAsState(
         when {
-            isFocused -> Color.Black
+            isFocused -> Color.White // 포커스 시 흰색
             isSelected -> Color.White // 선택 시 흰색
-            else -> Color.White.copy(alpha = 0.5f) // 평소에는 반투명
+            else -> Color.White.copy(alpha = 0.6f) // 평소에는 반투명
         }
     )
 
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(backgroundColor)
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color.Transparent) // 배경색 투명으로 고정
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable { onClick(screen) }
-            .padding(horizontal = if (icon != null) 10.dp else 14.dp, vertical = 6.dp),
+            .padding(horizontal = if (icon != null) 6.dp else 10.dp, vertical = 2.dp), // 패딩 최소화
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (icon != null) {
                 Icon(
                     imageVector = icon, 
                     contentDescription = label, 
                     tint = contentColor, 
-                    modifier = Modifier.size(24.dp)
-                )
-            } else {
-                Text(
-                    text = label,
-                    color = contentColor,
-                    fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium,
-                    fontSize = 15.sp
+                    modifier = Modifier.size(15.dp) // 아이콘 크기 조정
                 )
             }
-            
-            // [추가] 선택된 아이템 하단에 작은 빨간 점이나 선을 넣어 포인트를 줌 (과하지 않게)
-            if (isSelected && !isFocused) {
-                Spacer(Modifier.height(2.dp))
-                Box(modifier = Modifier.size(4.dp).clip(RoundedCornerShape(2.dp)).background(Color.Red))
-            }
+            Text(
+                text = label,
+                color = contentColor,
+                fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium,
+                fontSize = 10.sp, // 텍스트 크기 조정
+                maxLines = 1
+            )
         }
     }
 }

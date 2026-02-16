@@ -49,16 +49,15 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, onPlay: () -> Unit) {
                 color = if (isFocused) Color.White else Color.Transparent,
                 shape = RoundedCornerShape(8.dp)
             )
-            .padding(12.dp), 
+            .padding(11.dp), // 패딩 줄임
         verticalAlignment = Alignment.CenterVertically
     ) {
         var isImageLoading by remember { mutableStateOf(true) }
         
-        // 썸네일 영역: 이미지가 없어도 기본 배경색을 주어 영역 확보
         Box(
             modifier = Modifier
-                .width(160.dp)
-                .height(90.dp)
+                .width(144.dp) // 너비 10% 줄임
+                .height(81.dp) // 높이 10% 줄임
                 .clip(RoundedCornerShape(6.dp))
                 .background(Color.DarkGray.copy(alpha = 0.3f))
         ) {
@@ -73,25 +72,25 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, onPlay: () -> Unit) {
             }
         }
 
-        Spacer(Modifier.width(20.dp))
+        Spacer(Modifier.width(18.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 text = (movie.title ?: "").prettyTitle(),
                 color = if (isFocused) Color.White else Color.White.copy(alpha = 0.9f), 
-                fontSize = 16.sp, 
+                fontSize = 14.sp, // 크기 10% 줄임
                 fontWeight = FontWeight.Bold, 
                 maxLines = 1, 
                 overflow = TextOverflow.Ellipsis
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(5.dp))
             val episodeOverview = movie.overview ?: seriesOverview ?: "줄거리 정보가 없습니다."
             Text(
                 text = episodeOverview,
                 color = Color.White.copy(alpha = 0.5f),
-                fontSize = 13.sp, 
+                fontSize = 12.sp, // 크기 10% 줄임
                 maxLines = 2, 
                 overflow = TextOverflow.Ellipsis, 
-                lineHeight = 18.sp
+                lineHeight = 16.sp // 줄 간격 조정
             )
         }
     }
