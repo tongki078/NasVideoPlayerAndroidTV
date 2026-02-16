@@ -31,6 +31,10 @@ TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
 CACHE_VERSION = "137.5" # 버전 업그레이드
 
+# [수정] 절대 경로를 사용하여 파일 생성 보장
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+FAILURE_LOG_PATH = os.path.join(SCRIPT_DIR, "metadata_failures.txt")
+
 TMDB_MEMORY_CACHE = {}
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk".strip()
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
@@ -68,6 +72,16 @@ THUMB_SEMAPHORE = threading.Semaphore(4)
 def log(tag, msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{timestamp}] [{tag}] {msg}", flush=True)
+
+def log_matching_failure(orig, cleaned, reason):
+    """[추가] 매칭 실패 내용을 파일에 기록하여 AI 분석 지원"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        # 파일이 생성되었는지 로그로 확인
+        with open(FAILURE_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] [FAIL] ORIG: {orig} | CLEANED: {cleaned} | REASON: {reason}\n")
+    except Exception as e:
+        log("LOG_ERROR", f"실패 로그 파일 쓰기 중 에러: {str(e)}")
 
 def nfc(text):
     return unicodedata.normalize('NFC', text) if text else ""
@@ -150,19 +164,19 @@ def migrate_json_to_db():
     conn.close()
     log("MIGRATE", "이관 완료")
 
-# --- [정규식 및 클리닝 보완] ---
+# --- [정규식 및 클리닝 대폭 강화] ---
 REGEX_EXT = re.compile(r'\.[a-zA-Z0-9]{2,4}$')
 REGEX_YEAR = re.compile(r'\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)')
 REGEX_CH_PREFIX = re.compile(r'^\[(?:KBS|SBS|MBC|tvN|JTBC|OCN|Mnet|TV조선|채널A|MBN|ENA|KBS2|KBS1|CH\d+|TV)\]\s*')
-# [국가 코드 보강] KOR, JPN, USA, CHN, ENG 등 약어 태그 추가
-REGEX_TECHNICAL_TAGS = re.compile(r'(?i)[.\s_-](?!(?:\d+\b))(\d{3,4}p|FHD|QHD|UHD|4K|Bluray|Blu-ray|WEB-DL|WEBRip|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AVC|AAC\d?|DTS-?H?D?|AC3|DDP\d?|DD\+\d?|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|HDR(?:10)?(?:\+)?|Vision|Dolby|NF|AMZN|HMAX|DSNP|AppleTV?|Disney|PCOK|playWEB|ATVP|HULU|HDTV|HD|KBS|SBS|MBC|TVN|JTBC|NEXT|ST|SW|KL|YT|MVC|KN|FLUX|hallowed|PiRaTeS|Jadewind|Movie|pt\s*\d+|KOREAN|KOR|ITALIAN|JAPANESE|JPN|CHINESE|CHN|ENGLISH|ENG|USA|HK|TW|FRENCH|GERMAN|SPANISH|THAI|VIETNAMESE|WEB|DL|TVRip|HDR10Plus)(\b|$|[.\s_-])')
-# 화수 표시 정교화
+# 기술 태그 및 국가 약어 보강 (IMAX, Unrated, Criterion, KOR, JPN 등 추가)
+REGEX_TECHNICAL_TAGS = re.compile(r'(?i)[.\s_-](?!(?:\d+\b))(\d{3,4}p|FHD|QHD|UHD|4K|Bluray|Blu-ray|WEB-DL|WEBRip|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AVC|AAC\d?|DTS-?H?D?|AC3|DDP\d?|DD\+\d?|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|HDR(?:10)?(?:\+)?|Vision|Dolby|NF|AMZN|HMAX|DSNP|AppleTV?|Disney|PCOK|playWEB|ATVP|HULU|HDTV|HD|KBS|SBS|MBC|TVN|JTBC|NEXT|ST|SW|KL|YT|MVC|KN|FLUX|hallowed|PiRaTeS|Jadewind|Movie|pt\s*\d+|KOREAN|KOR|ITALIAN|JAPANESE|JPN|CHINESE|CHN|ENGLISH|ENG|USA|HK|TW|FRENCH|GERMAN|SPANISH|THAI|VIETNAMESE|WEB|DL|TVRip|HDR10Plus|IMAX|Unrated|REMASTERED|Criterion|NonDRM|BRRip|1080i|720i|国语|Mandarin|Cantonese|FanSub|VFQ|VF|2CH|5\.1CH|8m|2398)(\b|$|[.\s_-])')
 REGEX_EP_MARKER_STRICT = re.compile(r'(?i)(?:[.\s_-]|(?<=[가-힣]))(?:S(\d+)E(\d+)(?:-E\d+)?|S(\d+)|E(\d+)(?:-E\d+)?|\d+\s*(?:화|회|기|부)|Season\s*\d+|Part\s*\d+|pt\s*\d+|Episode\s*\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+|시즌\s*\d+|[상하]부|최종화|\d{6}|\d{8})')
 REGEX_DATE_YYMMDD = re.compile(r'(?<!\d)\d{6}(?!\d)')
-REGEX_FORBIDDEN_TITLE = re.compile(r'(?i)^\s*(Season\s*\d+|Part\s*\d+|EP\s*\d+|\d+화|\d+회|\d+기|시즌\s*\d+|S\d+|E\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+|Specials?|Extras?|Bonus|미분류|기타|새\s*폴더|VIDEO|GDS3|GDRIVE|NAS|share|영화|외국TV|국내TV|애니메이션|방송중|제목|UHD|최신|최신작|최신영화|4K|1080P|720P)\s*$', re.I)
+# 금지 단어 및 부속 영상 키워드 강화 (등급고지, 예고편, Making of 등)
+REGEX_FORBIDDEN_TITLE = re.compile(r'(?i)^\s*(Season\s*\d+|Part\s*\d+|EP\s*\d+|\d+화|\d+회|\d+기|시즌\s*\d+|S\d+|E\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+|Specials?|Extras?|Bonus|미분류|기타|새\s*폴더|VIDEO|GDS3|GDRIVE|NAS|share|영화|외국TV|국내TV|애니메이션|방송중|제목|UHD|최신|최신작|최신영화|4K|1080P|720P|Digital\s*Hits|Gag\s*Reel|Making\s*of|Behind\s*the\s*Scenes|등급고지|예고편|Trailer)\s*$', re.I)
 REGEX_BRACKETS = re.compile(r'\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\)|$)|\【.*?(?:\】|$)|\『.*?(?:\』|$)|\「.*?(?:\」|$)')
 REGEX_TMDB_HINT = re.compile(r'\{tmdb[\s-]*(\d+)\}')
-REGEX_JUNK_KEYWORDS = re.compile(r'(?i)\s*(?:더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|(?<!\S)[상하](?!\S))\s*')
+REGEX_JUNK_KEYWORDS = re.compile(r'(?i)\s*(?:더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|익스텐디드|등급고지|예고편|(?<!\S)[상하](?!\S))\s*')
 REGEX_SPECIAL_CHARS = re.compile(r'[\[\]()_\-!?【】『』「」"\'#@*※×,~:;]')
 REGEX_LEADING_INDEX = re.compile(r'^(\d+\s+|(?:\d+\.(?!\d)\s*))')
 REGEX_SPACES = re.compile(r'\s+')
@@ -252,6 +266,7 @@ def get_tmdb_info_server(title, ignore_cache=False):
     base_params = {"include_adult": "true", "region": "KR"}
 
     def perform_search(query, lang=None, m_type='multi'):
+        if not query or len(query) < 2: return []
         params = {**base_params, "query": query}
         if lang: params["language"] = lang
         if year: params["year"] = year
@@ -277,19 +292,38 @@ def get_tmdb_info_server(title, ignore_cache=False):
                     break
 
         if not results:
+            # 1단계: 정제된 제목으로 검색
             results = perform_search(ct, "ko-KR", "multi")
+
+            # 2단계: 실패 시 제목 분할 검색 (한글/영어 혼용 대응)
+            if not results:
+                # 한글만 추출
+                ko_only = "".join(re.findall(r'[가-힣0-9\s]+', ct)).strip()
+                if ko_only and len(ko_only) >= 2 and ko_only != ct:
+                    log("TMDB", f"🔍 재검색 (한글만): '{ko_only}'")
+                    results = perform_search(ko_only, "ko-KR", "multi")
+
+                # 실패 시 영어만 추출
+                if not results:
+                    en_only = "".join(re.findall(r'[a-zA-Z0-9\s]+', ct)).strip()
+                    if en_only and len(en_only) >= 3:
+                        log("TMDB", f"🔍 재검색 (영어만): '{en_only}'")
+                        results = perform_search(en_only, "ko-KR", "multi")
+
+            # 3단계: 시즌제 대응 (숫자 제거)
             if not results:
                 stripped_ct = re.sub(r'\s+\d+$', '', ct).strip()
                 if stripped_ct != ct and len(stripped_ct) >= 2:
-                    log("TMDB", f"재검색 (숫자 제거): '{stripped_ct}'")
+                    log("TMDB", f"🔍 재검색 (숫자 제거): '{stripped_ct}'")
                     results = perform_search(stripped_ct, "ko-KR", "multi")
+
             if not results: results = perform_search(ct, "ko-KR", "tv")
             if not results: results = perform_search(ct, None, "multi")
 
         if results:
             best = results[0]
             m_type, t_id = best.get('media_type'), best.get('id')
-            log("TMDB", f"매칭 성공: '{ct}' -> {m_type}:{t_id}")
+            log("TMDB", f"✅ 매칭 성공: '{ct}' -> {m_type}:{t_id}")
             d_resp = requests.get(f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings,credits", headers=headers, timeout=10).json()
 
             yv = (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0]
@@ -338,8 +372,10 @@ def get_tmdb_info_server(title, ignore_cache=False):
             return info
         else:
             log("TMDB", f"검색 결과 없음: '{ct}'")
+            log_matching_failure(title, ct, "NOT_FOUND_IN_TMDB")
     except:
         log("TMDB", f"에러 발생: {traceback.format_exc()}")
+        log_matching_failure(title, ct, f"API_ERROR: {str(sys.exc_info()[1])}")
     return {"failed": True}
 
 # --- [스캔 및 탐색] ---
@@ -518,14 +554,14 @@ def fetch_metadata_async(force_all=False):
             total_success += batch_success
             total_fail += batch_fail
 
-            log("METADATA", f"진행 상황: 성공 {total_success} / 실패 {total_fail} (진행률: {round((min(i+batch_size, total))/total*100, 1)}%)")
+            log("METADATA", f"📈 진행 상황: 성공 {total_success} / 실패 {total_fail} (진행률: {round((min(i+batch_size, total))/total*100, 1)}%)")
 
             if (i // batch_size) % 10 == 0:
                 log("METADATA", "중간 캐시 갱신 중...")
                 build_all_caches()
 
         build_all_caches()
-        log("METADATA", f"최종 완료: 총 {total_success}개 성공, {total_fail}개 실패")
+        log("METADATA", f"🎊 최종 완료: 총 {total_success}개 성공, {total_fail}개 실패")
     except:
         log("METADATA", f"치명적 에러 발생: {traceback.format_exc()}")
     finally:
@@ -736,14 +772,32 @@ def report_db_status():
         eps = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
         ser = conn.execute("SELECT COUNT(*) FROM series").fetchone()[0]
         mtch = conn.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NOT NULL").fetchone()[0]
-        cch = conn.execute("SELECT COUNT(*) FROM tmdb_cache").fetchone()[0]
-        log("DB", f"STATUS: 에피소드 {eps} / 시리즈 {ser} / 매칭 {mtch} / 캐시 {cch}")
+        log("DB", f"STATUS: 에피소드 {eps} / 시리즈 {ser} / 매칭 성공 {mtch} ({round(mtch/ser*100, 1)}%)")
         conn.close()
     except: pass
 
 def background_init_tasks():
     report_db_status()
     build_all_caches()
+
+@app.route('/api/status')
+def get_server_status():
+    try:
+        conn = get_db()
+        eps = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+        ser = conn.execute("SELECT COUNT(*) FROM series").fetchone()[0]
+        mtch = conn.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NOT NULL").fetchone()[0]
+        fail = conn.execute("SELECT COUNT(*) FROM series WHERE failed = 1").fetchone()[0]
+        conn.close()
+        return jsonify({
+            "total_episodes": eps,
+            "total_series": ser,
+            "matched_series": mtch,
+            "failed_series": fail,
+            "success_rate": f"{round(mtch/ser*100, 1)}%" if ser > 0 else "0%"
+        })
+    except:
+        return jsonify({"error": traceback.format_exc()})
 
 if __name__ == '__main__':
     init_db()
