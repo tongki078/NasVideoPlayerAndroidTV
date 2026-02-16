@@ -25,6 +25,7 @@ import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.util.TitleUtils.isGenericTitle
 import org.nas.videoplayerandroidtv.Screen
+import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(
@@ -41,6 +42,7 @@ fun HomeScreen(
     val standardMargin = 20.dp 
     val rowStates = remember { mutableMapOf<String, LazyListState>() }
     val rowFocusIndices = remember { mutableStateMapOf<String, Int>() }
+    val coroutineScope = rememberCoroutineScope()
 
     var extraSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
 
@@ -116,12 +118,17 @@ fun HomeScreen(
                             series = heroSeries,
                             watchHistory = heroHistory,
                             onPlayClick = { 
-                                if (heroHistory != null && heroHistory.lastPosition > 0) {
-                                    onHistoryClick(heroHistory)
-                                } else {
-                                    val firstEpisode = heroSeries.episodes.firstOrNull()
-                                    if (firstEpisode != null) onPlayClick(firstEpisode)
-                                    else onSeriesClick(heroSeries)
+                                coroutineScope.launch {
+                                    if (heroHistory != null && heroHistory.lastPosition > 0) {
+                                        onHistoryClick(heroHistory)
+                                    } else {
+                                        val seriesDetail = if (heroSeries.episodes.isEmpty()) {
+                                            heroSeries.fullPath?.let { repository.getSeriesDetail(it) }
+                                        } else heroSeries
+
+                                        val firstEpisode = seriesDetail?.episodes?.firstOrNull()
+                                        if (firstEpisode != null) onPlayClick(firstEpisode)
+                                    }
                                 }
                             },
                             onDetailClick = { onSeriesClick(heroSeries) },
