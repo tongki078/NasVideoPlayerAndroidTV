@@ -40,18 +40,27 @@ fun TmdbAsyncImage(
     val cacheKey = remember(title, isAnimation) { if (isAnimation) "ani_$title" else title }
     val metadata = tmdbCache[cacheKey]
     
+    // [수정] 서버에서 이미 posterPath를 줬다면 굳이 앱에서 TMDB 검색(fetch)을 시도하지 않음
     val isFetchingMetadata = remember(metadata, posterPath) { 
-        posterPath == null && metadata == null 
+        (posterPath == null || posterPath == "null" || posterPath.isEmpty()) && metadata == null 
     }
 
     val finalImageUrl = remember(metadata, posterPath, isLarge) {
-        // 1. 이미 완성된 posterUrl이 있다면 그대로 사용
+        // 1. 서버에서 받은 posterPath가 이미 전체 URL인 경우 처리
+        if (posterPath?.startsWith("http") == true) return@remember posterPath
+
+        // 2. 이미 완성된 로컬 캐시 posterUrl이 있다면 그대로 사용
         if (metadata?.posterUrl != null && metadata.posterUrl.startsWith("http")) {
             return@remember metadata.posterUrl
         }
         
-        // 2. posterPath(경로만)가 있는 경우 안전하게 조합
-        val path = posterPath ?: metadata?.posterUrl?.substringAfterLast("/")
+        // 3. posterPath(경로만)가 있는 경우 안전하게 조합 (서버 데이터 우선)
+        val path = if (posterPath != null && posterPath != "null" && posterPath.isNotEmpty()) {
+            posterPath
+        } else {
+            metadata?.posterUrl?.substringAfterLast("/")
+        }
+
         if (path != null && path != "null" && path.isNotEmpty()) {
             val size = if (isLarge) TMDB_POSTER_SIZE_LARGE else TMDB_POSTER_SIZE_MEDIUM
             // TMDB_IMAGE_BASE에 슬래시가 포함되어 있으므로 경로 앞의 슬래시 제거 후 조합

@@ -118,6 +118,14 @@ fun NetflixPivotItem(
     
     val coroutineScope = rememberCoroutineScope()
 
+    // [수정] 서버에서 전달받은 정보가 업데이트되면 로컬 상태도 동기화 (이미 표시되고 있는 정보가 증발하지 않도록)
+    LaunchedEffect(overview, year, rating, initialVideoUrl) {
+        if (itemOverview.isNullOrBlank()) itemOverview = overview
+        if (itemYear.isNullOrBlank()) itemYear = year
+        if (itemRating.isNullOrBlank()) itemRating = rating
+        if (previewUrl.isNullOrBlank()) previewUrl = initialVideoUrl
+    }
+
     LaunchedEffect(isFocused) {
         if (isFocused) {
             try {
@@ -125,16 +133,18 @@ fun NetflixPivotItem(
             } catch (_: Exception) {}
             
             delay(500)
-            if (isFocused && (previewUrl == null || itemOverview == null) && categoryPath != null) {
+            // [수정] 포커스 시 데이터가 정말 없을 때만 서버에서 상세 정보를 가져오도록 최적화
+            // 이미 정보가 있다면(itemOverview != null) 불필요한 네트워크 요청 방지
+            if (isFocused && categoryPath != null && (itemOverview.isNullOrBlank() || previewUrl == null)) {
                 coroutineScope.launch {
                     try {
-                        val details = repository.getCategoryList(categoryPath, 1, 0)
-                        val cat = details.firstOrNull()
-                        if (cat != null) {
-                            if (previewUrl == null) previewUrl = cat.movies?.find { !it.videoUrl.isNullOrEmpty() }?.videoUrl
-                            if (itemOverview == null) itemOverview = cat.overview
-                            if (itemYear == null) itemYear = cat.year
-                            if (itemRating == null) itemRating = cat.rating
+                        val details = repository.getSeriesDetail(categoryPath)
+                        if (details != null) {
+                            // 기존 정보가 비어있을 때만 업데이트하여 데이터 깜빡임 및 유실 방지
+                            if (previewUrl == null) previewUrl = details.episodes.find { !it.videoUrl.isNullOrEmpty() }?.videoUrl
+                            if (itemOverview.isNullOrBlank()) itemOverview = details.overview
+                            if (itemYear.isNullOrBlank()) itemYear = details.year
+                            if (itemRating.isNullOrBlank()) itemRating = details.rating
                         }
                     } catch (_: Exception) {}
                 }

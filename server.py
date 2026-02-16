@@ -29,7 +29,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "137.16" # 버전 업그레이드
+CACHE_VERSION = "137.19" # 로깅 강화 버전
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -69,7 +69,6 @@ _SECTION_CACHE = {} # 카테고리 섹션 결과 캐시 추가
 _DETAIL_CACHE = deque(maxlen=200)
 
 THUMB_SEMAPHORE = threading.Semaphore(4)
-# [추가] 백그라운드 썸네일 생성을 위한 전용 스레드 풀
 THUMB_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 
 def log(tag, msg):
@@ -77,17 +76,14 @@ def log(tag, msg):
     print(f"[{timestamp}] [{tag}] {msg}", flush=True)
 
 def log_matching_failure(orig, cleaned, reason):
-    """[추가] 매칭 실패 내용을 파일에 기록하여 AI 분석 지원"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
-        # 파일이 생성되었는지 로그로 확인
         with open(FAILURE_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(f"[{timestamp}] [FAIL] ORIG: {orig} | CLEANED: {cleaned} | REASON: {reason}\n")
     except Exception as e:
         log("LOG_ERROR", f"실패 로그 파일 쓰기 중 에러: {str(e)}")
 
 def log_matching_success(orig, cleaned, matched, tmdb_id):
-    """[추가] 매칭 성공 내용을 파일에 기록하여 학습 데이터 확보"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         with open(SUCCESS_LOG_PATH, "a", encoding="utf-8") as f:
@@ -109,19 +105,16 @@ def get_db():
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
-    # 테이블 생성
     cursor.execute('CREATE TABLE IF NOT EXISTS series (path TEXT PRIMARY KEY, category TEXT, name TEXT, posterPath TEXT, year TEXT, overview TEXT, rating TEXT, seasonCount INTEGER, genreIds TEXT, genreNames TEXT, director TEXT, actors TEXT, failed INTEGER DEFAULT 0, tmdbId TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS episodes (id TEXT PRIMARY KEY, series_path TEXT, title TEXT, videoUrl TEXT, thumbnailUrl TEXT, overview TEXT, air_date TEXT, season_number INTEGER, episode_number INTEGER, FOREIGN KEY (series_path) REFERENCES series (path) ON DELETE CASCADE)')
     cursor.execute('CREATE TABLE IF NOT EXISTS tmdb_cache (h TEXT PRIMARY KEY, data TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS server_config (key TEXT PRIMARY KEY, value TEXT)')
 
-    # 인덱스 생성
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_category ON series(category)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_name ON series(name)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_tmdbId ON series(tmdbId)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series ON episodes(series_path)')
 
-    # 누락된 컬럼 동적 추가 (PRAGMA 사용으로 최적화)
     def add_col_if_missing(table, col, type):
         cursor.execute(f"PRAGMA table_info({table})")
         cols = [c[1] for c in cursor.fetchall()]
@@ -129,11 +122,10 @@ def init_db():
             log("DB", f"컬럼 추가: {table}.{col}")
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {type}")
 
-    add_col_if_missing('series', 'tmdbId', 'TEXT') # [중요] 누락 시 매칭 안됨
+    add_col_if_missing('series', 'tmdbId', 'TEXT')
     add_col_if_missing('series', 'genreNames', 'TEXT')
     add_col_if_missing('series', 'director', 'TEXT')
     add_col_if_missing('series', 'actors', 'TEXT')
-    # [추가] 정제 제목 캐싱 컬럼
     add_col_if_missing('series', 'cleanedName', 'TEXT')
     add_col_if_missing('series', 'yearVal', 'TEXT')
 
@@ -142,7 +134,6 @@ def init_db():
     add_col_if_missing('episodes', 'season_number', 'INTEGER')
     add_col_if_missing('episodes', 'episode_number', 'INTEGER')
 
-    # 인덱스 보강
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cleanedName ON series(cleanedName)')
 
     conn.commit()
@@ -186,26 +177,20 @@ def migrate_json_to_db():
 # --- [정규식 및 클리닝 대폭 강화] ---
 REGEX_EXT = re.compile(r'\.[a-zA-Z0-9]{2,4}$')
 REGEX_YEAR = re.compile(r'\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)')
-REGEX_CH_PREFIX = re.compile(r'^\[(?:KBS|SBS|MBC|tvN|JTBC|OCN|Mnet|TV조선|채널A|MBN|ENA|KBS2|KBS1|CH\d+|TV)\]\s*')
-# 기술 태그 및 국가 약어 보강 (LIMITED, RM4K, DC, THEATRICAL 등 로그 기반 보강)
-REGEX_TECHNICAL_TAGS = re.compile(r'(?i)[.\s_-](?!(?:\d+\b))(\d{3,4}p|FHD|QHD|UHD|4K|Bluray|Blu-ray|WEB-DL|WEBRip|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AVC|AAC\d?|DTS-?H?D?|AC3|DDP\d?|DD\+\d?|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|HDR(?:10)?(?:\+)?|Vision|Dolby|NF|AMZN|HMAX|DSNP|AppleTV?|Disney|PCOK|playWEB|ATVP|HULU|HDTV|HD|KBS|SBS|MBC|TVN|JTBC|NEXT|ST|SW|KL|YT|MVC|KN|FLUX|hallowed|PiRaTeS|Jadewind|Movie|pt\s*\d+|KOREAN|KOR|ITALIAN|JAPANESE|JPN|CHINESE|CHN|ENGLISH|ENG|USA|HK|TW|FRENCH|GERMAN|SPANISH|THAI|VIETNAMESE|WEB|DL|TVRip|HDR10Plus|IMAX|Unrated|REMASTERED|Criterion|NonDRM|BRRip|1080i|720i|국어|Mandarin|Cantonese|FanSub|VFQ|VF|2CH|5\.1CH|8m|2398|PROPER|PROMO|LIMITED|RM4K|DC|THEATRICAL|EXTENDED|FINAL|DUB|KORDUB|JAPDUB|ENGDUB|ARROW|EDITION|SPECIAL|COLLECTION|RETAIL)(\b|$|[.\s_-])')
+REGEX_CH_PREFIX = re.compile(r'^\[(?:KBS|SBS|MBC|tvN|JTBC|OCN|Mnet|TV조선|채널A|MBN|ENA|KBS2|KBS1|CH\d+|TV|Netflix|Disney\+|AppleTV|NET|Wavve|Tving|Coupang)\]\s*')
+REGEX_TECHNICAL_TAGS = re.compile(r'(?i)[.\s_-](?!(?:\d+\b))(\d{3,4}p|2160p|FHD|QHD|UHD|4K|Bluray|Blu-ray|WEB-DL|WEBRip|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AVC|AAC\d?|DTS-?H?D?|AC3|DDP\d?|DD\+\d?|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|HDR(?:10)?(?:\+)?|Vision|Dolby|NF|AMZN|HMAX|DSNP|AppleTV?|Disney|PCOK|playWEB|ATVP|HULU|HDTV|HD|KBS|SBS|MBC|TVN|JTBC|NEXT|ST|SW|KL|YT|MVC|KN|FLUX|hallowed|PiRaTeS|Jadewind|Movie|pt\s*\d+|KOREAN|KOR|ITALIAN|JAPANESE|JPN|CHINESE|CHN|ENGLISH|ENG|USA|HK|TW|FRENCH|GERMAN|SPANISH|THAI|VIETNAMESE|WEB|DL|TVRip|HDR10Plus|IMAX|Unrated|REMASTERED|Criterion|NonDRM|BRRip|1080i|720i|국어|Mandarin|Cantonese|FanSub|VFQ|VF|2CH|5\.1CH|8m|2398|PROPER|PROMO|LIMITED|RM4K|DC|THEATRICAL|EXTENDED|FINAL|DUB|KORDUB|JAPDUB|ENGDUB|ARROW|EDITION|SPECIAL|COLLECTION|RETAIL|TVING|WAVVE|Coupang|CP|B-Global|TrueHD|E-AC3|EAC3|DV|Dual-Audio|Multi-Audio|Multi-Sub)(\b|$|[.\s_-])')
 
-# [수정] 에피소드 마커 정규식 강화 (제/화/話/S/E 및 범위 표시 지원, CJK 지원 확장)
 REGEX_EP_MARKER_STRICT = re.compile(r'(?i)(?:^|[.\s_-]|[가-힣\u3040-\u30ff\u4e00-\u9fff])(?:第?\s*S(\d+)E(\d+)(?:[-~]E?\d+)?|第?\s*S(\d+)|第?\s*E(\d+)(?:[-~]\d+)?|\d+\s*(?:화|회|기|부|話)|Season\s*\d+|Part\s*\d+|pt\s*\d+|Episode\s*\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+|시즌\s*\d+|[상하]부|최종화|\d{6}|\d{8})')
 
 REGEX_DATE_YYMMDD = re.compile(r'(?<!\d)\d{6}(?!\d)')
-# 금지 단어: 검색 실패의 90%인 부가 영상을 패턴 검색으로 완벽 차단
 REGEX_FORBIDDEN_CONTENT = re.compile(r'(?i)(Storyboard|Behind the Scenes|Making of|Deleted Scenes|Alternate Scenes|Gag Reel|Gag Menu|Digital Hits|Trailer|Bonus|Extras|Gallery|Production|Visual Effects|VFX|등급고지|예고편|개봉버전|인터뷰|삭제장면|(?<!\S)[상하](?!\S))')
 REGEX_FORBIDDEN_TITLE = re.compile(r'(?i)^\s*(Season\s*\d+|Part\s*\d+|EP\s*\d+|\d+화|\d+회|\d+기|시즌\s*\d+|S\d+|E\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+|Specials?|Extras?|Bonus|미분류|기타|새\s*폴더|VIDEO|GDS3|GDRIVE|NAS|share|영화|외국TV|국내TV|애니메이션|방송중|제목|UHD|최신|최신작|최신영화|4K|1080P|720P)\s*$', re.I)
 
-# [수정] 일본어 전각 괄호(（ ）) 포함
-REGEX_BRACKETS = re.compile(r'\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\)|$)|\【.*?(?:\】|$)|\『.*?(?:\』|$)|\「.*?(?:\」|$)|\（.*?(?:\）|$)')
+REGEX_BRACKETS = re.compile(r'\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\)|$)|\{.*?(?:\)|$)|\【.*?(?:\】|$)|\『.*?(?:\』|$)|\「.*?(?:\」|$)|\（.*?(?:\）|$)')
 REGEX_TMDB_HINT = re.compile(r'\{tmdb[\s-]*(\d+)\}')
 REGEX_JUNK_KEYWORDS = re.compile(r'(?i)\s*(?:더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|익스텐디드|등급고지|예고편|(?<!\S)[상하](?!\S))\s*')
 
-# [수정] 특수문자 제거 대상에 전각 괄호 추가
-REGEX_SPECIAL_CHARS = re.compile(r'[\[\]()_\-!?【】『』「」"\'#@*※×,~:;（）]')
-# [학습] 앞부분 숫자/인덱스 제거 정규식 강화 (08038 포켓몬스터 -> 포켓몬스터)
+REGEX_SPECIAL_CHARS = re.compile(r'[\[\]()_\-\.!#@*※×,~:;【】『』「」"\'（）]')
 REGEX_LEADING_INDEX = re.compile(r'^\s*(\d{1,5}(?:\s+|[.\s_-]+|(?=[가-힣a-zA-Z])))|^\s*(\d{1,5}\. )')
 REGEX_SPACES = re.compile(r'\s+')
 
@@ -213,7 +198,6 @@ def clean_title_complex(title):
     if not title: return "", None
     orig_title = nfc(title)
 
-    # [차단] 부가 영상 키워드 감지 시 즉시 제외하여 성공률 보존 및 리소스 절약
     if REGEX_FORBIDDEN_CONTENT.search(orig_title):
         return "", None
 
@@ -225,7 +209,6 @@ def clean_title_complex(title):
 
     ep_match = REGEX_EP_MARKER_STRICT.search(cleaned)
     if ep_match:
-        # [학습] 앞에 붙은 에피소드 마커 처리 (S08E027 포켓몬스터 -> 포켓몬스터)
         if ep_match.start() < 5:
             cleaned = cleaned[ep_match.end():].strip()
         else:
@@ -235,11 +218,8 @@ def clean_title_complex(title):
     if tech_match:
         cleaned = cleaned[:tech_match.start()].strip()
 
-    # [학습] 한글/일어/영어/숫자 경계에 공백 삽입하여 TMDB 검색률 극대화
-    # 한글/일어 - 영어
     cleaned = re.sub(r'([가-힣\u3040-\u30ff\u4e00-\u9fff])([a-zA-Z])', r'\1 \2', cleaned)
     cleaned = re.sub(r'([a-zA-Z])([가-힣\u3040-\u30ff\u4e00-\u9fff])', r'\1 \2', cleaned)
-    # 한글/일어/영어 - 숫자
     cleaned = re.sub(r'([가-힣\u3040-\u30ff\u4e00-\u9fff\w])(\d+)', r'\1 \2', cleaned)
     cleaned = re.sub(r'(\d+)([가-힣\u3040-\u30ff\u4e00-\u9fff\w])', r'\1 \2', cleaned)
 
@@ -248,7 +228,6 @@ def clean_title_complex(title):
     year = year_match.group().replace('(', '').replace(')', '') if year_match else None
     cleaned = REGEX_YEAR.sub(' ', cleaned)
 
-    # [학습] 만약 모든 정제 후 남은 제목이 너무 짧으면, 삭제했던 괄호 안의 내용을 복구 시도 (Recovery Logic)
     if len(cleaned.strip()) < 2:
         brackets = re.findall(r'\[(.*?)\]|\((.*?)\)|（(.*?)）', orig_title)
         for b in brackets:
@@ -265,7 +244,7 @@ def clean_title_complex(title):
     cleaned = re.sub(r'([가-힣a-zA-Z\u3040-\u30ff\u4e00-\u9fff])(\d+)$', r'\1 \2', cleaned)
     cleaned = REGEX_SPACES.sub(' ', cleaned).strip()
 
-    if len(cleaned) < 2:
+    if len(cleaned) < 1:
         return "", None
     return nfc(cleaned), year
 
@@ -288,7 +267,13 @@ def extract_tmdb_id(title):
     match = REGEX_TMDB_HINT.search(nfc(title))
     return int(match.group(1)) if match else None
 
-# --- [TMDB API 보완: 지능형 재검색] ---
+def simple_similarity(s1, s2):
+    s1, s2 = s1.lower().replace(" ", ""), s2.lower().replace(" ", "")
+    if s1 == s2: return 1.0
+    if s1 in s2 or s2 in s1: return 0.8
+    return 0.0
+
+# --- [TMDB API 보완: 지능형 재검색 및 랭킹 시스템] ---
 def get_tmdb_info_server(title, ignore_cache=False):
     if not title: return {"failed": True}
     hint_id = extract_tmdb_id(title)
@@ -309,75 +294,95 @@ def get_tmdb_info_server(title, ignore_cache=False):
             conn.close()
             if row:
                 data = json.loads(row['data'])
-                # [최적화] 실패 결과도 캐시에서 즉시 반환하여 반복 작업 방지
                 TMDB_MEMORY_CACHE[h] = data
                 return data
         except: pass
 
-    log("TMDB", f"🔍 검색 시작: '{ct}'" + (f" ({year})" if year else ""))
+    log("TMDB", f"🔍 지능형 검색 시작: '{ct}'" + (f" ({year})" if year else ""))
     headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
     base_params = {"include_adult": "true", "region": "KR"}
 
-    def perform_search(query, lang=None, m_type='multi'):
+    def perform_search(query, lang=None, m_type='multi', search_year=None):
         if not query or len(query) < 2: return []
         params = {**base_params, "query": query}
         if lang: params["language"] = lang
-        if year: params["year"] = year
+        if search_year:
+            params['year' if m_type != 'tv' else 'first_air_date_year'] = search_year
         try:
             r = requests.get(f"{TMDB_BASE_URL}/search/{m_type}", params=params, headers=headers, timeout=10)
-            if r.status_code != 200: return []
-            items = r.json().get('results', [])
-            if m_type == 'multi': return [i for i in items if i.get('media_type') in ['movie', 'tv']]
-            for i in items: i['media_type'] = m_type
-            return items
+            return r.json().get('results', []) if r.status_code == 200 else []
         except: return []
 
+    def rank_results(results, target_title, target_year):
+        if not results: return None
+        scored = []
+        for res in results:
+            if res.get('media_type') == 'person': continue
+            score = 0
+            res_title = res.get('title') or res.get('name') or ""
+            res_year = (res.get('release_date') or res.get('first_air_date') or "").split('-')[0]
+
+            sim = simple_similarity(target_title, res_title)
+            score += sim * 60
+
+            if target_year and res_year:
+                if target_year == res_year: score += 30
+                elif abs(int(target_year) - int(res_year)) <= 1: score += 15
+            elif not target_year:
+                score += 10
+
+            score += min(res.get('popularity', 0) / 10, 10)
+            if res.get('poster_path'): score += 5
+
+            scored.append((score, res))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return scored[0][1] if scored and scored[0][0] > 30 else None
+
     try:
-        results = []
+        best_match = None
         if hint_id:
             log("TMDB", f"💡 힌트 ID 사용: {hint_id}")
             for mt in ['movie', 'tv']:
                 resp = requests.get(f"{TMDB_BASE_URL}/{mt}/{hint_id}", params={"language": "ko-KR", **base_params}, headers=headers, timeout=10)
                 if resp.status_code == 200:
-                    best = resp.json()
-                    best['media_type'] = mt
-                    results = [best]
+                    best_match = resp.json()
+                    best_match['media_type'] = mt
                     break
 
-        if not results:
-            # 1단계: 정제된 제목으로 검색
-            results = perform_search(ct, "ko-KR", "multi")
+        if not best_match:
+            results = perform_search(ct, "ko-KR", "multi", year)
+            best_match = rank_results(results, ct, year)
 
-            # 2단계: 실패 시 제목 분할 검색 (한글/영어/일어 혼용 대응)
-            if not results:
-                # [학습] 한글/일어만 추출 (숫자 완벽 배제하여 '08038 포켓몬스터' -> '포켓몬스터' 유도)
+            if not best_match and year:
+                log("TMDB", f"🔄 연도 제외 재검색: '{ct}'")
+                results = perform_search(ct, "ko-KR", "multi", None)
+                best_match = rank_results(results, ct, year)
+
+            if not best_match:
+                parts = re.split(r'[-:]', ct)
+                if len(parts) > 1 and len(parts[0].strip()) >= 2:
+                    main_title = parts[0].strip()
+                    log("TMDB", f"🔄 주제목 검색: '{main_title}'")
+                    results = perform_search(main_title, "ko-KR", "multi", year)
+                    best_match = rank_results(results, main_title, year)
+
+            if not best_match:
                 cjk_only = "".join(re.findall(r'[가-힣\u3040-\u30ff\u4e00-\u9fff\s]+', ct)).strip()
                 if cjk_only and len(cjk_only) >= 2 and cjk_only != ct:
-                    log("TMDB", f"🔄 재검색 (CJK만): '{cjk_only}'")
-                    results = perform_search(cjk_only, "ko-KR", "multi")
+                    results = perform_search(cjk_only, "ko-KR", "multi", year)
+                    best_match = rank_results(results, cjk_only, year)
 
-                # 실패 시 영어만 추출
-                if not results:
-                    en_only = "".join(re.findall(r'[a-zA-Z\s]+', ct)).strip()
-                    if en_only and len(en_only) >= 3:
-                        log("TMDB", f"🔄 재검색 (영어만): '{en_only}'")
-                        results = perform_search(en_only, "ko-KR", "multi")
+            if not best_match:
+                en_only = "".join(re.findall(r'[a-zA-Z\s]+', ct)).strip()
+                if en_only and len(en_only) >= 3:
+                    results = perform_search(en_only, "ko-KR", "multi", year)
+                    best_match = rank_results(results, en_only, year)
 
-            # 3단계: 시즌제 대응 (숫자 제거)
-            if not results:
-                stripped_ct = re.sub(r'\s+\d+$', '', ct).strip()
-                if stripped_ct != ct and len(stripped_ct) >= 2:
-                    log("TMDB", f"🔄 재검색 (숫자 제거): '{stripped_ct}'")
-                    results = perform_search(stripped_ct, "ko-KR", "multi")
-
-            if not results: results = perform_search(ct, "ko-KR", "tv")
-            if not results: results = perform_search(ct, None, "multi")
-
-        if results:
-            best = results[0]
-            m_type, t_id = best.get('media_type'), best.get('id')
+        if best_match:
+            m_type, t_id = best_match.get('media_type') or ('movie' if best_match.get('title') else 'tv'), best_match.get('id')
             log("TMDB", f"✅ 매칭 성공: '{ct}' -> {m_type}:{t_id}")
-            log_matching_success(title, ct, best.get('title') or best.get('name'), f"{m_type}:{t_id}")
+            log_matching_success(title, ct, best_match.get('title') or best_match.get('name'), f"{m_type}:{t_id}")
             d_resp = requests.get(f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings,credits", headers=headers, timeout=10).json()
 
             yv = (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0]
@@ -427,7 +432,6 @@ def get_tmdb_info_server(title, ignore_cache=False):
         else:
             log("TMDB", f"❌ 검색 결과 없음: '{ct}'")
             log_matching_failure(title, ct, "NOT_FOUND_IN_TMDB")
-            # [추가] 실패 결과도 캐싱하여 반복적인 낭비 방지
             try:
                 conn = get_db()
                 conn.execute('INSERT OR REPLACE INTO tmdb_cache (h, data) VALUES (?, ?)', (h, json.dumps({"failed": True})))
@@ -475,7 +479,6 @@ def scan_recursive_to_db(bp, prefix, category):
         name = os.path.splitext(os.path.basename(fp))[0]
         spath = f"{category}/{rel}"
 
-        # [최적화] 삽입 시점에 제목 정제 미리 수행 (나중에 다시 안해도 됨)
         ct, yr = clean_title_complex(name)
         cursor.execute('INSERT OR IGNORE INTO series (path, category, name, cleanedName, yearVal) VALUES (?, ?, ?, ?, ?)', (spath, category, name, ct, yr))
 
@@ -530,13 +533,21 @@ def fetch_metadata_async(force_all=False):
     log("METADATA", f"⚙️ 병렬 매칭 프로세스 시작 (force_all={force_all})")
     try:
         conn = get_db()
-        # [핵심 수정] force_all이더라도 이미 성공한 tmdbId는 유지하고 실패 항목만 초기화
+        # [로그 강화] 작업 시작 전 현재 DB 통계 파악
+        cursor = conn.cursor()
+        t_all = cursor.execute("SELECT COUNT(*) FROM series").fetchone()[0]
+        t_ok = cursor.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NOT NULL").fetchone()[0]
+        t_fail = cursor.execute("SELECT COUNT(*) FROM series WHERE failed = 1").fetchone()[0]
+        t_wait = cursor.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NULL AND failed = 0").fetchone()[0]
+        t_rate = (t_ok / t_all * 100) if t_all > 0 else 0
+
+        log("METADATA_STATS", f"📊 [작업 전 통계] 전체: {t_all} | 성공: {t_ok} | 실패: {t_fail} | 대기: {t_wait} | 성공률: {round(t_rate, 2)}%")
+
         if force_all:
             log("METADATA", "🧹 실패한 항목 초기화 및 재시도 준비 (성공 항목 보존)...")
             conn.execute('UPDATE series SET failed=0 WHERE tmdbId IS NULL')
             conn.commit()
 
-        # [최적화] 누락된 정제 제목 필드 채우기 (매칭되지 않은 항목만 대상으로)
         uncleaned_names_rows = conn.execute('SELECT name FROM series WHERE cleanedName IS NULL AND tmdbId IS NULL AND failed = 0 GROUP BY name').fetchall()
         if uncleaned_names_rows:
             log("METADATA", f"🧪 누락된 항목 제목 정제 중 ({len(uncleaned_names_rows)}개 고유 제목)...")
@@ -549,7 +560,6 @@ def fetch_metadata_async(force_all=False):
             conn.commit()
 
         log("METADATA", "📂 DB에서 매칭되지 않은 작품 목록 불러오는 중...")
-        # [중요] tmdbId가 이미 있는 항목은 절대 다시 건드리지 않음 (비효율 제거)
         all_names_rows = conn.execute('SELECT name FROM series WHERE tmdbId IS NULL AND failed = 0').fetchall()
 
         if not all_names_rows:
@@ -559,9 +569,6 @@ def fetch_metadata_async(force_all=False):
             build_all_caches()
             return
 
-        log("METADATA", f"🧩 총 {len(all_names_rows)}개 파일에 대해 그룹화 시작 (이미 성공한 매칭 제외)")
-
-        # [최적화] SQL 그룹화를 통해 메모리 사용량 및 그룹화 속도 100배 개선
         group_rows = conn.execute('''
             SELECT cleanedName, yearVal, MIN(name) as sample_name, GROUP_CONCAT(name, '|') as orig_names
             FROM series
@@ -607,7 +614,6 @@ def fetch_metadata_async(force_all=False):
                 orig_names = task['orig_names']
                 if info.get('failed'):
                     batch_fail += 1
-                    # [최적화] 매칭 안된 것은 failed=1
                     cursor.executemany('UPDATE series SET failed=1 WHERE name=?', [(n,) for n in orig_names])
                 else:
                     batch_success += 1
@@ -643,21 +649,29 @@ def fetch_metadata_async(force_all=False):
             total_success += batch_success
             total_fail += batch_fail
 
-            log("METADATA", f"📈 진행 상황: ✅ 성공 {total_success} / ❌ 실패 {total_fail} (진행률: {round((min(i+batch_size, total))/total*100, 1)}%)")
+            log("METADATA", f"📈 진행 상황: ✅ 이번 배치 성공 {batch_success} / ❌ 실패 {batch_fail} (누적: ✅ {total_success} / ❌ {total_fail})")
 
             if (i // batch_size) % 10 == 0:
                 log("METADATA", "♻️ 중간 캐시 갱신 중...")
                 build_all_caches()
 
         build_all_caches()
-        log("METADATA", f"🎊 최종 완료: 총 ✅ {total_success}개 성공, ❌ {total_fail}개 실패")
+
+        # [로그 강화] 작업 종료 후 최종 통계 출력
+        conn = get_db()
+        cursor = conn.cursor()
+        f_ok = cursor.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NOT NULL").fetchone()[0]
+        f_rate = (f_ok / t_all * 100) if t_all > 0 else 0
+        conn.close()
+
+        log("METADATA_STATS", f"🎊 작업 종료! 성공: {t_ok} -> {f_ok} (개선: +{f_ok - t_ok}) | 최종 성공률: {round(f_rate, 2)}%")
+        log("METADATA", f"🏁 최종 완료: 총 ✅ {total_success}개 신규 매칭, ❌ {total_fail}개 실패 유지")
     except:
         log("METADATA", f"⚠️ 치명적 에러 발생: {traceback.format_exc()}")
     finally:
         IS_METADATA_RUNNING = False
         log("METADATA", "🏁 병렬 매칭 프로세스 종료")
 
-# --- [풍성한 섹션화 API] ---
 def get_sections_for_category(cat, kw=None):
     cache_key = f"sections_{cat}_{kw}"
     if cache_key in _SECTION_CACHE:
@@ -729,14 +743,12 @@ def get_series_detail_api():
     series['movies'] = sorted(eps, key=lambda x: natural_sort_key(x['title']))
     conn.close()
 
-    # [획기적 개선] 상세 정보 로딩 시 백그라운드에서 썸네일 선제 생성 시작
     for ep in series['movies']:
         THUMB_EXECUTOR.submit(pre_generate_individual_task, ep['thumbnailUrl'])
 
     _DETAIL_CACHE.append((path, series))
     return gzip_response(series)
 
-# [추가] 백그라운드 썸네일 생성을 위한 헬퍼 함수
 def pre_generate_individual_task(ep_thumb_url):
     try:
         u = urllib.parse.urlparse(ep_thumb_url)
@@ -772,7 +784,6 @@ def rescan_broken():
 def rescan_metadata():
     if IS_METADATA_RUNNING:
         return jsonify({"status": "error", "message": "Metadata process is already running."})
-    # [수정] Full Rematch 시에도 이미 성공한 매칭은 건드리지 않도록 fetch_metadata_async 내부 로직 변경됨
     threading.Thread(target=fetch_metadata_async, args=(True,), daemon=True).start()
     return jsonify({"status": "success", "message": "Scanning for new or failed metadata in background."})
 
@@ -796,7 +807,6 @@ def video_serve():
     except:
         return "Not Found", 404
 
-# [추가/개선] 썸네일 생성 공통 함수 (속도 최적화 및 파라미터화)
 def _generate_thumb_file(path_raw, prefix, tid, t, w):
     tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{w}.jpg")
     if os.path.exists(tp): return tp
@@ -808,8 +818,6 @@ def _generate_thumb_file(path_raw, prefix, tid, t, w):
 
         with THUMB_SEMAPHORE:
             if os.path.exists(tp): return tp
-            # [획기적 최적화] -noaccurate_seek 및 -ss 위치 조정으로 탐색 속도 극대화
-            # scale 알고리즘 fast_bilinear 사용 및 품질 밸런스 조정
             subprocess.run([
                 FFMPEG_PATH, "-y",
                 "-ss", t,
@@ -836,7 +844,6 @@ def thumb_serve():
     tp = _generate_thumb_file(path, prefix, tid, t, w)
     if tp and os.path.exists(tp):
         resp = make_response(send_file(tp, mimetype='image/jpeg'))
-        # [획기적] 브라우저/클라이언트 캐싱 1년 적용. 다음 로딩 시 네트워크 요청 없음
         resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
         return resp
     return "Not Found", 404
@@ -873,11 +880,9 @@ def _rebuild_fast_memory_cache():
     log("CACHE", "⚙️ 경량 메모리 캐시 빌드 시작")
     for cat in ["movies", "foreigntv", "koreantv", "animations_all", "air"]:
         rows_dict = {}
-        # [최적화] overview, genreIds, actors 추가 로드
         all_rows = conn.execute('SELECT path, name, posterPath, year, rating, genreIds, genreNames, director, actors, tmdbId, cleanedName, yearVal, overview FROM series WHERE category = ? ORDER BY name ASC', (cat,)).fetchall()
         for row in all_rows:
             path, name, poster, year, rating, g_ids, g_names, director, actors, t_id, c_name, y_val, overview = row
-            # [최적화] DB 캐시 우선 사용
             if c_name is not None:
                 ct, yr = c_name, y_val
             else:
