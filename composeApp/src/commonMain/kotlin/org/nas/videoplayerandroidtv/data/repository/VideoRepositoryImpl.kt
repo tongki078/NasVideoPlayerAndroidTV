@@ -23,6 +23,20 @@ class VideoRepositoryImpl : VideoRepository {
         return isGenericTitle(n) || n.contains("Search Results", ignoreCase = true)
     }
 
+    private fun Movie.fixUrls(): Movie {
+        val updatedVideoUrl = if (videoUrl != null && !videoUrl.startsWith("http") && videoUrl.isNotEmpty()) {
+            "$baseUrl${if (videoUrl.startsWith("/")) "" else "/"}$videoUrl"
+        } else videoUrl
+        val updatedThumbUrl = if (thumbnailUrl != null && !thumbnailUrl.startsWith("http") && thumbnailUrl.isNotEmpty()) {
+            "$baseUrl${if (thumbnailUrl.startsWith("/")) "" else "/"}$thumbnailUrl"
+        } else thumbnailUrl
+        return this.copy(videoUrl = updatedVideoUrl, thumbnailUrl = updatedThumbUrl)
+    }
+
+    private fun Category.fixUrls(): Category {
+        return this.copy(movies = movies?.map { it.fixUrls() })
+    }
+
     private fun Category.toSeries() = Series(
         title = name ?: "",
         episodes = movies ?: emptyList(),
@@ -47,7 +61,7 @@ class VideoRepositoryImpl : VideoRepository {
             parameter("offset", offset)
         }.body<List<Category>>()
         
-        response.filter { !isGenericFolder(it.name) }.map { it.toSeries() }
+        response.filter { !isGenericFolder(it.name) }.map { it.fixUrls().toSeries() }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         emptyList()
@@ -62,14 +76,7 @@ class VideoRepositoryImpl : VideoRepository {
         }.body<List<HomeSection>>()
         
         response.map { section ->
-            val filteredItems = section.items.filter { !isGenericFolder(it.name) }.map { cat ->
-                val updatedMovies = cat.movies?.map { movie ->
-                    if (movie.videoUrl != null && !movie.videoUrl.startsWith("http")) {
-                        movie.copy(videoUrl = "$baseUrl${if (movie.videoUrl.startsWith("/")) "" else "/"}${movie.videoUrl}")
-                    } else movie
-                }
-                cat.copy(movies = updatedMovies)
-            }
+            val filteredItems = section.items.filter { !isGenericFolder(it.name) }.map { it.fixUrls() }
             section.copy(items = filteredItems)
         }
     } catch (e: Exception) {
@@ -80,14 +87,7 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getHomeRecommendations(): List<HomeSection> = try {
         val response = client.get("$baseUrl/home").body<List<HomeSection>>()
         response.map { section ->
-            val filteredItems = section.items.filter { !isGenericFolder(it.name) }.map { cat ->
-                val updatedMovies = cat.movies?.map { movie ->
-                    if (movie.videoUrl != null && !movie.videoUrl.startsWith("http")) {
-                        movie.copy(videoUrl = "$baseUrl${if (movie.videoUrl.startsWith("/")) "" else "/"}${movie.videoUrl}")
-                    } else movie
-                }
-                cat.copy(movies = updatedMovies)
-            }
+            val filteredItems = section.items.filter { !isGenericFolder(it.name) }.map { it.fixUrls() }
             section.copy(items = filteredItems)
         }
     } catch (e: Exception) {
@@ -99,7 +99,7 @@ class VideoRepositoryImpl : VideoRepository {
         val response = client.get("$baseUrl/api/series_detail") {
             parameter("path", path)
         }.body<Category>()
-        response.toSeries()
+        response.fixUrls().toSeries()
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         null
@@ -111,7 +111,7 @@ class VideoRepositoryImpl : VideoRepository {
             parameter("limit", limit)
             parameter("offset", offset)
         }.body<List<Category>>()
-        response
+        response.map { it.fixUrls() }
     } catch (e: Exception) { emptyList() }
 
     // --- [카테고리 매핑 수정] ---

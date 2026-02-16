@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
@@ -55,18 +56,18 @@ fun <T> NetflixTvPivotRow(
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .height(300.dp) 
+            .height(300.dp)
             .focusProperties {
                 enter = {
                     val lastIdx = rowFocusIndices[rowKey] ?: 0
                     val visibleItems = state.layoutInfo.visibleItemsInfo
                     val isLastItemVisible = visibleItems.any { it.index == lastIdx }
-                    
+
                     if (isLastItemVisible && lastIdx in focusRequesters.indices) {
                         focusRequesters[lastIdx]
                     } else {
-                        visibleItems.firstOrNull()?.let { 
-                            if (it.index in focusRequesters.indices) focusRequesters[it.index] 
+                        visibleItems.firstOrNull()?.let {
+                            if (it.index in focusRequesters.indices) focusRequesters[it.index]
                             else FocusRequester.Default
                         } ?: FocusRequester.Default
                     }
@@ -75,7 +76,7 @@ fun <T> NetflixTvPivotRow(
         state = state,
         contentPadding = PaddingValues(start = marginValue, end = marginValue, bottom = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically 
+        verticalAlignment = Alignment.CenterVertically
     ) {
         itemsIndexed(items, key = { _, item -> keySelector(item) }) { index, item ->
             Box(modifier = Modifier.onFocusChanged {
@@ -109,38 +110,29 @@ fun NetflixPivotItem(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    
+
     var previewUrl by remember { mutableStateOf(initialVideoUrl) }
     var itemOverview by remember { mutableStateOf(overview) }
     var itemYear by remember { mutableStateOf(year) }
     var itemRating by remember { mutableStateOf(rating) }
     var showPreview by remember { mutableStateOf(false) }
-    
-    val coroutineScope = rememberCoroutineScope()
 
-    // [수정] 서버에서 전달받은 정보가 업데이트되면 로컬 상태도 동기화 (이미 표시되고 있는 정보가 증발하지 않도록)
-    LaunchedEffect(overview, year, rating, initialVideoUrl) {
-        if (itemOverview.isNullOrBlank()) itemOverview = overview
-        if (itemYear.isNullOrBlank()) itemYear = year
-        if (itemRating.isNullOrBlank()) itemRating = rating
-        if (previewUrl.isNullOrBlank()) previewUrl = initialVideoUrl
-    }
+    val coroutineScope = rememberCoroutineScope()
+    var dataLoadingJob by remember { mutableStateOf<Job?>(null) }
+    var previewJob by remember { mutableStateOf<Job?>(null) }
 
     LaunchedEffect(isFocused) {
         if (isFocused) {
             try {
                 state.animateScrollToItem(index, -marginPx)
             } catch (_: Exception) {}
-            
-            delay(500)
-            // [수정] 포커스 시 데이터가 정말 없을 때만 서버에서 상세 정보를 가져오도록 최적화
-            // 이미 정보가 있다면(itemOverview != null) 불필요한 네트워크 요청 방지
-            if (isFocused && categoryPath != null && (itemOverview.isNullOrBlank() || previewUrl == null)) {
-                coroutineScope.launch {
+
+            dataLoadingJob?.cancel()
+            dataLoadingJob = coroutineScope.launch {
+                if (categoryPath != null && (itemOverview.isNullOrBlank() || previewUrl == null)) {
                     try {
                         val details = repository.getSeriesDetail(categoryPath)
                         if (details != null) {
-                            // 기존 정보가 비어있을 때만 업데이트하여 데이터 깜빡임 및 유실 방지
                             if (previewUrl == null) previewUrl = details.episodes.find { !it.videoUrl.isNullOrEmpty() }?.videoUrl
                             if (itemOverview.isNullOrBlank()) itemOverview = details.overview
                             if (itemYear.isNullOrBlank()) itemYear = details.year
@@ -149,10 +141,21 @@ fun NetflixPivotItem(
                     } catch (_: Exception) {}
                 }
             }
-            
-            delay(300)
-            if (previewUrl != null && isFocused) {
-                showPreview = true
+        } else {
+            dataLoadingJob?.cancel()
+            previewJob?.cancel()
+            showPreview = false
+        }
+    }
+
+    LaunchedEffect(isFocused, previewUrl) {
+        previewJob?.cancel()
+        if (isFocused && !previewUrl.isNullOrBlank()) {
+            previewJob = coroutineScope.launch {
+                delay(200) // 짧은 지연 시간 후 미리보기 시작
+                if (isFocused) { // 지연 후에도 포커스가 유지되는지 확인
+                    showPreview = true
+                }
             }
         } else {
             showPreview = false
@@ -160,8 +163,8 @@ fun NetflixPivotItem(
     }
 
     val itemWidth = if (isFocused) 330.dp else 135.dp
-    val posterMaxHeight = 185.dp 
-    val infoAreaHeight = 85.dp 
+    val posterMaxHeight = 185.dp
+    val infoAreaHeight = 85.dp
     val totalItemHeight = posterMaxHeight + infoAreaHeight
 
     Box(
@@ -175,7 +178,7 @@ fun NetflixPivotItem(
                 .fillMaxSize()
                 .focusRequester(focusRequester)
                 .clip(RoundedCornerShape(6.dp))
-                .background(Color.Transparent) 
+                .background(Color.Transparent)
                 .focusable(interactionSource = interactionSource)
                 .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
         ) {
@@ -196,11 +199,11 @@ fun NetflixPivotItem(
                             shape = RoundedCornerShape(6.dp)
                         )
                 ) {
-                    if (showPreview && previewUrl != null) {
+                    if (showPreview && !previewUrl.isNullOrBlank()) {
                         VideoPreview(url = previewUrl!!, modifier = Modifier.fillMaxSize())
                     } else {
                         TmdbAsyncImage(
-                            title = title, 
+                            title = title,
                             posterPath = posterPath,
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Crop
@@ -208,7 +211,7 @@ fun NetflixPivotItem(
                     }
                 }
             }
-            
+
             if (isFocused) {
                 Column(
                     modifier = Modifier
@@ -220,18 +223,18 @@ fun NetflixPivotItem(
                         Text(
                             text = title.cleanTitle(),
                             color = Color.White,
-                            fontSize = 14.sp, 
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
                         )
-                        
+
                         if (!itemYear.isNullOrBlank()) {
                             Spacer(Modifier.width(8.dp))
                             Text(text = itemYear!!, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
                         }
-                        
+
                         if (!itemRating.isNullOrBlank()) {
                             Spacer(Modifier.width(6.dp))
                             Text(text = itemRating!!, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)

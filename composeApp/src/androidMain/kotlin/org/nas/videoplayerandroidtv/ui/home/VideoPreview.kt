@@ -31,25 +31,23 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var isVideoRendered by remember { mutableStateOf(false) }
     var hasSoughtToMiddle by remember { mutableStateOf(false) }
-    val previewDurationMillis = 20000L
-    
+
     val exoPlayer = remember {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
 
-        // 로딩 속도 최적화를 위한 LoadControl 설정
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                5000,  // minBufferMs
-                15000, // maxBufferMs
-                500,   // bufferForPlaybackMs (재생 시작에 필요한 최소 버퍼 - 0.5초로 단축)
-                1000   // bufferForPlaybackAfterRebufferMs
+                500,   // minBufferMs: 버퍼링 시간을 줄여 미리보기를 매우 빠르게 시작합니다.
+                2000,  // maxBufferMs
+                500,   // bufferForPlaybackMs
+                500   // bufferForPlaybackAfterRebufferMs: minBufferMs보다 작거나 같아야 합니다.
             )
             .build()
 
         ExoPlayer.Builder(context)
-            .setLoadControl(loadControl) // 최적화된 로드 컨트롤 적용
+            .setLoadControl(loadControl)
             .setMediaSourceFactory(DefaultMediaSourceFactory(context).setDataSourceFactory(httpDataSourceFactory))
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -60,20 +58,24 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
             )
             .build().apply {
                 playWhenReady = true
-                volume = 1f
-                repeatMode = Player.REPEAT_MODE_ONE
+                volume = 0f // 미리보기는 기본 음소거
+                repeatMode = Player.REPEAT_MODE_ALL
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(state: Int) {
+                        Log.d("VideoPreview", "🎬 재생 상태 변경: $state (URL: $url)")
                         if (state == Player.STATE_READY && !hasSoughtToMiddle) {
                             val duration = duration
                             if (duration > 0 && duration != C.TIME_UNSET) {
-                                seekTo(duration / 3)
+                                // 로딩 속도 개선을 위해 탐색 시간을 1분(60,000ms)으로 조정합니다.
+                                val seekPosition = if (duration > 60000L) 60000L else duration / 4
+                                seekTo(seekPosition)
                                 hasSoughtToMiddle = true
                             }
                         }
                     }
 
                     override fun onRenderedFirstFrame() {
+                        Log.d("VideoPreview", "✅ 첫 프레임 렌더링 완료")
                         isVideoRendered = true
                     }
 
@@ -86,24 +88,18 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
 
     LaunchedEffect(url) {
         if (url.isBlank()) return@LaunchedEffect
+        Log.d("VideoPreview", "🔄 미리보기 로딩 시작: $url")
         isVideoRendered = false
         hasSoughtToMiddle = false
 
         val mediaItem = MediaItem.Builder().setUri(url).build()
         exoPlayer.setMediaItem(mediaItem)
-        
-        // 중요: prepare() 전 미리 하이라이트 지점으로 추정되는 곳을 찍어두면 더 빨리 로딩될 수 있음
-        // (정확한 길이를 모를 경우 일단 prepare 후 seek 유지)
         exoPlayer.prepare()
-        
-        delay(previewDurationMillis)
-        if (exoPlayer.isPlaying) {
-            exoPlayer.pause()
-        }
     }
 
     DisposableEffect(Unit) {
         onDispose {
+            Log.d("VideoPreview", "⏏️ 미리보기 플레이어 해제")
             exoPlayer.stop()
             exoPlayer.release()
         }
