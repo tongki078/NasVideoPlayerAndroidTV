@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.*
 import org.nas.videoplayerandroidtv.domain.model.Series
+import org.nas.videoplayerandroidtv.domain.model.HomeSection
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.common.MovieRow
 import org.nas.videoplayerandroidtv.*
@@ -33,26 +34,30 @@ fun ThemedCategoryScreen(
     repository: VideoRepository,
     selectedMode: Int,
     onModeChange: (Int) -> Unit,
-    cache: MutableMap<String, List<ThemeSection>>, 
+    cache: MutableMap<String, List<HomeSection>>, // ThemeSection -> HomeSection으로 변경
     lazyListState: LazyListState = rememberLazyListState(),
     onSeriesClick: (Series) -> Unit
 ) {
-    val isMovieScreen = categoryName == "영화"
-    val isAniScreen = categoryName == "애니메이션"
-    val isAirScreen = categoryName == "방송중"
-    val isForeignTVScreen = categoryName == "외국TV"
-    val isKoreanTVScreen = categoryName == "국내TV"
+    val categoryKey = when (categoryName) {
+        "영화" -> "movies"
+        "애니메이션" -> "animations_all"
+        "방송중" -> "air"
+        "외국TV" -> "foreigntv"
+        "국내TV" -> "koreantv"
+        else -> "movies"
+    }
 
-    val modes = when {
-        isAirScreen -> listOf("라프텔 애니메이션", "드라마")
-        isAniScreen -> listOf("라프텔", "시리즈")
-        isMovieScreen -> listOf("제목", "UHD", "최신")
-        isForeignTVScreen -> listOf("미국 드라마", "일본 드라마", "중국 드라마", "기타국가 드라마", "다큐")
-        isKoreanTVScreen -> listOf("드라마", "시트콤", "예능", "교양", "다큐멘터리")
+    val modes = when (categoryName) {
+        "방송중" -> listOf("라프텔 애니메이션", "드라마")
+        "애니메이션" -> listOf("라프텔", "시리즈")
+        "영화" -> listOf("제목", "UHD", "최신")
+        "외국TV" -> listOf("미국 드라마", "일본 드라마", "중국 드라마", "기타국가 드라마", "다큐")
+        "국내TV" -> listOf("드라마", "시트콤", "예능", "교양", "다큐멘터리")
         else -> emptyList()
     }
 
-    val cacheKey = "category_${categoryName}_mode_${selectedMode}"
+    val selectedKeyword = modes.getOrNull(selectedMode)
+    val cacheKey = "cat_${categoryKey}_kw_${selectedKeyword}"
     
     var themedSections by remember(cacheKey) { 
         mutableStateOf(cache[cacheKey] ?: emptyList()) 
@@ -64,49 +69,11 @@ fun ThemedCategoryScreen(
         
         isLoading = true
         try {
-            val result = withContext(Dispatchers.IO) {
-                val limit = 500 // 데이터 확보를 위해 limit 상향
-                when {
-                    isMovieScreen -> when (selectedMode) {
-                        0 -> repository.getMoviesByTitle(limit, 0)
-                        1 -> repository.getUhdMovies(limit, 0)
-                        else -> repository.getLatestMovies(limit, 0)
-                    }
-                    isAniScreen -> if (selectedMode == 0) repository.getAnimationsRaftel(limit, 0) else repository.getAnimationsSeries(limit, 0)
-                    isAirScreen -> if (selectedMode == 0) repository.getAnimationsAir() else repository.getDramasAir()
-                    isForeignTVScreen -> when (selectedMode) {
-                        0 -> repository.getFtvUs(limit, 0)
-                        1 -> repository.getFtvJp(limit, 0)
-                        2 -> repository.getFtvCn(limit, 0)
-                        3 -> repository.getFtvEtc(limit, 0)
-                        4 -> repository.getFtvDocu(limit, 0)
-                        else -> emptyList()
-                    }
-                    isKoreanTVScreen -> when (selectedMode) {
-                        0 -> repository.getKtvDrama(limit, 0)
-                        1 -> repository.getKtvSitcom(limit, 0)
-                        2 -> repository.getKtvVariety(limit, 0)
-                        3 -> repository.getKtvEdu(limit, 0)
-                        4 -> repository.getKtvDocu(limit, 0)
-                        else -> emptyList()
-                    }
-                    else -> emptyList()
-                }
+            // [서버 사이드 큐레이션] 모든 분류 로직을 서버로 위임
+            val sections = withContext(Dispatchers.IO) {
+                repository.getCategorySections(categoryKey, selectedKeyword)
             }
-
-            val sections = withContext(Dispatchers.Default) {
-                if (result.isNotEmpty()) {
-                    // 방송중(air) 화면은 기존처럼 전체 목록 유지, 그 외에는 테마별 섹션 적용
-                    if (isAirScreen) {
-                        listOf(ThemeSection("all_list", "전체 목록", result))
-                    } else {
-                        processThemedSections(result)
-                    }
-                } else {
-                    emptyList()
-                }
-            }
-
+            
             themedSections = sections
             cache[cacheKey] = sections
         } catch (e: Exception) {
@@ -139,11 +106,33 @@ fun ThemedCategoryScreen(
                     Text("영상이 없습니다.", color = Color.Gray)
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize(), state = lazyListState, contentPadding = PaddingValues(top = 0.dp, bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    items(themedSections, key = { it.id }) { section ->
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(), 
+                    state = lazyListState, 
+                    contentPadding = PaddingValues(top = 0.dp, bottom = 60.dp), 
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(themedSections, key = { it.title }) { section ->
+                        // 서버에서 받아온 Category 객체들을 Series 객체로 변환하여 MovieRow에 전달
+                        val seriesList = section.items.map { cat ->
+                            Series(
+                                title = cat.name ?: "",
+                                episodes = cat.movies ?: emptyList(),
+                                fullPath = cat.path,
+                                posterPath = cat.posterPath,
+                                genreIds = cat.genreIds ?: emptyList(),
+                                genreNames = cat.genreNames ?: emptyList(),
+                                director = cat.director,
+                                actors = cat.actors ?: emptyList(),
+                                overview = cat.overview,
+                                year = cat.year,
+                                rating = cat.rating
+                            )
+                        }
+                        
                         MovieRow(
                             title = section.title, 
-                            seriesList = section.seriesList, 
+                            seriesList = seriesList,
                             repository = repository,
                             onSeriesClick = onSeriesClick
                         )

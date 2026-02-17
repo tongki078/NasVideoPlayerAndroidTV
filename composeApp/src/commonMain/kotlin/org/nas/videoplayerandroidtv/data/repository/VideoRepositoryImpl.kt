@@ -67,7 +67,7 @@ class VideoRepositoryImpl : VideoRepository {
         emptyList()
     }
 
-    suspend fun fetchCategorySections(categoryKey: String, keyword: String? = null): List<HomeSection> = try {
+    override suspend fun getCategorySections(categoryKey: String, keyword: String?): List<HomeSection> = try {
         val response = client.get("$baseUrl/category_sections") {
             parameter("cat", categoryKey)
             if (keyword != null && keyword != "전체" && keyword != "All") {
@@ -114,38 +114,26 @@ class VideoRepositoryImpl : VideoRepository {
         response.map { it.fixUrls() }
     } catch (e: Exception) { emptyList() }
 
-    // --- [카테고리 매핑 수정] ---
-
-    // 방송중
+    // --- [카테고리 매핑] ---
     override suspend fun getAnimationsAir(): List<Series> = getCategoryListAsSeries("방송중", "라프텔 애니메이션")
     override suspend fun getDramasAir(): List<Series> = getCategoryListAsSeries("방송중", "드라마")
-
-    // 애니 (서버 PATH_MAP에 맞춤: "일본 애니메이션")
     override suspend fun getAnimationsRaftel(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("일본 애니메이션", "라프텔", limit, offset)
     override suspend fun getAnimationsSeries(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("일본 애니메이션", "시리즈", limit, offset)
     override suspend fun getAnimationsAll(): List<Series> = getCategoryListAsSeries("일본 애니메이션", null)
-
-    // 영화
     override suspend fun getMoviesByTitle(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("영화", "제목", limit, offset)
     override suspend fun getUhdMovies(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("영화", "UHD", limit, offset)
     override suspend fun getLatestMovies(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("영화", "최신", limit, offset)
     override suspend fun getPopularMovies(limit: Int, offset: Int): List<Series> = getLatestMovies(limit, offset)
-
-    // 외국TV
     override suspend fun getFtvUs(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("외국TV", "미국 드라마", limit, offset)
     override suspend fun getFtvJp(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("외국TV", "일본 드라마", limit, offset)
     override suspend fun getFtvCn(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("외국TV", "중국 드라마", limit, offset)
     override suspend fun getFtvEtc(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("외국TV", "기타국가 드라마", limit, offset)
     override suspend fun getFtvDocu(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("외국TV", "다큐", limit, offset)
-
-    // 국내TV
     override suspend fun getKtvDrama(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("국내TV", "드라마", limit, offset)
     override suspend fun getKtvSitcom(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("국내TV", "시트콤", limit, offset)
     override suspend fun getKtvVariety(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("국내TV", "예능", limit, offset)
     override suspend fun getKtvEdu(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("국내TV", "교양", limit, offset)
     override suspend fun getKtvDocu(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("국내TV", "다큐멘터리", limit, offset)
-
-    // 기타 (기존 인터페이스 유지)
     override suspend fun getCategoryVideoCount(path: String): Int = 0
     override suspend fun searchVideos(query: String, category: String): List<Series> = emptyList()
     override suspend fun getAnimations(): List<Series> = getAnimationsAll()

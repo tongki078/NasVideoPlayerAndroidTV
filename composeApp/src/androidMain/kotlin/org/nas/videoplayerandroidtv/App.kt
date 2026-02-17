@@ -46,7 +46,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun App(driver: SqlDriver) {
     val repository: VideoRepository = remember { VideoRepositoryImpl() }
-    val repoImpl = repository as VideoRepositoryImpl
     
     setSingletonImageLoaderFactory { ctx -> 
         ImageLoader.Builder(ctx).diskCache { DiskCache.Builder().directory(getImageCacheDirectory(ctx).toPath().resolve("coil_cache")).maxSizeBytes(100 * 1024 * 1024).build() }.crossfade(true).build() 
@@ -104,7 +103,7 @@ fun App(driver: SqlDriver) {
                 if (catKey.isNotEmpty()) {
                     val subModeTitle = if (subModes.isNotEmpty()) subModes[selectedSubMode] else null
                     val sections = if (catKey == "home") repository.getHomeRecommendations() 
-                                   else repoImpl.fetchCategorySections(catKey, subModeTitle)
+                                   else repository.getCategorySections(catKey, subModeTitle)
                     
                     allCategorySections[cacheKey] = sections
                 }
