@@ -29,7 +29,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "137.20" # FFmpeg 경로 탐색 강화 버전
+CACHE_VERSION = "137.21" # 썸네일 고속화 및 TV/영화 구분 강화 버전
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -314,14 +314,17 @@ def simple_similarity(s1, s2):
     return 0.0
 
 # --- [TMDB API 보완: 지능형 재검색 및 랭킹 시스템] ---
-def get_tmdb_info_server(title, ignore_cache=False):
+def get_tmdb_info_server(title, category=None, ignore_cache=False): # category 매개변수 추가
     if not title: return {"failed": True}
     hint_id = extract_tmdb_id(title)
     ct, year = clean_title_complex(title)
     if not ct or REGEX_FORBIDDEN_TITLE.match(ct):
         return {"failed": True, "forbidden": True}
 
-    cache_key = f"{ct}_{year}" if year else ct
+    # 카테고리에 따른 선호 타입 결정 (Taxi Driver 등 동명 타이틀 오매칭 방지)
+    pref_mtype = 'movie' if category == 'movies' else 'tv' if category in ['koreantv', 'foreigntv', 'air', 'animations_all'] else None
+
+    cache_key = f"{ct}_{year}_{category}" if year else f"{ct}_{category}"
     h = hashlib.md5(nfc(cache_key).encode()).hexdigest()
 
     if not ignore_cache and h in TMDB_MEMORY_CACHE:
@@ -338,7 +341,7 @@ def get_tmdb_info_server(title, ignore_cache=False):
                 return data
         except: pass
 
-    log("TMDB", f"🔍 지능형 검색 시작: '{ct}'" + (f" ({year})" if year else ""))
+    log("TMDB", f"🔍 지능형 검색 시작: '{ct}'" + (f" ({year})" if year else "") + (f" [Cat: {category}]" if category else ""))
     headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
     base_params = {"include_adult": "true", "region": "KR"}
 
@@ -354,11 +357,12 @@ def get_tmdb_info_server(title, ignore_cache=False):
             return r.json().get('results', []) if r.status_code == 200 else []
         except: return []
 
-    def rank_results(results, target_title, target_year):
+    def rank_results(results, target_title, target_year, pref_type=None):
         if not results: return None
         scored = []
         for res in results:
             if res.get('media_type') == 'person': continue
+            m_type = res.get('media_type') or ('movie' if res.get('title') else 'tv')
             score = 0
             res_title = res.get('title') or res.get('name') or ""
             res_year = (res.get('release_date') or res.get('first_air_date') or "").split('-')[0]
@@ -375,10 +379,14 @@ def get_tmdb_info_server(title, ignore_cache=False):
             score += min(res.get('popularity', 0) / 10, 10)
             if res.get('poster_path'): score += 5
 
+            # [추가] 선호하는 타입(영화/TV)과 일치할 경우 큰 가중치 부여
+            if pref_type and m_type == pref_type:
+                score += 40
+
             scored.append((score, res))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return scored[0][1] if scored and scored[0][0] > 30 else None
+        return scored[0][1] if scored and scored[0][0] > 35 else None
 
     try:
         best_match = None
@@ -393,12 +401,12 @@ def get_tmdb_info_server(title, ignore_cache=False):
 
         if not best_match:
             results = perform_search(ct, "ko-KR", "multi", year)
-            best_match = rank_results(results, ct, year)
+            best_match = rank_results(results, ct, year, pref_mtype)
 
             if not best_match and year:
                 log("TMDB", f"🔄 연도 제외 재검색: '{ct}'")
                 results = perform_search(ct, "ko-KR", "multi", None)
-                best_match = rank_results(results, ct, year)
+                best_match = rank_results(results, ct, year, pref_mtype)
 
             if not best_match:
                 # [개선] 한글 제목만 추출하여 검색 (특수문자/영어 제외)
@@ -406,7 +414,7 @@ def get_tmdb_info_server(title, ignore_cache=False):
                 if ko_only and ko_only != ct and len(ko_only) >= 2:
                     log("TMDB", f"🔄 한글 부분 재검색: '{ko_only}'")
                     results = perform_search(ko_only, "ko-KR", "multi", year)
-                    best_match = rank_results(results, ko_only, year)
+                    best_match = rank_results(results, ko_only, year, pref_mtype)
 
             if not best_match:
                 # [수정] 원어(일어/한자) 부분 추출 검색 추가
@@ -415,7 +423,7 @@ def get_tmdb_info_server(title, ignore_cache=False):
                     if len(part) >= 2:
                         log("TMDB", f"🔄 원어 부분 검색: '{part}'")
                         results = perform_search(part, None, "multi", year)
-                        best_match = rank_results(results, part, year)
+                        best_match = rank_results(results, part, year, pref_mtype)
                         if best_match: break
 
             if not best_match:
@@ -427,7 +435,7 @@ def get_tmdb_info_server(title, ignore_cache=False):
                         if len(sub_title) >= 2 and not REGEX_FORBIDDEN_TITLE.match(sub_title):
                             log("TMDB", f"🔄 부분 제목 검색: '{sub_title}'")
                             results = perform_search(sub_title, "ko-KR", "multi", year)
-                            best_match = rank_results(results, sub_title, year)
+                            best_match = rank_results(results, sub_title, year, pref_mtype)
                             if best_match: break
 
         if best_match:
@@ -621,10 +629,10 @@ def fetch_metadata_async(force_all=False):
             return
 
         group_rows = conn.execute('''
-            SELECT cleanedName, yearVal, MIN(name) as sample_name, GROUP_CONCAT(name, '|') as orig_names
+            SELECT cleanedName, yearVal, category, MIN(name) as sample_name, GROUP_CONCAT(name, '|') as orig_names
             FROM series
             WHERE tmdbId IS NULL AND failed = 0 AND cleanedName IS NOT NULL
-            GROUP BY cleanedName, yearVal
+            GROUP BY cleanedName, yearVal, category
         ''').fetchall()
         conn.close()
 
@@ -633,6 +641,7 @@ def fetch_metadata_async(force_all=False):
             tasks.append({
                 'clean_title': gr['cleanedName'],
                 'year': gr['yearVal'],
+                'category': gr['category'],
                 'sample_name': gr['sample_name'],
                 'orig_names': gr['orig_names'].split('|')
             })
@@ -641,7 +650,8 @@ def fetch_metadata_async(force_all=False):
         log("METADATA", f"📊 그룹화 완료: {total}개의 고유 작품 식별됨")
 
         def process_one(task):
-            info = get_tmdb_info_server(task['sample_name'], ignore_cache=force_all)
+            # [수정] 카테고리 정보를 넘겨주어 TV/영화 구분 매칭
+            info = get_tmdb_info_server(task['sample_name'], category=task['category'], ignore_cache=force_all)
             return (task, info)
 
         batch_size = 50
@@ -777,14 +787,18 @@ def get_series_detail_api():
         conn.close()
         return gzip_response([])
     series = dict(row)
+    cat = series.get('category')
     for col in ['genreIds', 'genreNames', 'actors']:
         if series.get(col):
             try: series[col] = json.loads(series[col])
             except: series[col] = []
+
+    # [수정] TMDB ID가 같더라도 '같은 카테고리' 내의 에피소드만 가져오도록 변경 (드라마/영화 섞임 방지)
     if series.get('tmdbId'):
-        cursor = conn.execute("SELECT e.* FROM episodes e JOIN series s ON e.series_path = s.path WHERE s.tmdbId = ?", (series['tmdbId'],))
+        cursor = conn.execute("SELECT e.* FROM episodes e JOIN series s ON e.series_path = s.path WHERE s.tmdbId = ? AND s.category = ?", (series['tmdbId'], cat))
     else:
         cursor = conn.execute("SELECT * FROM episodes WHERE series_path = ?", (path,))
+
     eps = []
     seen = set()
     for r in cursor.fetchall():
@@ -877,19 +891,26 @@ def _generate_thumb_file(path_raw, prefix, tid, t, w):
         with THUMB_SEMAPHORE:
             if os.path.exists(tp): return tp
             log("THUMB", f"Generating thumb: {os.path.basename(vp)} at {t}s")
+
+            # [획기적 개선] UHD/고화질 MKV를 위한 FFmpeg 최적화 옵션
+            # 1. -lowres 1: 디코딩 단계에서 해상도를 낮춰 읽어 속도를 수배 향상 (4K 대응 핵심)
+            # 2. -ss 위치: 입력 파일(-i) 앞에 두어 빠른 탐색 (Fast Seek)
+            # 3. -noaccurate_seek: 정확도보다 속도 우선
             result = subprocess.run([
                 FFMPEG_PATH, "-y",
+                "-lowres", "1",           # 1/2 해상도 디코딩 (속도 획기적 향상)
                 "-ss", str(t),
                 "-noaccurate_seek",
                 "-i", vp,
                 "-frames:v", "1",
                 "-map", "0:v:0",
                 "-an", "-sn",
-                "-q:v", "7",
+                "-q:v", "8",              # 품질보다 속도 우선
                 "-vf", f"scale={w}:-1:flags=fast_bilinear",
                 "-threads", "1",
                 tp
             ], timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
             if result.returncode != 0:
                 log("THUMB_ERROR", f"FFmpeg failed: {result.stderr.decode()}")
         return tp if os.path.exists(tp) else None
