@@ -1,5 +1,6 @@
 package org.nas.videoplayerandroidtv.ui.player
 
+import android.util.Log
 import android.view.LayoutInflater
 import androidx.annotation.OptIn
 import androidx.compose.foundation.layout.Box
@@ -78,6 +79,9 @@ actual fun VideoPlayer(
                             currentOnSeekFinished?.invoke()
                         }
                     }
+                    override fun onPlayerError(error: PlaybackException) {
+                        Log.e("VideoPlayer", "ExoPlayer Error: ${error.message}", error)
+                    }
                 })
             }
     }
@@ -120,7 +124,18 @@ actual fun VideoPlayer(
 
     LaunchedEffect(url) {
         if (url.isBlank()) return@LaunchedEffect
-        val mediaItem = MediaItem.Builder().setUri(url).build()
+        Log.d("VideoPlayer", "Playing URL: $url")
+        
+        val mediaItemBuilder = MediaItem.Builder().setUri(url)
+        
+        // URL에 .mkv가 포함되어 있거나 type=ftv, type=movies 등이 포함된 경우 MKV MIME 타입 명시
+        if (url.lowercase().contains(".mkv") || url.contains("type=ftv") || url.contains("type=movie")) {
+            mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MATROSKA)
+        } else if (url.lowercase().contains(".ts") || url.lowercase().contains(".tp") || url.contains("type=air")) {
+            mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
+        }
+        
+        val mediaItem = mediaItemBuilder.build()
         exoPlayer.setMediaItem(mediaItem)
         if (initialPosition > 0) exoPlayer.seekTo(initialPosition)
         exoPlayer.prepare()

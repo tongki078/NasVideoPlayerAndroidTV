@@ -29,7 +29,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "137.19" # 로깅 강화 버전
+CACHE_VERSION = "137.20" # FFmpeg 경로 탐색 강화 버전
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -56,15 +56,17 @@ PATH_MAP = {
 
 EXCLUDE_FOLDERS = ["성인", "19금", "Adult", "@eaDir", "#recycle"]
 VIDEO_EXTS = ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
+
+# [개선] 더 많은 FFmpeg 경로 탐색 (시놀로지 환경 고려)
 FFMPEG_PATH = "ffmpeg"
-for p in ["/usr/local/bin/ffmpeg", "/var/packages/ffmpeg/target/bin/ffmpeg", "/usr/bin/ffmpeg"]:
+for p in ["/usr/local/bin/ffmpeg", "/var/packages/ffmpeg/target/bin/ffmpeg", "/usr/bin/ffmpeg", "/var/packages/VideoStation/target/bin/ffmpeg", "/var/packages/CodecPack/target/bin/ffmpeg"]:
     if os.path.exists(p):
         FFMPEG_PATH = p
         break
 
 # [추가] FFprobe 경로 설정 (스토리보드 생성용)
 FFPROBE_PATH = "ffprobe"
-for p in ["/usr/local/bin/ffprobe", "/var/packages/ffmpeg/target/bin/ffprobe", "/usr/bin/ffprobe"]:
+for p in ["/usr/local/bin/ffprobe", "/var/packages/ffmpeg/target/bin/ffprobe", "/usr/bin/ffprobe", "/var/packages/VideoStation/target/bin/ffprobe"]:
     if os.path.exists(p):
         FFPROBE_PATH = p
         break
@@ -852,9 +854,14 @@ def video_serve():
     path, prefix = request.args.get('path'), request.args.get('type')
     try:
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
-        return send_file(get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path)))), conditional=True)
+        full_path = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path))))
+        if not os.path.exists(full_path):
+             log("VIDEO", f"File not found: {full_path}")
+             return "Not Found", 404
+        return send_file(full_path, conditional=True)
     except:
-        return "Not Found", 404
+        log("VIDEO", f"Error serving video: {traceback.format_exc()}")
+        return "Internal Server Error", 500
 
 def _generate_thumb_file(path_raw, prefix, tid, t, w):
     tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{w}.jpg")
@@ -863,13 +870,16 @@ def _generate_thumb_file(path_raw, prefix, tid, t, w):
     try:
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
         vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
-        if not os.path.exists(vp): return None
+        if not os.path.exists(vp):
+            log("THUMB", f"Video not found for thumb: {vp}")
+            return None
 
         with THUMB_SEMAPHORE:
             if os.path.exists(tp): return tp
-            subprocess.run([
+            log("THUMB", f"Generating thumb: {os.path.basename(vp)} at {t}s")
+            result = subprocess.run([
                 FFMPEG_PATH, "-y",
-                "-ss", t,
+                "-ss", str(t),
                 "-noaccurate_seek",
                 "-i", vp,
                 "-frames:v", "1",
@@ -879,9 +889,12 @@ def _generate_thumb_file(path_raw, prefix, tid, t, w):
                 "-vf", f"scale={w}:-1:flags=fast_bilinear",
                 "-threads", "1",
                 tp
-            ], timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ], timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if result.returncode != 0:
+                log("THUMB_ERROR", f"FFmpeg failed: {result.stderr.decode()}")
         return tp if os.path.exists(tp) else None
     except:
+        log("THUMB_ERROR", f"Exception: {traceback.format_exc()}")
         return None
 
 @app.route('/thumb_serve')
