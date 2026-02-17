@@ -9,10 +9,10 @@ from io import BytesIO
 app = Flask(__name__)
 CORS(app)
 
-# MIME 타입 추가 등록
-if not mimetypes.types_map.get('.mkv'): mimetypes.add_type('video/x-matroska', '.mkv')
-if not mimetypes.types_map.get('.ts'): mimetypes.add_type('video/mp2t', '.ts')
-if not mimetypes.types_map.get('.tp'): mimetypes.add_type('video/mp2t', '.tp')
+# MIME 타입 추가 등록 (강제 적용)
+mimetypes.add_type('video/x-matroska', '.mkv')
+mimetypes.add_type('video/mp2t', '.ts')
+mimetypes.add_type('video/mp2t', '.tp')
 
 # --- [최적화: Gzip 압축 함수 추가] ---
 def gzip_response(data):
@@ -29,7 +29,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "137.19" # 로깅 강화 버전
+CACHE_VERSION = "137.24" # 타임아웃 해결 및 모든 최신 기능 통합 버전
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -56,10 +56,19 @@ PATH_MAP = {
 
 EXCLUDE_FOLDERS = ["성인", "19금", "Adult", "@eaDir", "#recycle"]
 VIDEO_EXTS = ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
+
+# [개선] 더 많은 FFmpeg 경로 탐색 (시놀로지 환경 고려)
 FFMPEG_PATH = "ffmpeg"
-for p in ["/usr/local/bin/ffmpeg", "/var/packages/ffmpeg/target/bin/ffmpeg", "/usr/bin/ffmpeg"]:
+for p in ["/usr/local/bin/ffmpeg", "/var/packages/ffmpeg/target/bin/ffmpeg", "/usr/bin/ffmpeg", "/var/packages/VideoStation/target/bin/ffmpeg", "/var/packages/CodecPack/target/bin/ffmpeg"]:
     if os.path.exists(p):
         FFMPEG_PATH = p
+        break
+
+# [추가] FFprobe 경로 설정 (스토리보드 생성용)
+FFPROBE_PATH = "ffprobe"
+for p in ["/usr/local/bin/ffprobe", "/var/packages/ffmpeg/target/bin/ffprobe", "/usr/bin/ffprobe", "/var/packages/VideoStation/target/bin/ffprobe"]:
+    if os.path.exists(p):
+        FFPROBE_PATH = p
         break
 
 HOME_RECOMMEND = []
@@ -69,6 +78,7 @@ _SECTION_CACHE = {} # 카테고리 섹션 결과 캐시 추가
 _DETAIL_CACHE = deque(maxlen=200)
 
 THUMB_SEMAPHORE = threading.Semaphore(4)
+STORYBOARD_SEMAPHORE = threading.Semaphore(2) # [추가] 스토리보드 생성용 세마포어
 THUMB_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 
 def log(tag, msg):
@@ -98,48 +108,63 @@ def nfd(text):
 
 # --- [DB 관리] ---
 def get_db():
+    # 연결 대기 시간을 60초로 설정 (기본값보다 길게)
     conn = sqlite3.connect(DB_FILE, timeout=60)
     conn.row_factory = sqlite3.Row
+
+    # 동시성 향상을 위해 WAL 모드 활성화 시도
+    try:
+        # WAL 모드 설정 시 락이 걸려도 전체 프로세스가 중단되지 않도록 함
+        conn.execute('PRAGMA journal_mode=WAL')
+        # busy_timeout을 한번 더 명시적으로 설정 (밀리초 단위, 30000ms = 30초)
+        conn.execute('PRAGMA busy_timeout = 30000')
+    except sqlite3.OperationalError as e:
+        log("DB_ERROR", f"WAL 모드 설정 실패 (무시하고 계속): {e}")
+    except Exception as e:
+        log("DB_ERROR", f"기타 DB 설정 오류: {e}")
+
     return conn
 
 def init_db():
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS series (path TEXT PRIMARY KEY, category TEXT, name TEXT, posterPath TEXT, year TEXT, overview TEXT, rating TEXT, seasonCount INTEGER, genreIds TEXT, genreNames TEXT, director TEXT, actors TEXT, failed INTEGER DEFAULT 0, tmdbId TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS episodes (id TEXT PRIMARY KEY, series_path TEXT, title TEXT, videoUrl TEXT, thumbnailUrl TEXT, overview TEXT, air_date TEXT, season_number INTEGER, episode_number INTEGER, FOREIGN KEY (series_path) REFERENCES series (path) ON DELETE CASCADE)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS tmdb_cache (h TEXT PRIMARY KEY, data TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS server_config (key TEXT PRIMARY KEY, value TEXT)')
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('CREATE TABLE IF NOT EXISTS series (path TEXT PRIMARY KEY, category TEXT, name TEXT, posterPath TEXT, year TEXT, overview TEXT, rating TEXT, seasonCount INTEGER, genreIds TEXT, genreNames TEXT, director TEXT, actors TEXT, failed INTEGER DEFAULT 0, tmdbId TEXT)')
+        cursor.execute('CREATE TABLE IF NOT EXISTS episodes (id TEXT PRIMARY KEY, series_path TEXT, title TEXT, videoUrl TEXT, thumbnailUrl TEXT, overview TEXT, air_date TEXT, season_number INTEGER, episode_number INTEGER, FOREIGN KEY (series_path) REFERENCES series (path) ON DELETE CASCADE)')
+        cursor.execute('CREATE TABLE IF NOT EXISTS tmdb_cache (h TEXT PRIMARY KEY, data TEXT)')
+        cursor.execute('CREATE TABLE IF NOT EXISTS server_config (key TEXT PRIMARY KEY, value TEXT)')
 
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_category ON series(category)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_name ON series(name)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_tmdbId ON series(tmdbId)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series ON episodes(series_path)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_category ON series(category)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_name ON series(name)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_tmdbId ON series(tmdbId)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series ON episodes(series_path)')
 
-    def add_col_if_missing(table, col, type):
-        cursor.execute(f"PRAGMA table_info({table})")
-        cols = [c[1] for c in cursor.fetchall()]
-        if col not in cols:
-            log("DB", f"컬럼 추가: {table}.{col}")
-            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {type}")
+        def add_col_if_missing(table, col, type):
+            cursor.execute(f"PRAGMA table_info({table})")
+            cols = [c[1] for c in cursor.fetchall()]
+            if col not in cols:
+                log("DB", f"컬럼 추가: {table}.{col}")
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {type}")
 
-    add_col_if_missing('series', 'tmdbId', 'TEXT')
-    add_col_if_missing('series', 'genreNames', 'TEXT')
-    add_col_if_missing('series', 'director', 'TEXT')
-    add_col_if_missing('series', 'actors', 'TEXT')
-    add_col_if_missing('series', 'cleanedName', 'TEXT')
-    add_col_if_missing('series', 'yearVal', 'TEXT')
+        add_col_if_missing('series', 'tmdbId', 'TEXT')
+        add_col_if_missing('series', 'genreNames', 'TEXT')
+        add_col_if_missing('series', 'director', 'TEXT')
+        add_col_if_missing('series', 'actors', 'TEXT')
+        add_col_if_missing('series', 'cleanedName', 'TEXT')
+        add_col_if_missing('series', 'yearVal', 'TEXT')
 
-    add_col_if_missing('episodes', 'overview', 'TEXT')
-    add_col_if_missing('episodes', 'air_date', 'TEXT')
-    add_col_if_missing('episodes', 'season_number', 'INTEGER')
-    add_col_if_missing('episodes', 'episode_number', 'INTEGER')
+        add_col_if_missing('episodes', 'overview', 'TEXT')
+        add_col_if_missing('episodes', 'air_date', 'TEXT')
+        add_col_if_missing('episodes', 'season_number', 'INTEGER')
+        add_col_if_missing('episodes', 'episode_number', 'INTEGER')
 
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cleanedName ON series(cleanedName)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cleanedName ON series(cleanedName)')
 
-    conn.commit()
-    conn.close()
-    log("DB", "시스템 초기화 및 최적화 완료")
-
+        conn.commit()
+        conn.close()
+        log("DB", "시스템 초기화 및 최적화 완료")
+    except sqlite3.OperationalError as e:
+        log("DB", f"초기화 중 락 발생: {e}. 이미 실행 중인 프로세스가 있는지 확인하세요.")
 # --- [유틸리티] ---
 def get_real_path(path):
     if not path or os.path.exists(path): return path
@@ -178,9 +203,11 @@ def migrate_json_to_db():
 REGEX_EXT = re.compile(r'\.[a-zA-Z0-9]{2,4}$')
 REGEX_YEAR = re.compile(r'\((19|20)\d{2}\)|(?<!\d)(19|20)\d{2}(?!\d)')
 REGEX_CH_PREFIX = re.compile(r'^\[(?:KBS|SBS|MBC|tvN|JTBC|OCN|Mnet|TV조선|채널A|MBN|ENA|KBS2|KBS1|CH\d+|TV|Netflix|Disney\+|AppleTV|NET|Wavve|Tving|Coupang)\]\s*')
-REGEX_TECHNICAL_TAGS = re.compile(r'(?i)[.\s_-](?!(?:\d+\b))(\d{3,4}p|2160p|FHD|QHD|UHD|4K|Bluray|Blu-ray|WEB-DL|WEBRip|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AVC|AAC\d?|DTS-?H?D?|AC3|DDP\d?|DD\+\d?|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|HDR(?:10)?(?:\+)?|Vision|Dolby|NF|AMZN|HMAX|DSNP|AppleTV?|Disney|PCOK|playWEB|ATVP|HULU|HDTV|HD|KBS|SBS|MBC|TVN|JTBC|NEXT|ST|SW|KL|YT|MVC|KN|FLUX|hallowed|PiRaTeS|Jadewind|Movie|pt\s*\d+|KOREAN|KOR|ITALIAN|JAPANESE|JPN|CHINESE|CHN|ENGLISH|ENG|USA|HK|TW|FRENCH|GERMAN|SPANISH|THAI|VIETNAMESE|WEB|DL|TVRip|HDR10Plus|IMAX|Unrated|REMASTERED|Criterion|NonDRM|BRRip|1080i|720i|국어|Mandarin|Cantonese|FanSub|VFQ|VF|2CH|5\.1CH|8m|2398|PROPER|PROMO|LIMITED|RM4K|DC|THEATRICAL|EXTENDED|FINAL|DUB|KORDUB|JAPDUB|ENGDUB|ARROW|EDITION|SPECIAL|COLLECTION|RETAIL|TVING|WAVVE|Coupang|CP|B-Global|TrueHD|E-AC3|EAC3|DV|Dual-Audio|Multi-Audio|Multi-Sub)(\b|$|[.\s_-])')
+# [개선] 기술적 태그: 한글 단어 일부를 태그로 오해하지 않도록 경계 조건 강화
+REGEX_TECHNICAL_TAGS = re.compile(r'(?i)[.\s_-](?!(?:\d+\b))(\d{3,4}p|2160p|FHD|QHD|UHD|4K|Bluray|Blu-ray|WEB-DL|WEBRip|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AVC|AAC\d?|DTS-?H?D?|AC3|DDP\d?|DD\+\d?|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|HDR(?:10)?(?:\+)?|Vision|Dolby|NF|AMZN|HMAX|DSNP|AppleTV?|Disney|PCOK|playWEB|ATVP|HULU|HDTV|HD|KBS|SBS|MBC|TVN|JTBC|NEXT|ST|SW|KL|YT|MVC|KN|FLUX|hallowed|PiRaTeS|Jadewind|Movie|pt\s*\d+|KOREAN|KOR|ITALIAN|JAPANESE|JPN|CHINESE|CHN|ENGLISH|ENG|USA|HK|TW|FRENCH|GERMAN|SPANISH|THAI|VIETNAMESE|WEB|DL|TVRip|HDR10Plus|IMAX|Unrated|REMASTERED|Criterion|NonDRM|BRRip|1080i|720i|국어|Mandarin|Cantonese|FanSub|VFQ|VF|2CH|5\.1CH|8m|2398|PROPER|PROMO|LIMITED|RM4K|DC|THEATRICAL|EXTENDED|FINAL|DUB|KORDUB|JAPDUB|ENGDUB|ARROW|EDITION|SPECIAL|COLLECTION|RETAIL|TVING|WAVVE|Coupang|CP|B-Global|TrueHD|E-AC3|EAC3|DV|Dual-Audio|Multi-Audio|Multi-Sub)(?:\b|[.\s_-]|$)')
 
-REGEX_EP_MARKER_STRICT = re.compile(r'(?i)(?:^|[.\s_-]|[가-힣\u3040-\u30ff\u4e00-\u9fff])(?:第?\s*S(\d+)E(\d+)(?:[-~]E?\d+)?|第?\s*S(\d+)|第?\s*E(\d+)(?:[-~]\d+)?|\d+\s*(?:화|회|기|부|話)|Season\s*\d+|Part\s*\d+|pt\s*\d+|Episode\s*\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+|시즌\s*\d+|[상하]부|최종화|\d{6}|\d{8})')
+# [개선] 에피소드 마커: 날짜(\d{6}, \d{8}) 오탐 방지를 위해 제거하고 순수 에피소드 패턴만 유지
+REGEX_EP_MARKER_STRICT = re.compile(r'(?i)(?:(?<=[\uac00-\ud7af\u3040-\u30ff\u4e00-\u9fff])|[.\s_-]|^)(?:第?\s*S(\d+)E(\d+)(?:[-~]E?\d+)?|第?\s*S(\d+)|第?\s*E(\d+)(?:[-~]\d+)?|\d+\s*(?:화|회|기|부|話)|Season\s*\d+|Part\s*\d+|pt\s*\d+|Episode\s*\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+|시즌\s*\d+|[상하]부|최종화)(?:\b|[.\s_-]|$)')
 
 REGEX_DATE_YYMMDD = re.compile(r'(?<!\d)\d{6}(?!\d)')
 REGEX_FORBIDDEN_CONTENT = re.compile(r'(?i)(Storyboard|Behind the Scenes|Making of|Deleted Scenes|Alternate Scenes|Gag Reel|Gag Menu|Digital Hits|Trailer|Bonus|Extras|Gallery|Production|Visual Effects|VFX|등급고지|예고편|개봉버전|인터뷰|삭제장면|(?<!\S)[상하](?!\S))')
@@ -204,34 +231,45 @@ def clean_title_complex(title):
     cleaned = REGEX_EXT.sub('', orig_title)
     cleaned = REGEX_CH_PREFIX.sub('', cleaned)
     cleaned = REGEX_TMDB_HINT.sub('', cleaned)
-    if '.' in cleaned:
-        cleaned = cleaned.replace('.', ' ')
 
+    # [수정] 연도 정보 미리 추출 (브래킷 제거 전)
+    year_match = REGEX_YEAR.search(cleaned)
+    year = year_match.group().replace('(', '').replace(')', '') if year_match else None
+
+    # [수정] 마커 확인 시 제목이 너무 많이 잘려나가는 것을 방지
     ep_match = REGEX_EP_MARKER_STRICT.search(cleaned)
     if ep_match:
-        if ep_match.start() < 5:
-            cleaned = cleaned[ep_match.end():].strip()
+        # [개선] EP 마커 앞부분이 2자 미만이거나 한글이 포함되지 않은 경우만 뒷부분을 취함
+        pre = cleaned[:ep_match.start()].strip()
+        if len(pre) >= 2 and not REGEX_FORBIDDEN_TITLE.match(pre):
+            cleaned = pre
+        elif len(pre) >= 1 and any('\uac00' <= c <= '\ud7af' for c in pre):
+            cleaned = pre
         else:
-            cleaned = cleaned[:ep_match.start()].strip()
+            # 앞부분이 의미 없으면 마커 이후를 보되, 이후도 너무 짧으면 원본 제목 활용 고려
+            post = cleaned[ep_match.end():].strip()
+            if len(post) >= 2: cleaned = post
+            else: cleaned = pre if pre else post
 
     tech_match = REGEX_TECHNICAL_TAGS.search(cleaned)
     if tech_match:
-        cleaned = cleaned[:tech_match.start()].strip()
+        # [개선] 기술 태그에 의해 제목이 너무 짧아지면(1자 이하) 자르지 않음
+        pre_tech = cleaned[:tech_match.start()].strip()
+        if len(pre_tech) >= 2:
+            cleaned = pre_tech
 
+    # [개선] 숫자 분리 로직: 날짜나 연도가 깨지지 않도록 한글/영어 경계만 처리
     cleaned = re.sub(r'([가-힣\u3040-\u30ff\u4e00-\u9fff])([a-zA-Z])', r'\1 \2', cleaned)
     cleaned = re.sub(r'([a-zA-Z])([가-힣\u3040-\u30ff\u4e00-\u9fff])', r'\1 \2', cleaned)
-    cleaned = re.sub(r'([가-힣\u3040-\u30ff\u4e00-\u9fff\w])(\d+)', r'\1 \2', cleaned)
-    cleaned = re.sub(r'(\d+)([가-힣\u3040-\u30ff\u4e00-\u9fff\w])', r'\1 \2', cleaned)
 
     cleaned = REGEX_DATE_YYMMDD.sub(' ', cleaned)
-    year_match = REGEX_YEAR.search(cleaned)
-    year = year_match.group().replace('(', '').replace(')', '') if year_match else None
     cleaned = REGEX_YEAR.sub(' ', cleaned)
 
+    # 정제 후 너무 짧아진 경우 브래킷 내부에서 대체 제목 찾기
     if len(cleaned.strip()) < 2:
         brackets = re.findall(r'\[(.*?)\]|\((.*?)\)|（(.*?)）', orig_title)
         for b in brackets:
-            inner = (b[0] or b[1] or b[2]).strip()
+            inner = (b[0] or b[1] or b[2] or "").strip()
             if len(inner) >= 2 and not REGEX_TECHNICAL_TAGS.search(inner) and not REGEX_FORBIDDEN_TITLE.match(inner):
                 cleaned = inner
                 break
@@ -239,13 +277,15 @@ def clean_title_complex(title):
     cleaned = REGEX_BRACKETS.sub(' ', cleaned)
     cleaned = cleaned.replace("(자막)", "").replace("(더빙)", "").replace("[자막]", "").replace("[더빙]", "").replace("（자막）", "").replace("（더빙）", "")
     cleaned = REGEX_JUNK_KEYWORDS.sub(' ', cleaned)
+
+    # [수정] 점(.)을 무조건 제거하기 전에 공백으로 변환 (숫자 보호 위해 특수문자 처리에서 다룸)
     cleaned = REGEX_SPECIAL_CHARS.sub(' ', cleaned)
     cleaned = REGEX_LEADING_INDEX.sub('', cleaned)
-    cleaned = re.sub(r'([가-힣a-zA-Z\u3040-\u30ff\u4e00-\u9fff])(\d+)$', r'\1 \2', cleaned)
     cleaned = REGEX_SPACES.sub(' ', cleaned).strip()
 
     if len(cleaned) < 1:
-        return "", None
+        # 최종 정제 실패 시 원본 제목에서 확장자만 떼고 반환 (최후의 수단)
+        return nfc(os.path.splitext(orig_title)[0]), year
     return nfc(cleaned), year
 
 def extract_episode_numbers(filename):
@@ -274,14 +314,17 @@ def simple_similarity(s1, s2):
     return 0.0
 
 # --- [TMDB API 보완: 지능형 재검색 및 랭킹 시스템] ---
-def get_tmdb_info_server(title, ignore_cache=False):
+def get_tmdb_info_server(title, category=None, ignore_cache=False): # category 매개변수 추가
     if not title: return {"failed": True}
     hint_id = extract_tmdb_id(title)
     ct, year = clean_title_complex(title)
     if not ct or REGEX_FORBIDDEN_TITLE.match(ct):
         return {"failed": True, "forbidden": True}
 
-    cache_key = f"{ct}_{year}" if year else ct
+    # 카테고리에 따른 선호 타입 결정 (Taxi Driver 등 동명 타이틀 오매칭 방지)
+    pref_mtype = 'movie' if category == 'movies' else 'tv' if category in ['koreantv', 'foreigntv', 'air', 'animations_all'] else None
+
+    cache_key = f"{ct}_{year}_{category}" if year else f"{ct}_{category}"
     h = hashlib.md5(nfc(cache_key).encode()).hexdigest()
 
     if not ignore_cache and h in TMDB_MEMORY_CACHE:
@@ -298,12 +341,12 @@ def get_tmdb_info_server(title, ignore_cache=False):
                 return data
         except: pass
 
-    log("TMDB", f"🔍 지능형 검색 시작: '{ct}'" + (f" ({year})" if year else ""))
+    log("TMDB", f"🔍 지능형 검색 시작: '{ct}'" + (f" ({year})" if year else "") + (f" [Cat: {category}]" if category else ""))
     headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
     base_params = {"include_adult": "true", "region": "KR"}
 
     def perform_search(query, lang=None, m_type='multi', search_year=None):
-        if not query or len(query) < 2: return []
+        if not query or len(query) < 1: return []
         params = {**base_params, "query": query}
         if lang: params["language"] = lang
         if search_year:
@@ -314,11 +357,12 @@ def get_tmdb_info_server(title, ignore_cache=False):
             return r.json().get('results', []) if r.status_code == 200 else []
         except: return []
 
-    def rank_results(results, target_title, target_year):
+    def rank_results(results, target_title, target_year, pref_type=None):
         if not results: return None
         scored = []
         for res in results:
             if res.get('media_type') == 'person': continue
+            m_type = res.get('media_type') or ('movie' if res.get('title') else 'tv')
             score = 0
             res_title = res.get('title') or res.get('name') or ""
             res_year = (res.get('release_date') or res.get('first_air_date') or "").split('-')[0]
@@ -335,10 +379,14 @@ def get_tmdb_info_server(title, ignore_cache=False):
             score += min(res.get('popularity', 0) / 10, 10)
             if res.get('poster_path'): score += 5
 
+            # [추가] 선호하는 타입(영화/TV)과 일치할 경우 큰 가중치 부여
+            if pref_type and m_type == pref_type:
+                score += 40
+
             scored.append((score, res))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return scored[0][1] if scored and scored[0][0] > 30 else None
+        return scored[0][1] if scored and scored[0][0] > 35 else None
 
     try:
         best_match = None
@@ -353,32 +401,42 @@ def get_tmdb_info_server(title, ignore_cache=False):
 
         if not best_match:
             results = perform_search(ct, "ko-KR", "multi", year)
-            best_match = rank_results(results, ct, year)
+            best_match = rank_results(results, ct, year, pref_mtype)
 
             if not best_match and year:
                 log("TMDB", f"🔄 연도 제외 재검색: '{ct}'")
                 results = perform_search(ct, "ko-KR", "multi", None)
-                best_match = rank_results(results, ct, year)
+                best_match = rank_results(results, ct, year, pref_mtype)
 
             if not best_match:
-                parts = re.split(r'[-:]', ct)
-                if len(parts) > 1 and len(parts[0].strip()) >= 2:
-                    main_title = parts[0].strip()
-                    log("TMDB", f"🔄 주제목 검색: '{main_title}'")
-                    results = perform_search(main_title, "ko-KR", "multi", year)
-                    best_match = rank_results(results, main_title, year)
+                # [개선] 한글 제목만 추출하여 검색 (특수문자/영어 제외)
+                ko_only = "".join(re.findall(r'[가-힣\s]+', ct)).strip()
+                if ko_only and ko_only != ct and len(ko_only) >= 2:
+                    log("TMDB", f"🔄 한글 부분 재검색: '{ko_only}'")
+                    results = perform_search(ko_only, "ko-KR", "multi", year)
+                    best_match = rank_results(results, ko_only, year, pref_mtype)
 
             if not best_match:
-                cjk_only = "".join(re.findall(r'[가-힣\u3040-\u30ff\u4e00-\u9fff\s]+', ct)).strip()
-                if cjk_only and len(cjk_only) >= 2 and cjk_only != ct:
-                    results = perform_search(cjk_only, "ko-KR", "multi", year)
-                    best_match = rank_results(results, cjk_only, year)
+                # [수정] 원어(일어/한자) 부분 추출 검색 추가
+                cjk_parts = re.findall(r'[\u3040-\u30ff\u4e00-\u9fff]+', title)
+                for part in cjk_parts:
+                    if len(part) >= 2:
+                        log("TMDB", f"🔄 원어 부분 검색: '{part}'")
+                        results = perform_search(part, None, "multi", year)
+                        best_match = rank_results(results, part, year, pref_mtype)
+                        if best_match: break
 
             if not best_match:
-                en_only = "".join(re.findall(r'[a-zA-Z\s]+', ct)).strip()
-                if en_only and len(en_only) >= 3:
-                    results = perform_search(en_only, "ko-KR", "multi", year)
-                    best_match = rank_results(results, en_only, year)
+                # [수정] 하이픈(-)이나 콜론(:)으로 구분된 부분 검색 시도
+                parts = re.split(r'[-:～]', ct)
+                if len(parts) > 1:
+                    for p in parts:
+                        sub_title = p.strip()
+                        if len(sub_title) >= 2 and not REGEX_FORBIDDEN_TITLE.match(sub_title):
+                            log("TMDB", f"🔄 부분 제목 검색: '{sub_title}'")
+                            results = perform_search(sub_title, "ko-KR", "multi", year)
+                            best_match = rank_results(results, sub_title, year, pref_mtype)
+                            if best_match: break
 
         if best_match:
             m_type, t_id = best_match.get('media_type') or ('movie' if best_match.get('title') else 'tv'), best_match.get('id')
@@ -571,10 +629,10 @@ def fetch_metadata_async(force_all=False):
             return
 
         group_rows = conn.execute('''
-            SELECT cleanedName, yearVal, MIN(name) as sample_name, GROUP_CONCAT(name, '|') as orig_names
+            SELECT cleanedName, yearVal, category, MIN(name) as sample_name, GROUP_CONCAT(name, '|') as orig_names
             FROM series
             WHERE tmdbId IS NULL AND failed = 0 AND cleanedName IS NOT NULL
-            GROUP BY cleanedName, yearVal
+            GROUP BY cleanedName, yearVal, category
         ''').fetchall()
         conn.close()
 
@@ -583,6 +641,7 @@ def fetch_metadata_async(force_all=False):
             tasks.append({
                 'clean_title': gr['cleanedName'],
                 'year': gr['yearVal'],
+                'category': gr['category'],
                 'sample_name': gr['sample_name'],
                 'orig_names': gr['orig_names'].split('|')
             })
@@ -591,7 +650,8 @@ def fetch_metadata_async(force_all=False):
         log("METADATA", f"📊 그룹화 완료: {total}개의 고유 작품 식별됨")
 
         def process_one(task):
-            info = get_tmdb_info_server(task['sample_name'], ignore_cache=force_all)
+            # [수정] 카테고리 정보를 넘겨주어 TV/영화 구분 매칭
+            info = get_tmdb_info_server(task['sample_name'], category=task['category'], ignore_cache=force_all)
             return (task, info)
 
         batch_size = 50
@@ -677,15 +737,58 @@ def get_sections_for_category(cat, kw=None):
     cache_key = f"sections_{cat}_{kw}"
     if cache_key in _SECTION_CACHE:
         return _SECTION_CACHE[cache_key]
+
     base_list = _FAST_CATEGORY_CACHE.get(cat, [])
     if not base_list: return []
-    if kw and kw not in ["전체", "All"]:
+
+    # Filter by keyword if provided (e.g., "라프텔", "제목", "드라마")
+    target_list = base_list
+    is_search = False
+    if kw and kw not in ["전체", "All", "제목"]:
         search_kw = kw.strip().lower()
         target_list = [i for i in base_list if search_kw in i['path'].lower() or search_kw in i['name'].lower()]
-    else:
-        target_list = base_list
+        is_search = True
+
     if not target_list: return []
-    sections = [{"title": "전체 목록", "items": target_list[:400]}]
+
+    # 방송중(air) 카테고리는 기존처럼 전체 목록 유지
+    if cat == 'air':
+        sections = [{"title": "실시간 방영 중", "items": target_list}]
+    else:
+        sections = []
+
+        # 1. 오늘의 추천 (랜덤 40개)
+        if len(target_list) > 20:
+            random_picks = random.sample(target_list, min(40, len(target_list)))
+            sections.append({"title": f"{kw if is_search else ''} 오늘의 추천".strip(), "items": random_picks})
+
+        # 2. 최신 공개작 (2024년 이후)
+        recent_items = [i for i in target_list if i.get('year') and i['year'] >= '2024']
+        if len(recent_items) >= 5:
+            sections.append({"title": f"{kw if is_search else ''} 최신 공개작".strip(), "items": recent_items[:100]})
+
+        # 3. 장르별 섹션 (데이터 기반 자동 큐레이션)
+        genre_map = {}
+        for item in target_list:
+            for g in item.get('genreNames', []):
+                if g not in genre_map: genre_map[g] = []
+                genre_map[g].append(item)
+
+        # 아이템이 많은 순서대로 장르 정렬
+        sorted_genres = sorted(genre_map.keys(), key=lambda x: len(genre_map[x]), reverse=True)
+        # 너무 포괄적인 장르는 제외하고 상위 3개 선택
+        display_genres = [g for g in sorted_genres if g not in ["TV 영화", "애니메이션"] or cat != 'animations_all'][:3]
+
+        for g in display_genres:
+            g_items = genre_map[g]
+            if len(g_items) >= 5:
+                title = f"{kw if is_search else ''} 인기 {g}".strip()
+                # 해당 장르 내에서도 랜덤하게 노출
+                sections.append({"title": title, "items": random.sample(g_items, min(60, len(g_items)))})
+
+        # 4. 마지막에 전체 목록 추가
+        sections.append({"title": "전체 목록", "items": target_list[:800]})
+
     _SECTION_CACHE[cache_key] = sections
     return sections
 
@@ -727,14 +830,18 @@ def get_series_detail_api():
         conn.close()
         return gzip_response([])
     series = dict(row)
+    cat = series.get('category')
     for col in ['genreIds', 'genreNames', 'actors']:
         if series.get(col):
             try: series[col] = json.loads(series[col])
             except: series[col] = []
+
+    # [수정] TMDB ID가 같더라도 '같은 카테고리' 내의 에피소드만 가져오도록 변경 (드라마/영화 섞임 방지)
     if series.get('tmdbId'):
-        cursor = conn.execute("SELECT e.* FROM episodes e JOIN series s ON e.series_path = s.path WHERE s.tmdbId = ?", (series['tmdbId'],))
+        cursor = conn.execute("SELECT e.* FROM episodes e JOIN series s ON e.series_path = s.path WHERE s.tmdbId = ? AND s.category = ?", (series['tmdbId'], cat))
     else:
         cursor = conn.execute("SELECT * FROM episodes WHERE series_path = ?", (path,))
+
     eps = []
     seen = set()
     for r in cursor.fetchall():
@@ -804,39 +911,97 @@ def video_serve():
     path, prefix = request.args.get('path'), request.args.get('type')
     try:
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
-        return send_file(get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path)))), conditional=True)
+        full_path = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path))))
+        if not os.path.exists(full_path):
+             log("VIDEO", f"File not found: {full_path}")
+             return "Not Found", 404
+        return send_file(full_path, conditional=True)
     except:
-        return "Not Found", 404
+        log("VIDEO", f"Error serving video: {traceback.format_exc()}")
+        return "Internal Server Error", 500
+
+# --- [새로운 고속 미리보기 엔드포인트] ---
+@app.route('/preview_serve')
+def preview_serve():
+    """
+    영상 미리보기용 고속 스트리밍:
+    원본 영상의 특정 지점부터 저해상도(480p)로 빠르게 인코딩하여 스트리밍합니다.
+    """
+    path_raw, prefix = request.args.get('path'), request.args.get('type')
+    try:
+        base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
+        vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
+        if not os.path.exists(vp): return "Not Found", 404
+
+        # 미리보기 시작 지점 설정 (파일 크기나 길이에 따라 조절 가능, 여기선 1분 지점 선호)
+        start_time = "60"
+
+        # FFmpeg을 사용하여 실시간 다운스케일링 스트리밍
+        # -ss를 앞에 두어 고속 탐색, -t 30으로 30초만 추출
+        cmd = [
+            FFMPEG_PATH, "-ss", start_time, "-i", vp,
+            "-t", "30", "-vf", "scale=640:-2",
+            "-vcodec", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+            "-crf", "28", "-an", "-f", "matroska", "pipe:1"
+        ]
+
+        def generate():
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            try:
+                while True:
+                    chunk = proc.stdout.read(65536)
+                    if not chunk: break
+                    yield chunk
+            finally:
+                proc.kill()
+
+        return Response(generate(), mimetype='video/x-matroska')
+    except:
+        return "Error", 500
 
 def _generate_thumb_file(path_raw, prefix, tid, t, w):
     tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{w}.jpg")
     if os.path.exists(tp): return tp
 
-    log("THUMB", f"Generating thumb: {os.path.basename(vp)} at {t}s")
-
     try:
-        # [수정] 타임아웃을 30초로 늘리고 예외 처리를 추가하여 서버 안정성 확보
-        result = subprocess.run([
-            FFMPEG_PATH, "-y",
-            "-lowres", "1",
-            "-ss", str(t),
-            "-noaccurate_seek",
-            "-i", vp,
-            "-frames:v", "1",
-            "-map", "0:v:0",
-            "-an", "-sn",
-            "-q:v", "8",
-            "-vf", f"scale={w}:-1:flags=fast_bilinear",
-            "-threads", "1",
-            tp
-        ], timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)  # 15초 -> 30초
+        base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
+        vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
+        if not os.path.exists(vp):
+            log("THUMB", f"Video not found for thumb: {vp}")
+            return None
 
-        if result.returncode != 0:
-            log("THUMB_ERROR", f"FFmpeg failed: {result.stderr.decode()}")
-    except subprocess.TimeoutExpired:
-        log("THUMB_TIMEOUT", f"FFmpeg timed out for: {os.path.basename(vp)} (GDRIVE 지연 의심)")
-    except Exception as e:
-        log("THUMB_ERROR", f"Unexpected error: {str(e)}")
+        with THUMB_SEMAPHORE:
+            if os.path.exists(tp): return tp
+            log("THUMB", f"Generating thumb: {os.path.basename(vp)} at {t}s")
+
+            try:
+                # [수정] 타임아웃을 30초로 늘리고 예외 처리를 추가하여 서버 안정성 확보
+                result = subprocess.run([
+                    FFMPEG_PATH, "-y",
+                    "-lowres", "1",           # 1/2 해상도 디코딩 (속도 획기적 향상)
+                    "-ss", str(t),
+                    "-noaccurate_seek",
+                    "-i", vp,
+                    "-frames:v", "1",
+                    "-map", "0:v:0",
+                    "-an", "-sn",
+                    "-q:v", "8",              # 품질보다 속도 우선
+                    "-vf", f"scale={w}:-1:flags=fast_bilinear",
+                    "-threads", "1",
+                    tp
+                ], timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+                if result.returncode != 0:
+                    log("THUMB_ERROR", f"FFmpeg failed: {result.stderr.decode()}")
+            except subprocess.TimeoutExpired:
+                log("THUMB_TIMEOUT", f"FFmpeg timed out for: {os.path.basename(vp)} (GDRIVE 지연 의심)")
+            except Exception as e:
+                log("THUMB_ERROR", f"Unexpected error: {str(e)}")
+
+        return tp if os.path.exists(tp) else None
+    except:
+        log("THUMB_ERROR", f"Exception: {traceback.format_exc()}")
+        return None
 
 @app.route('/thumb_serve')
 def thumb_serve():
@@ -850,6 +1015,75 @@ def thumb_serve():
         resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
         return resp
     return "Not Found", 404
+
+# --- [복원된 기능: 스킵 네비게이션용 스토리보드 생성] ---
+def get_video_duration(path):
+    try:
+        result = subprocess.run([FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return float(result.stdout)
+    except: return 0
+
+@app.route('/storyboard')
+def gen_seek_thumbnails():
+    """
+    비디오의 전체 구간을 미리볼 수 있는 스프라이트 시트(스토리보드)를 생성하여 반환합니다.
+    ExoPlayer 등 클라이언트에서 탐색 바(seek bar) 이동 시 썸네일을 표시하는 데 사용됩니다.
+    """
+    path_raw = request.args.get('path')
+    prefix = request.args.get('type')
+    if not path_raw or not prefix: return "Bad Request", 400
+
+    try:
+        base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
+        vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
+        if not os.path.exists(vp): return "Not Found", 404
+
+        # 파일명 기반 해시 생성 (캐시용)
+        file_hash = hashlib.md5(vp.encode()).hexdigest()
+        sb_path = os.path.join(DATA_DIR, f"sb_{file_hash}.jpg")
+
+        # 이미 생성된 스토리보드가 있으면 반환
+        if os.path.exists(sb_path):
+            resp = make_response(send_file(sb_path, mimetype='image/jpeg'))
+            resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+            return resp
+
+        # 생성 중 충돌 방지를 위한 락(Lock)
+        with STORYBOARD_SEMAPHORE:
+            if os.path.exists(sb_path): # 락 획득 후 다시 확인
+                 return send_file(sb_path, mimetype='image/jpeg')
+
+            duration = get_video_duration(vp)
+            if duration == 0: return "Duration Error", 500
+
+            # 10x10 그리드, 100개의 썸네일 생성
+            interval = duration / 100
+
+            # FFmpeg 명령어로 타일(Sprite Sheet) 생성
+            # fps=1/interval: interval 초마다 1프레임 추출
+            # scale=160:-1: 너비 160px로 리사이징 (높이 비율 유지)
+            # tile=10x10: 10행 10열로 합치기
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-i", vp,
+                "-vf", f"fps=1/{interval},scale=160:-1,tile=10x10",
+                "-frames:v", "1",
+                "-q:v", "5", # JPEG 품질
+                sb_path
+            ]
+
+            log("STORYBOARD", f"썸네일 생성 시작: {os.path.basename(vp)} (Duration: {duration}s)")
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+
+            if os.path.exists(sb_path):
+                log("STORYBOARD", f"생성 완료: {os.path.basename(sb_path)}")
+                return send_file(sb_path, mimetype='image/jpeg')
+            else:
+                log("STORYBOARD", "생성 실패")
+                return "Generation Failed", 500
+    except Exception as e:
+        log("STORYBOARD", f"에러 발생: {str(e)}")
+        return "Internal Server Error", 500
 
 @app.route('/api/status')
 def get_server_status():
