@@ -29,7 +29,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "137.21" # 썸네일 고속화 및 TV/영화 구분 강화 버전
+CACHE_VERSION = "137.22" # 섹션 로직 고도화 및 속도 최적화 버전
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -737,15 +737,58 @@ def get_sections_for_category(cat, kw=None):
     cache_key = f"sections_{cat}_{kw}"
     if cache_key in _SECTION_CACHE:
         return _SECTION_CACHE[cache_key]
+
     base_list = _FAST_CATEGORY_CACHE.get(cat, [])
     if not base_list: return []
-    if kw and kw not in ["전체", "All"]:
+
+    # Filter by keyword if provided (e.g., "라프텔", "제목", "드라마")
+    target_list = base_list
+    is_search = False
+    if kw and kw not in ["전체", "All", "제목"]:
         search_kw = kw.strip().lower()
         target_list = [i for i in base_list if search_kw in i['path'].lower() or search_kw in i['name'].lower()]
-    else:
-        target_list = base_list
+        is_search = True
+
     if not target_list: return []
-    sections = [{"title": "전체 목록", "items": target_list[:400]}]
+
+    # 방송중(air) 카테고리는 기존처럼 전체 목록 유지
+    if cat == 'air':
+        sections = [{"title": "실시간 방영 중", "items": target_list}]
+    else:
+        sections = []
+
+        # 1. 오늘의 추천 (랜덤 40개)
+        if len(target_list) > 20:
+            random_picks = random.sample(target_list, min(40, len(target_list)))
+            sections.append({"title": f"{kw if is_search else ''} 오늘의 추천".strip(), "items": random_picks})
+
+        # 2. 최신 공개작 (2024년 이후)
+        recent_items = [i for i in target_list if i.get('year') and i['year'] >= '2024']
+        if len(recent_items) >= 5:
+            sections.append({"title": f"{kw if is_search else ''} 최신 공개작".strip(), "items": recent_items[:100]})
+
+        # 3. 장르별 섹션 (데이터 기반 자동 큐레이션)
+        genre_map = {}
+        for item in target_list:
+            for g in item.get('genreNames', []):
+                if g not in genre_map: genre_map[g] = []
+                genre_map[g].append(item)
+
+        # 아이템이 많은 순서대로 장르 정렬
+        sorted_genres = sorted(genre_map.keys(), key=lambda x: len(genre_map[x]), reverse=True)
+        # 너무 포괄적인 장르는 제외하고 상위 3개 선택
+        display_genres = [g for g in sorted_genres if g not in ["TV 영화", "애니메이션"] or cat != 'animations_all'][:3]
+
+        for g in display_genres:
+            g_items = genre_map[g]
+            if len(g_items) >= 5:
+                title = f"{kw if is_search else ''} 인기 {g}".strip()
+                # 해당 장르 내에서도 랜덤하게 노출
+                sections.append({"title": title, "items": random.sample(g_items, min(60, len(g_items)))})
+
+        # 4. 마지막에 전체 목록 추가
+        sections.append({"title": "전체 목록", "items": target_list[:800]})
+
     _SECTION_CACHE[cache_key] = sections
     return sections
 

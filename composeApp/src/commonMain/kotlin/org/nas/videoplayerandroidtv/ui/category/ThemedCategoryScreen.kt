@@ -65,7 +65,7 @@ fun ThemedCategoryScreen(
         isLoading = true
         try {
             val result = withContext(Dispatchers.IO) {
-                val limit = 300 
+                val limit = 500 // 데이터 확보를 위해 limit 상향
                 when {
                     isMovieScreen -> when (selectedMode) {
                         0 -> repository.getMoviesByTitle(limit, 0)
@@ -96,7 +96,12 @@ fun ThemedCategoryScreen(
 
             val sections = withContext(Dispatchers.Default) {
                 if (result.isNotEmpty()) {
-                    listOf(ThemeSection("all_list", "전체 목록", result))
+                    // 방송중(air) 화면은 기존처럼 전체 목록 유지, 그 외에는 테마별 섹션 적용
+                    if (isAirScreen) {
+                        listOf(ThemeSection("all_list", "전체 목록", result))
+                    } else {
+                        processThemedSections(result)
+                    }
                 } else {
                     emptyList()
                 }
@@ -185,14 +190,14 @@ private fun CategoryTabItem(text: String, isSelected: Boolean, onClick: () -> Un
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 6.dp), // 패딩을 대폭 줄임
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text, 
             color = textColor, 
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium, 
-            fontSize = 10.sp // 텍스트 크기를 10.sp로 더 줄임
+            fontSize = 10.sp
         )
     }
 }
