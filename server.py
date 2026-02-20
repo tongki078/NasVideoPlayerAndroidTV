@@ -1242,20 +1242,22 @@ def run_apply_thumbnails():
                         u_conn.commit()
                         updated_count += len(ep_batch)
                         with UPDATE_LOCK:
-                            UPDATE_STATE["success"] += 1
+                            UPDATE_STATE["success"] += len(ep_batch)
                         emit_ui_log(f"'{name}' 에피소드 {len(ep_batch)}개 썸네일 업데이트 완료", "success")
                     else:
-                        with UPDATE_LOCK:
-                            UPDATE_STATE["success"] += 1
                         # [추가] 변경 사항이 없을 때 스킵 로그 출력
                         emit_ui_log(f"'{name}' 건너뜀 (TMDB에 스틸컷 없음 또는 이미 적용됨)", "info")
 
                     u_conn.close()  # 볼일이 끝나면 즉시 닫음
                 else:
                     # [추가] TMDB에서 상세 정보를 못 가져왔을 때
-                    with UPDATE_LOCK:
-                        UPDATE_STATE["success"] += 1
                     emit_ui_log(f"'{name}' 건너뜀 (TMDB에서 시즌/에피소드 정보를 찾을 수 없음)", "warning")
+            else:
+                emit_ui_log(f"'{name}' 건너뜀 (유효한 TMDB ID 없음)", "info")
+
+                with UPDATE_LOCK:
+                    UPDATE_STATE["current"] = UPDATE_STATE["success"] + UPDATE_STATE["fail"]
+                    UPDATE_STATE["current_item"] = name
 
         except Exception as e:
             log("THUMB_SYNC", f"Error processing {name}: {e}")
@@ -1727,16 +1729,15 @@ def get_subtitle_info_api():
         video_filename = os.path.basename(vp)
         video_name_no_ext = os.path.splitext(video_filename)[0]
 
-        log("SUBTITLE", f"자막 조회: {video_filename}")
+        log("SUBTITLE", f"자막 조회 시작: {video_filename}")
 
-        # 1. 외부 자막 찾기 (패턴 매칭: 영상이름으로 시작하는 모든 자막파일)
+        # 1. 외부 자막 찾기
         external = []
         if os.path.exists(parent_dir):
             for f in os.listdir(parent_dir):
                 f_nfc = nfc(f)
-                # 영상 파일명으로 시작하고 확장자가 자막인 것들 (예: .ko.srt, .srt, .kor.smi 등)
                 if f_nfc.startswith(video_name_no_ext) and f_nfc.lower().endswith(('.srt', '.smi', '.ass', '.vtt')):
-                    if f_nfc != video_filename:  # 영상 파일 자신은 제외
+                    if f_nfc != video_filename:
                         external.append({
                             "name": f_nfc,
                             "path": nfc(os.path.join(os.path.dirname(rel_path), f_nfc))
@@ -1744,18 +1745,67 @@ def get_subtitle_info_api():
 
         # 2. 내장 자막 확인
         cmd = [FFPROBE_PATH, "-v", "error", "-show_streams", "-of", "json", vp]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
         all_streams = json.loads(result.stdout).get('streams', [])
         embedded = [s for s in all_streams if
                     s.get('codec_type') == 'subtitle' or 'sub' in s.get('codec_name', '').lower()]
 
-        log("SUBTITLE", f"발견 - 외부: {len(external)}개, 내장: {len(embedded)}개")
+        log("SUBTITLE", f"탐색 완료 - 외부 자막: {len(external)}개, 내장 자막: {len(embedded)}개")
+
+        # 3. 외부 자막이 없고 내장 자막만 있을 경우, 자동 추출
+        if not external and embedded:
+            log("SUBTITLE", "외부 자막이 없어 내장 자막 자동 추출을 시도합니다.")
+
+            # 언어 우선순위: 한국어 > 영어 > 기타
+            sub_to_extract = None
+            lang_priority = {'ko': 1, 'kor': 1, 'en': 2, 'eng': 2}
+
+            # 점수 매겨서 최고점 자막 선택
+            best_score = float('inf')
+            for sub in embedded:
+                lang = sub.get('tags', {}).get('language', 'und').lower()
+                score = lang_priority.get(lang, 99)
+                if score < best_score:
+                    best_score = score
+                    sub_to_extract = sub
+
+            if sub_to_extract:
+                stream_index = sub_to_extract['index']
+                lang_code = sub_to_extract.get('tags', {}).get('language', 'und').lower()
+                if lang_code in ['kor', 'ko']:
+                    lang_suffix = 'ko'
+                elif lang_code in ['eng', 'en']:
+                    lang_suffix = 'en'
+                else:
+                    lang_suffix = 'und'
+
+                subtitle_filename = f"{video_name_no_ext}.{lang_suffix}.srt"
+                subtitle_full_path = os.path.join(parent_dir, subtitle_filename)
+
+                if not os.path.exists(subtitle_full_path):
+                    log("SUBTITLE", f"추출 시작: 스트림 #{stream_index} ({lang_code}) -> {subtitle_filename}")
+                    extract_cmd = [FFMPEG_PATH, "-y", "-i", vp, "-map", f"0:{stream_index}", "-c:s", "srt",
+                                   subtitle_full_path]
+                    try:
+                        subprocess.run(extract_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                        log("SUBTITLE", f"추출 성공: {subtitle_filename}")
+                        # 추출 성공 시, external 목록에 추가
+                        external.append({
+                            "name": subtitle_filename,
+                            "path": nfc(os.path.join(os.path.dirname(rel_path), subtitle_filename))
+                        })
+                    except subprocess.CalledProcessError as e:
+                        log("SUBTITLE_ERROR", f"자막 추출 실패: {e.stderr.decode()}")
+                else:
+                    log("SUBTITLE", f"이미 추출된 자막 파일이 존재합니다: {subtitle_filename}")
+
         return jsonify({
-            "external": external,
+            "external": sorted(external, key=lambda x: x['name']),  # 정렬하여 일관된 순서 보장
             "embedded": embedded
         })
     except Exception as e:
-        return jsonify({"error": str(e)})
+        log("SUBTITLE_ERROR", f"자막 정보 조회 중 심각한 에러 발생: {str(e)}\\n{traceback.format_exc()}")
+        return jsonify({"error": str(e), "external": [], "embedded": []})
 
 
 @app.route('/api/subtitle_extract')
