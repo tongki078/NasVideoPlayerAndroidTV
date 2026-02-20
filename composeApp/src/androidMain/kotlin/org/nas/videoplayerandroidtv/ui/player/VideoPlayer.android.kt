@@ -1,5 +1,6 @@
 package org.nas.videoplayerandroidtv.ui.player
 
+import android.net.Uri
 import android.util.Log
 import android.view.LayoutInflater
 import androidx.annotation.OptIn
@@ -18,8 +19,31 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
+import io.ktor.client.call.*
+import io.ktor.client.request.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import org.nas.videoplayerandroidtv.R
+import org.nas.videoplayerandroidtv.data.network.NasApiClient
+
+// 자막 정보 파싱을 위한 간단한 데이터 클래스
+@kotlinx.serialization.Serializable
+data class SubtitleInfoResponse(
+    val external: List<ExternalSub> = emptyList(),
+    val embedded: List<EmbeddedSub>? = null
+)
+
+@kotlinx.serialization.Serializable
+data class ExternalSub(
+    val name: String? = null,
+    val path: String? = null
+)
+
+@kotlinx.serialization.Serializable
+data class EmbeddedSub(
+    val index: Int? = null
+)
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -47,7 +71,7 @@ actual fun VideoPlayer(
     val exoPlayer = remember {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
-            .setUserAgent("Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
+            .setUserAgent("NasVideoPlayer/1.0 (Android TV; ExoPlayer)")
 
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(context).setDataSourceFactory(httpDataSourceFactory))
@@ -126,12 +150,63 @@ actual fun VideoPlayer(
         if (url.isBlank()) return@LaunchedEffect
         Log.d("VideoPlayer", "Playing URL: $url")
         
-        val mediaItemBuilder = MediaItem.Builder().setUri(url)
+        // 자막 언어 설정
+        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+            .buildUpon()
+            .setPreferredTextLanguage("ko")
+            .build()
         
-        // URL에 .mkv가 포함되어 있거나 type=ftv, type=movies 등이 포함된 경우 MKV MIME 타입 명시
-        if (url.lowercase().contains(".mkv") || url.contains("type=ftv") || url.contains("type=movie")) {
+        val mediaItemBuilder = MediaItem.Builder().setUri(url)
+        val isMkv = url.lowercase().contains(".mkv") || url.contains("type=ftv") || url.contains("type=movie")
+
+        if (isMkv) {
             mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MATROSKA)
-        } else if (url.lowercase().contains(".ts") || url.lowercase().contains(".tp") || url.contains("type=air")) {
+            
+            try {
+                // 1. 서버에 자막 정보 요청
+                val infoUrl = url.replace("video_serve", "api/subtitle_info")
+                val response: SubtitleInfoResponse = withContext(Dispatchers.IO) {
+                    NasApiClient.client.get(infoUrl).body()
+                }
+
+                val subtitleConfigs = mutableListOf<MediaItem.SubtitleConfiguration>()
+
+                // 2. 외부 자막(.ko.srt 등)이 발견되면 최우선 등록
+                if (response.external.isNotEmpty()) {
+                    response.external.forEach { sub ->
+                        val subUrl = url.replace("video_serve", "api/subtitle_extract")
+                            .split("&path=")[0] + "&sub_path=" + (sub.path ?: "")
+                        
+                        val config = MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
+                            .setMimeType(if (sub.path?.lowercase()?.endsWith(".srt") == true) MimeTypes.APPLICATION_SUBRIP else MimeTypes.TEXT_UNKNOWN)
+                            .setLanguage("ko")
+                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED)
+                            .build()
+                        subtitleConfigs.add(config)
+                        Log.d("VideoPlayer", "Subtitle Success: External subtitle loaded -> ${sub.name}")
+                    }
+                } 
+                // 3. 외부 자막이 없고 내장 자막이 있다면 추출 API 연결
+                else if (response.embedded != null && response.embedded.isNotEmpty()) {
+                    val extractUrl = url.replace("video_serve", "api/subtitle_extract") + "&index=0"
+                    val config = MediaItem.SubtitleConfiguration.Builder(Uri.parse(extractUrl))
+                        .setMimeType(MimeTypes.APPLICATION_SUBRIP)
+                        .setLanguage("ko")
+                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED)
+                        .build()
+                    subtitleConfigs.add(config)
+                    Log.d("VideoPlayer", "Subtitle Success: Falling back to embedded subtitle extraction")
+                } else {
+                    Log.d("VideoPlayer", "Subtitle: No subtitles found (External or Embedded)")
+                }
+
+                if (subtitleConfigs.isNotEmpty()) {
+                    mediaItemBuilder.setSubtitleConfigurations(subtitleConfigs)
+                }
+            } catch (e: Exception) {
+                Log.e("VideoPlayer", "Subtitle detection failed", e)
+            }
+        } else if (url.lowercase().contains(".ts") || url.contains("type=air")) {
             mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
         }
         
@@ -144,11 +219,9 @@ actual fun VideoPlayer(
     Box(modifier = modifier) {
         AndroidView(
             factory = { ctx ->
-                // XML에서 PlayerView 로드 (TextureView 사용 설정 포함)
                 val view = LayoutInflater.from(ctx).inflate(R.layout.player_view, null) as PlayerView
                 view.apply {
                     player = exoPlayer
-                    // 화면 클릭 시 컨트롤러 표시 콜백
                     setOnClickListener {
                         currentOnControllerVisibilityChanged?.invoke(true)
                     }
