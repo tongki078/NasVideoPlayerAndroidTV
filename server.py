@@ -127,6 +127,9 @@ STORYBOARD_SEMAPHORE = threading.Semaphore(2)  # [추가] 스토리보드 생성
 THUMB_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 SUBTITLE_EXECUTOR = ThreadPoolExecutor(max_workers=2)  # 자막 추출 전용 대기열 (최대 2개 동시 처리)
 
+ACTIVE_EXTRACTIONS = set()
+EXTRACTION_LOCK = threading.Lock()
+
 def log(tag, msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{timestamp}] [{tag}] {msg}", flush=True)
@@ -1719,9 +1722,10 @@ def get_server_status():
 
 
 # --- [자막 기능: 비동기 추출, 검색 로직 개선, 타임아웃 해결 버전] ---
-
 def run_subtitle_extraction(vp, rel_path, sub_to_extract):
-    """백그라운드에서 자막을 추출하고 지정된 폴더에 저장합니다."""
+    """백그라운드에서 자막을 추출하고, 완료 후 작업 목록에서 제거합니다."""
+    with EXTRACTION_LOCK:
+        ACTIVE_EXTRACTIONS.add(rel_path)
     try:
         stream_index = sub_to_extract['index']
         lang = sub_to_extract.get('tags', {}).get('language', 'und').lower()
@@ -1733,25 +1737,23 @@ def run_subtitle_extraction(vp, rel_path, sub_to_extract):
 
         if not os.path.exists(subtitle_full_path):
             log("SUBTITLE", f"백그라운드 추출 시작: 스트림 #{stream_index} ({lang}) -> {subtitle_filename}")
-
-            # [수정] -vn, -an 플래그를 추가하여 비디오와 오디오 스트림 처리를 건너뛰고 자막 추출 속도를 높입니다.
             extract_cmd = [FFMPEG_PATH, "-y", "-nostdin", "-i", vp, "-vn", "-an", "-map", f"0:{stream_index}", "-c:s",
                            "srt", subtitle_full_path]
-
             try:
-                # stdout, stderr를 DEVNULL로 보내 교착 상태(데드락)를 방지합니다.
-                proc = subprocess.run(extract_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                      timeout=300)
+                subprocess.run(extract_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=300)
                 log("SUBTITLE", f"백그라운드 추출 성공: {subtitle_filename}")
             except subprocess.CalledProcessError as e:
-                log("SUBTITLE_FAIL", f"추출 실패. FFmpeg가 0이 아닌 종료 코드를 반환했습니다. Code: {e.returncode}")
+                log("SUBTITLE_FAIL", f"추출 실패. FFmpeg Code: {e.returncode}")
             except subprocess.TimeoutExpired:
                 log("SUBTITLE_FAIL", f"추출 시간 초과 (300초): {subtitle_filename}")
-        else:
-            log("SUBTITLE", f"이미 추출된 파일이 존재하여 건너뜁니다: {subtitle_filename}")
-
     except Exception as e:
-        log("SUBTITLE_ERROR", f"백그라운드 자막 추출 중 심각한 예외 발생: {traceback.format_exc()}")
+        log("SUBTITLE_ERROR", f"백그라운드 자막 추출 중 예외 발생: {traceback.format_exc()}")
+    finally:
+        # 작업이 성공하든 실패하든, 목록에서 제거
+        with EXTRACTION_LOCK:
+            ACTIVE_EXTRACTIONS.discard(rel_path)
+            log("SUBTITLE", f"추출 작업 완료 및 정리: {os.path.basename(rel_path)}")
 
 
 @app.route('/api/subtitle_info')
@@ -1760,17 +1762,21 @@ def get_subtitle_info_api():
     try:
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
         rel_path = nfc(urllib.parse.unquote(path_raw))
-        vp = get_real_path(os.path.join(base, rel_path))
 
-        parent_dir = os.path.dirname(vp)
+        # [수정] 진행 중인 작업이 있는지 먼저 확인
+        with EXTRACTION_LOCK:
+            if rel_path in ACTIVE_EXTRACTIONS:
+                log("SUBTITLE", f"추출 진행 중... 클라이언트에 대기 신호 전송: {os.path.basename(rel_path)}")
+                return jsonify({"external": [], "embedded": [], "extraction_triggered": True})
+
+        vp = get_real_path(os.path.join(base, rel_path))
         video_filename = os.path.basename(vp)
         video_name_no_ext = os.path.splitext(video_filename)[0]
 
         log("SUBTITLE", f"자막 조회 시작: {video_filename}")
+        external, embedded = [], []
 
-        external = []
-
-        # 1. 원본 폴더에서 외부 자막 찾기
+        parent_dir = os.path.dirname(vp)
         if os.path.exists(parent_dir):
             for f in os.listdir(parent_dir):
                 f_nfc = nfc(f)
@@ -1778,67 +1784,45 @@ def get_subtitle_info_api():
                     sub_name_no_ext = os.path.splitext(f_nfc)[0]
                     if video_name_no_ext.startswith(sub_name_no_ext) or sub_name_no_ext.startswith(video_name_no_ext):
                         if f_nfc != video_filename:
-                            external.append({
-                                "name": f_nfc,
-                                "path": nfc(os.path.join(os.path.dirname(rel_path), f_nfc))
-                            })
+                            external.append(
+                                {"name": f_nfc, "path": nfc(os.path.join(os.path.dirname(rel_path), f_nfc))})
 
-        # 2. 별도 자막 폴더에서 추출된 자막 찾기
         video_rel_hash = hashlib.md5(rel_path.encode()).hexdigest()
         if os.path.exists(SUBTITLE_DIR):
             for f in os.listdir(SUBTITLE_DIR):
                 if f.startswith(video_rel_hash):
                     display_name = f.replace(f"{video_rel_hash}.", f"{video_name_no_ext}.")
-                    external.append({
-                        "name": display_name,
-                        "path": f"__SUBTITLE_DIR__/{f}"
-                    })
+                    external.append({"name": display_name, "path": f"__SUBTITLE_DIR__/{f}"})
 
-        # 3. 내장 자막 확인
-        embedded = []
-        if not external:  # 외부 자막이 없을 때만 내장 자막을 확인하여 성능 최적화
-            cmd = [FFPROBE_PATH, "-v", "error", "-show_streams", "-of", "json", vp]
+        if not external:
             try:
+                cmd = [FFPROBE_PATH, "-v", "error", "-show_streams", "-of", "json", vp]
                 result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
                                         timeout=60)
                 all_streams = json.loads(result.stdout).get('streams', [])
                 embedded = [s for s in all_streams if
                             s.get('codec_type') == 'subtitle' or 'sub' in s.get('codec_name', '').lower()]
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+            except Exception as e:
                 log("SUBTITLE_ERROR", f"내장 자막 분석 실패: {e}")
 
         final_subs = sorted(list({sub['path']: sub for sub in external}.values()), key=lambda x: x['name'])
         log("SUBTITLE", f"탐색 완료 - 최종 외부 자막: {len(final_subs)}개, 내장 자막: {len(embedded)}개")
 
         extraction_started = False
-        # 4. 외부 자막이 없고 내장 자막만 있을 경우, 백그라운드 추출 시작
         if not final_subs and embedded:
-            log("SUBTITLE", "외부 자막 없음. 내장 자막 백그라운드 추출을 예약합니다.")
-
-            sub_to_extract = None
-            lang_priority = {'ko': 1, 'kor': 1, 'en': 2, 'eng': 2}
-            best_score = float('inf')
-
-            for sub in embedded:
-                lang = sub.get('tags', {}).get('language', 'und').lower()
-                score = lang_priority.get(lang, 99)
-                if score < best_score:
-                    best_score = score
-                    sub_to_extract = sub
-
+            sub_to_extract = min(embedded, key=lambda s: {'ko': 1, 'kor': 1, 'en': 2, 'eng': 2}.get(
+                s.get('tags', {}).get('language', 'und').lower(), 99))
             if sub_to_extract:
-                SUBTITLE_EXECUTOR.submit(run_subtitle_extraction, vp, rel_path, sub_to_extract)
-                extraction_started = True  # 앱에 추출 시작 신호 보내기
+                with EXTRACTION_LOCK:
+                    if rel_path not in ACTIVE_EXTRACTIONS:
+                        log("SUBTITLE", "외부 자막 없음. 내장 자막 백그라운드 추출을 예약합니다.")
+                        SUBTITLE_EXECUTOR.submit(run_subtitle_extraction, vp, rel_path, sub_to_extract)
+                extraction_started = True
 
-        return jsonify({
-            "external": final_subs,
-            "embedded": embedded,
-            "extraction_triggered": extraction_started
-        })
+        return jsonify({"external": final_subs, "embedded": embedded, "extraction_triggered": extraction_started})
     except Exception as e:
-        log("SUBTITLE_ERROR", f"자막 정보 조회 중 에러: {str(e)}\n{traceback.format_exc()}")
+        log("SUBTITLE_ERROR", f"자막 정보 조회 중 에러: {traceback.format_exc()}")
         return jsonify({"error": str(e), "external": [], "embedded": [], "extraction_triggered": False})
-
 
 @app.route('/api/subtitle_extract')
 def subtitle_extract():
