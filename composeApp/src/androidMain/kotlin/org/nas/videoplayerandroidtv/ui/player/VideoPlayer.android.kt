@@ -58,7 +58,10 @@ actual fun VideoPlayer(
     onControllerVisibilityChanged: ((Boolean) -> Unit)?,
     onFullscreenClick: (() -> Unit)?,
     onVideoEnded: (() -> Unit)?,
-    onSeekFinished: (() -> Unit)?
+    onSeekFinished: (() -> Unit)?,
+    onSubtitleTracksAvailable: ((List<String>) -> Unit)?,
+    selectedSubtitleIndex: Int,
+    onSubtitleSelected: ((Int) -> Unit)?
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -67,6 +70,8 @@ actual fun VideoPlayer(
     val currentOnDurationDetermined by rememberUpdatedState(onDurationDetermined)
     val currentOnSeekFinished by rememberUpdatedState(onSeekFinished)
     val currentOnControllerVisibilityChanged by rememberUpdatedState(onControllerVisibilityChanged)
+
+    val subtitleTrackGroups = remember { mutableStateListOf<Tracks.Group>() }
 
     val exoPlayer = remember {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
@@ -106,8 +111,34 @@ actual fun VideoPlayer(
                     override fun onPlayerError(error: PlaybackException) {
                         Log.e("VideoPlayer", "ExoPlayer Error: ${error.message}", error)
                     }
+                    override fun onTracksChanged(tracks: Tracks) {
+                        val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+                        subtitleTrackGroups.clear()
+                        subtitleTrackGroups.addAll(textGroups)
+                        
+                        val names = textGroups.mapIndexed { index, group ->
+                            val format = group.getTrackFormat(0)
+                            format.label ?: format.language ?: "자막 ${index + 1}"
+                        }
+                        onSubtitleTracksAvailable?.invoke(names)
+                    }
                 })
             }
+    }
+
+    LaunchedEffect(selectedSubtitleIndex, subtitleTrackGroups.size) {
+        if (selectedSubtitleIndex == -2) return@LaunchedEffect
+        
+        val parameters = exoPlayer.trackSelectionParameters.buildUpon()
+        if (selectedSubtitleIndex == -1) {
+            parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+        } else if (selectedSubtitleIndex >= 0 && selectedSubtitleIndex < subtitleTrackGroups.size) {
+            parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            parameters.setOverrideForType(
+                TrackSelectionOverride(subtitleTrackGroups[selectedSubtitleIndex].mediaTrackGroup, 0)
+            )
+        }
+        exoPlayer.trackSelectionParameters = parameters.build()
     }
 
     LaunchedEffect(seekToPosition) {

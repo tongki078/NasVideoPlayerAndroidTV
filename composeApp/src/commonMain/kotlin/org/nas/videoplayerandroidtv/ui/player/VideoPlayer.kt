@@ -15,5 +15,8 @@ expect fun VideoPlayer(
     onControllerVisibilityChanged: ((Boolean) -> Unit)? = null,
     onFullscreenClick: (() -> Unit)? = null,
     onVideoEnded: (() -> Unit)? = null,
-    onSeekFinished: (() -> Unit)? = null
+    onSeekFinished: (() -> Unit)? = null,
+    onSubtitleTracksAvailable: ((List<String>) -> Unit)? = null,
+    selectedSubtitleIndex: Int = -2,
+    onSubtitleSelected: ((Int) -> Unit)? = null
 )

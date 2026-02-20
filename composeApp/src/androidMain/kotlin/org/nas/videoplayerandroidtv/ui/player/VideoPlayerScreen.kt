@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -30,21 +31,18 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
-import org.nas.videoplayerandroidtv.toNfc
 import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractEpisode
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractSeason
@@ -98,14 +96,20 @@ fun VideoPlayerScreen(
     var isControllerVisible by remember { mutableStateOf(true) }
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
+    // 자막 관련 상태
+    var subtitleTracks by remember { mutableStateOf<List<String>>(emptyList()) }
+    var selectedSubtitleIndex by remember { mutableStateOf(-2) } // -2: auto
+    var isSubtitleDialogOpen by remember { mutableStateOf(false) }
+
     val mainBoxFocusRequester = remember { FocusRequester() }
     val nextButtonFocusRequester = remember { FocusRequester() }
     val skipOpeningFocusRequester = remember { FocusRequester() }
+    val subtitleFocusRequester = remember { FocusRequester() }
     val thumbListState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
 
     var isNextButtonFocused by remember { mutableStateOf(false) }
     var isSkipOpeningFocused by remember { mutableStateOf(false) }
+    var isSubtitleFocused by remember { mutableStateOf(false) }
 
     val nextMovie = remember(currentMovie, playlist) {
         val currentIndex = playlist.indexOfFirst { it.id == currentMovie.id }
@@ -145,24 +149,22 @@ fun VideoPlayerScreen(
         }
     }
 
-    LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused, isSkipOpeningFocused, userPaused) {
-        if (isControllerVisible && !isSeeking && !isNextButtonFocused && !isSkipOpeningFocused && !userPaused) {
-            delay(5000) // 3초에서 5초로 연장
+    LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused, isSkipOpeningFocused, isSubtitleFocused, userPaused, isSubtitleDialogOpen) {
+        if (isControllerVisible && !isSeeking && !isNextButtonFocused && !isSkipOpeningFocused && !isSubtitleFocused && !userPaused && !isSubtitleDialogOpen) {
+            delay(5000)
             isControllerVisible = false
         }
     }
 
     val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp.dp
-    val thumbWidth = 280.dp // 240에서 약간 키움
-    val thumbHeight = 160.dp // 140에서 약간 키움
+    val thumbWidth = 280.dp
+    val thumbHeight = 160.dp
     val horizontalPadding = (screenWidth - thumbWidth) / 2
     
-    // 썸네일 리스트 스크롤 애니메이션 최적화
     LaunchedEffect(seekTime, isSeeking) {
         if (isSeeking && allThumbnails.isNotEmpty()) {
             val targetIndex = (seekTime / 10000L).toInt().coerceIn(allThumbnails.indices)
-            // 즉시 이동 대신 애니메이션 사용 (부드러운 효과)
             thumbListState.animateScrollToItem(targetIndex, 0)
         }
     }
@@ -193,10 +195,10 @@ fun VideoPlayerScreen(
                         if (!isControllerVisible) {
                             isControllerVisible = true
                             true
-                        } else if (isDuringOpening) {
-                            try { skipOpeningFocusRequester.requestFocus() } catch(_: Exception) {}
+                        } else {
+                            try { subtitleFocusRequester.requestFocus() } catch(_: Exception) {}
                             true
-                        } else false
+                        }
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                         isControllerVisible = true
@@ -204,7 +206,6 @@ fun VideoPlayerScreen(
                             seekTime = currentPosition
                             isSeeking = true 
                         }
-                        // 10초씩 이동 (길게 누를 경우를 대비해 스택 가능)
                         seekTime = (seekTime - 10000).coerceAtLeast(0L)
                         true
                     }
@@ -214,7 +215,6 @@ fun VideoPlayerScreen(
                             seekTime = currentPosition
                             isSeeking = true 
                         }
-                        // 10초씩 이동
                         seekTime = (seekTime + 10000).coerceAtMost(totalDuration)
                         true
                     }
@@ -225,8 +225,8 @@ fun VideoPlayerScreen(
                             isSeeking = false
                             lastInteractionTime = System.currentTimeMillis()
                             true
-                        } else if (isNextButtonFocused || isSkipOpeningFocused) {
-                            false // 버튼의 자체 클릭 핸들러가 동작하도록 함
+                        } else if (isNextButtonFocused || isSkipOpeningFocused || isSubtitleFocused) {
+                            false
                         } else {
                             userPaused = !userPaused
                             isControllerVisible = true
@@ -235,9 +235,12 @@ fun VideoPlayerScreen(
                         }
                     }
                     android.view.KeyEvent.KEYCODE_BACK -> {
-                        if (isSeeking) { 
+                        if (isSubtitleDialogOpen) {
+                            isSubtitleDialogOpen = false
+                            true
+                        } else if (isSeeking) { 
                             isSeeking = false
-                            seekTime = currentPosition // 원래 위치로 복구
+                            seekTime = currentPosition
                             true 
                         } else if (isControllerVisible) { 
                             isControllerVisible = false
@@ -256,7 +259,7 @@ fun VideoPlayerScreen(
             modifier = Modifier.fillMaxSize(),
             initialPosition = startPosition,
             seekToPosition = finalSeekPosition,
-            isPlaying = !isSeeking && !userPaused,
+            isPlaying = !isSeeking && !userPaused && !isSubtitleDialogOpen,
             onPositionUpdate = { pos ->
                 currentPosition = pos
                 if (!isSeeking) seekTime = pos
@@ -272,10 +275,12 @@ fun VideoPlayerScreen(
             },
             onSeekFinished = {
                 finalSeekPosition = -1L
-            }
+            },
+            onSubtitleTracksAvailable = { subtitleTracks = it },
+            selectedSubtitleIndex = selectedSubtitleIndex,
+            onSubtitleSelected = { selectedSubtitleIndex = it }
         )
 
-        // 탐색 시 배경 오버레이
         AnimatedVisibility(
             visible = isSeeking,
             enter = fadeIn(),
@@ -387,6 +392,23 @@ fun VideoPlayerScreen(
                         modifier = Modifier
                             .focusRequester(skipOpeningFocusRequester)
                             .onFocusChanged { isSkipOpeningFocused = it.isFocused }
+                    )
+                }
+                
+                // 자막 버튼 추가 (우측 하단)
+                AnimatedVisibility(
+                    visible = isControllerVisible && !isSeeking,
+                    enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 80.dp)
+                ) {
+                    NetflixIconButton(
+                        icon = Icons.Default.Settings,
+                        isFocused = isSubtitleFocused,
+                        onClick = { isSubtitleDialogOpen = true },
+                        modifier = Modifier
+                            .focusRequester(subtitleFocusRequester)
+                            .onFocusChanged { isSubtitleFocused = it.isFocused }
                     )
                 }
             }
@@ -514,6 +536,61 @@ fun VideoPlayerScreen(
                                     fontSize = 18.sp, 
                                     fontWeight = FontWeight.Bold
                                 )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 자막 선택 다이얼로그
+        if (isSubtitleDialogOpen) {
+            Dialog(onDismissRequest = { isSubtitleDialogOpen = false }) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = Color(0xFF1E1E1E),
+                    modifier = Modifier.width(400.dp).padding(16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            "자막 선택",
+                            color = Color.White,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
+                        
+                        val options = listOf("자막 끔") + subtitleTracks
+                        LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
+                            itemsIndexed(options) { index, title ->
+                                val trackIdx = index - 1
+                                val isSelected = selectedSubtitleIndex == trackIdx
+                                
+                                Surface(
+                                    onClick = {
+                                        selectedSubtitleIndex = trackIdx
+                                        isSubtitleDialogOpen = false
+                                        mainBoxFocusRequester.requestFocus()
+                                    },
+                                    color = if (isSelected) Color.White.copy(alpha = 0.1f) else Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(16.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = title,
+                                            color = if (isSelected) Color.Red else Color.White,
+                                            fontSize = 18.sp,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (isSelected) {
+                                            Icon(Icons.Default.Check, null, tint = Color.Red)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
