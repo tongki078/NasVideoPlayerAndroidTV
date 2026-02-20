@@ -26,6 +26,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.nas.videoplayerandroidtv.R
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
+import java.net.URLEncoder
 
 // 자막 정보 파싱을 위한 간단한 데이터 클래스
 @kotlinx.serialization.Serializable
@@ -179,12 +180,11 @@ actual fun VideoPlayer(
 
     LaunchedEffect(url) {
         if (url.isBlank()) return@LaunchedEffect
-        Log.d("VideoPlayer", "Playing URL: $url")
+        Log.d("VideoPlayer", "재생 URL: $url")
         
-        // 자막 언어 설정
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
             .buildUpon()
-            .setPreferredTextLanguage("ko")
+            .setPreferredTextLanguage("ko") // 한국어 자막 우선
             .build()
         
         val mediaItemBuilder = MediaItem.Builder().setUri(url)
@@ -201,41 +201,61 @@ actual fun VideoPlayer(
                 }
 
                 val subtitleConfigs = mutableListOf<MediaItem.SubtitleConfiguration>()
+                val subApiBase = url.substringBefore("video_serve") + "api/subtitle_extract"
+                val videoType = url.substringAfter("type=").substringBefore("&")
 
-                // 2. 외부 자막(.ko.srt 등)이 발견되면 최우선 등록
+                // 2. 외부 자막 처리
                 if (response.external.isNotEmpty()) {
                     response.external.forEach { sub ->
-                        val subUrl = url.replace("video_serve", "api/subtitle_extract")
-                            .split("&path=")[0] + "&sub_path=" + (sub.path ?: "")
-                        
-                        val config = MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
-                            .setMimeType(if (sub.path?.lowercase()?.endsWith(".srt") == true) MimeTypes.APPLICATION_SUBRIP else MimeTypes.TEXT_UNKNOWN)
-                            .setLanguage("ko")
-                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED)
-                            .build()
-                        subtitleConfigs.add(config)
-                        Log.d("VideoPlayer", "Subtitle Success: External subtitle loaded -> ${sub.name}")
+                        sub.path?.let { subPath ->
+                            // [수정] URL 인코딩 및 MIME 타입 개선
+                            val encodedSubPath = URLEncoder.encode(subPath, "UTF-8")
+                            val subUrl = "$subApiBase?type=$videoType&sub_path=$encodedSubPath"
+                            
+                            val mimeType = when (subPath.substringAfterLast('.').lowercase()) {
+                                "srt" -> MimeTypes.APPLICATION_SUBRIP
+                                "vtt" -> MimeTypes.TEXT_VTT
+                                "ass" -> MimeTypes.TEXT_SSA
+                                "smi" -> MimeTypes.TEXT_UNKNOWN // [수정] APPLICATION_SAMI 대신 TEXT_UNKNOWN 사용
+                                else -> MimeTypes.TEXT_UNKNOWN
+                            }
+                            
+                            // [개선] 파일명에서 언어 코드 추출 (e.g., movie.ko.srt)
+                            val langCode = sub.name?.substringBeforeLast('.')?.substringAfterLast('.') ?: "ko"
+
+                            val config = MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
+                                .setMimeType(mimeType)
+                                .setLanguage(langCode)
+                                .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                                .build()
+                            subtitleConfigs.add(config)
+                            Log.d("VideoPlayer", "외부 자막 로드: ${sub.name} (URL: $subUrl)")
+                        }
                     }
                 } 
-                // 3. 외부 자막이 없고 내장 자막이 있다면 추출 API 연결
+                // 3. 내장 자막 처리 (외부 자막 없을 시)
                 else if (response.embedded != null && response.embedded.isNotEmpty()) {
-                    val extractUrl = url.replace("video_serve", "api/subtitle_extract") + "&index=0"
-                    val config = MediaItem.SubtitleConfiguration.Builder(Uri.parse(extractUrl))
-                        .setMimeType(MimeTypes.APPLICATION_SUBRIP)
-                        .setLanguage("ko")
-                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED)
-                        .build()
-                    subtitleConfigs.add(config)
-                    Log.d("VideoPlayer", "Subtitle Success: Falling back to embedded subtitle extraction")
+                    response.embedded.firstOrNull()?.index?.let { subIndex ->
+                        val videoPath = url.substringAfter("path=").substringBefore("&")
+                        val extractUrl = "$subApiBase?type=$videoType&path=$videoPath&index=$subIndex"
+                        
+                        val config = MediaItem.SubtitleConfiguration.Builder(Uri.parse(extractUrl))
+                            .setMimeType(MimeTypes.APPLICATION_SUBRIP)
+                            .setLanguage("ko") // 내장 자막은 언어 정보 파악이 어려워 'ko'로 기본 설정
+                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                            .build()
+                        subtitleConfigs.add(config)
+                        Log.d("VideoPlayer", "내장 자막으로 대체: Index $subIndex (URL: $extractUrl)")
+                    }
                 } else {
-                    Log.d("VideoPlayer", "Subtitle: No subtitles found (External or Embedded)")
+                    Log.d("VideoPlayer", "사용 가능한 자막 없음 (외부/내장)")
                 }
 
                 if (subtitleConfigs.isNotEmpty()) {
                     mediaItemBuilder.setSubtitleConfigurations(subtitleConfigs)
                 }
             } catch (e: Exception) {
-                Log.e("VideoPlayer", "Subtitle detection failed", e)
+                Log.e("VideoPlayer", "자막 처리 중 에러 발생", e)
             }
         } else if (url.lowercase().contains(".ts") || url.contains("type=air")) {
             mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
@@ -253,6 +273,7 @@ actual fun VideoPlayer(
                 val view = LayoutInflater.from(ctx).inflate(R.layout.player_view, null) as PlayerView
                 view.apply {
                     player = exoPlayer
+                    useController = false // 컨트롤러는 우리가 직접 만듭니다.
                     setOnClickListener {
                         currentOnControllerVisibilityChanged?.invoke(true)
                     }

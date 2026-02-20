@@ -32,6 +32,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
+SUBTITLE_DIR = "/volume2/video/subtitles"  # 자막 저장 경로
 CACHE_VERSION = "137.31"  # 에피소드 실시간 로깅 강화 버전
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
@@ -83,6 +84,7 @@ def emit_ui_log(msg, log_type='info'):
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(TMDB_CACHE_DIR, exist_ok=True)
+os.makedirs(SUBTITLE_DIR, exist_ok=True)  # 자막 폴더 생성
 if os.path.exists(HLS_ROOT): shutil.rmtree(HLS_ROOT, ignore_errors=True)
 os.makedirs(HLS_ROOT, exist_ok=True)
 
@@ -123,7 +125,7 @@ _DETAIL_CACHE = deque(maxlen=200)
 THUMB_SEMAPHORE = threading.Semaphore(4)
 STORYBOARD_SEMAPHORE = threading.Semaphore(2)  # [추가] 스토리보드 생성용 세마포어
 THUMB_EXECUTOR = ThreadPoolExecutor(max_workers=8)
-
+SUBTITLE_EXECUTOR = ThreadPoolExecutor(max_workers=2)  # 자막 추출 전용 대기열 (최대 2개 동시 처리)
 
 def log(tag, msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -1716,7 +1718,41 @@ def get_server_status():
         return jsonify({"error": traceback.format_exc()})
 
 
-# --- [자막 기능: 파일명 패턴 매칭 강화 버전] ---
+# --- [자막 기능: 비동기 추출, 검색 로직 개선, 타임아웃 해결 버전] ---
+
+def run_subtitle_extraction(vp, rel_path, sub_to_extract):
+    """백그라운드에서 자막을 추출하고 지정된 폴더에 저장합니다."""
+    try:
+        stream_index = sub_to_extract['index']
+        lang = sub_to_extract.get('tags', {}).get('language', 'und').lower()
+        lang_suffix = 'ko' if lang in ['ko', 'kor'] else 'en' if lang in ['en', 'eng'] else 'und'
+
+        video_rel_hash = hashlib.md5(rel_path.encode()).hexdigest()
+        subtitle_filename = f"{video_rel_hash}.{lang_suffix}.srt"
+        subtitle_full_path = os.path.join(SUBTITLE_DIR, subtitle_filename)
+
+        if not os.path.exists(subtitle_full_path):
+            log("SUBTITLE", f"백그라운드 추출 시작: 스트림 #{stream_index} ({lang}) -> {subtitle_filename}")
+
+            # [수정] -vn, -an 플래그를 추가하여 비디오와 오디오 스트림 처리를 건너뛰고 자막 추출 속도를 높입니다.
+            extract_cmd = [FFMPEG_PATH, "-y", "-nostdin", "-i", vp, "-vn", "-an", "-map", f"0:{stream_index}", "-c:s",
+                           "srt", subtitle_full_path]
+
+            try:
+                # stdout, stderr를 DEVNULL로 보내 교착 상태(데드락)를 방지합니다.
+                proc = subprocess.run(extract_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                      timeout=300)
+                log("SUBTITLE", f"백그라운드 추출 성공: {subtitle_filename}")
+            except subprocess.CalledProcessError as e:
+                log("SUBTITLE_FAIL", f"추출 실패. FFmpeg가 0이 아닌 종료 코드를 반환했습니다. Code: {e.returncode}")
+            except subprocess.TimeoutExpired:
+                log("SUBTITLE_FAIL", f"추출 시간 초과 (300초): {subtitle_filename}")
+        else:
+            log("SUBTITLE", f"이미 추출된 파일이 존재하여 건너뜁니다: {subtitle_filename}")
+
+    except Exception as e:
+        log("SUBTITLE_ERROR", f"백그라운드 자막 추출 중 심각한 예외 발생: {traceback.format_exc()}")
+
 
 @app.route('/api/subtitle_info')
 def get_subtitle_info_api():
@@ -1725,43 +1761,64 @@ def get_subtitle_info_api():
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
         rel_path = nfc(urllib.parse.unquote(path_raw))
         vp = get_real_path(os.path.join(base, rel_path))
+
         parent_dir = os.path.dirname(vp)
         video_filename = os.path.basename(vp)
         video_name_no_ext = os.path.splitext(video_filename)[0]
 
         log("SUBTITLE", f"자막 조회 시작: {video_filename}")
 
-        # 1. 외부 자막 찾기
         external = []
+
+        # 1. 원본 폴더에서 외부 자막 찾기
         if os.path.exists(parent_dir):
             for f in os.listdir(parent_dir):
                 f_nfc = nfc(f)
-                if f_nfc.startswith(video_name_no_ext) and f_nfc.lower().endswith(('.srt', '.smi', '.ass', '.vtt')):
-                    if f_nfc != video_filename:
-                        external.append({
-                            "name": f_nfc,
-                            "path": nfc(os.path.join(os.path.dirname(rel_path), f_nfc))
-                        })
+                if f_nfc.lower().endswith(('.srt', '.smi', '.ass', '.vtt')):
+                    sub_name_no_ext = os.path.splitext(f_nfc)[0]
+                    if video_name_no_ext.startswith(sub_name_no_ext) or sub_name_no_ext.startswith(video_name_no_ext):
+                        if f_nfc != video_filename:
+                            external.append({
+                                "name": f_nfc,
+                                "path": nfc(os.path.join(os.path.dirname(rel_path), f_nfc))
+                            })
 
-        # 2. 내장 자막 확인
-        cmd = [FFPROBE_PATH, "-v", "error", "-show_streams", "-of", "json", vp]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-        all_streams = json.loads(result.stdout).get('streams', [])
-        embedded = [s for s in all_streams if
-                    s.get('codec_type') == 'subtitle' or 'sub' in s.get('codec_name', '').lower()]
+        # 2. 별도 자막 폴더에서 추출된 자막 찾기
+        video_rel_hash = hashlib.md5(rel_path.encode()).hexdigest()
+        if os.path.exists(SUBTITLE_DIR):
+            for f in os.listdir(SUBTITLE_DIR):
+                if f.startswith(video_rel_hash):
+                    display_name = f.replace(f"{video_rel_hash}.", f"{video_name_no_ext}.")
+                    external.append({
+                        "name": display_name,
+                        "path": f"__SUBTITLE_DIR__/{f}"
+                    })
 
-        log("SUBTITLE", f"탐색 완료 - 외부 자막: {len(external)}개, 내장 자막: {len(embedded)}개")
+        # 3. 내장 자막 확인
+        embedded = []
+        if not external:  # 외부 자막이 없을 때만 내장 자막을 확인하여 성능 최적화
+            cmd = [FFPROBE_PATH, "-v", "error", "-show_streams", "-of", "json", vp]
+            try:
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+                                        timeout=60)
+                all_streams = json.loads(result.stdout).get('streams', [])
+                embedded = [s for s in all_streams if
+                            s.get('codec_type') == 'subtitle' or 'sub' in s.get('codec_name', '').lower()]
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+                log("SUBTITLE_ERROR", f"내장 자막 분석 실패: {e}")
 
-        # 3. 외부 자막이 없고 내장 자막만 있을 경우, 자동 추출
-        if not external and embedded:
-            log("SUBTITLE", "외부 자막이 없어 내장 자막 자동 추출을 시도합니다.")
+        final_subs = sorted(list({sub['path']: sub for sub in external}.values()), key=lambda x: x['name'])
+        log("SUBTITLE", f"탐색 완료 - 최종 외부 자막: {len(final_subs)}개, 내장 자막: {len(embedded)}개")
 
-            # 언어 우선순위: 한국어 > 영어 > 기타
+        extraction_started = False
+        # 4. 외부 자막이 없고 내장 자막만 있을 경우, 백그라운드 추출 시작
+        if not final_subs and embedded:
+            log("SUBTITLE", "외부 자막 없음. 내장 자막 백그라운드 추출을 예약합니다.")
+
             sub_to_extract = None
             lang_priority = {'ko': 1, 'kor': 1, 'en': 2, 'eng': 2}
-
-            # 점수 매겨서 최고점 자막 선택
             best_score = float('inf')
+
             for sub in embedded:
                 lang = sub.get('tags', {}).get('language', 'und').lower()
                 score = lang_priority.get(lang, 99)
@@ -1770,76 +1827,65 @@ def get_subtitle_info_api():
                     sub_to_extract = sub
 
             if sub_to_extract:
-                stream_index = sub_to_extract['index']
-                lang_code = sub_to_extract.get('tags', {}).get('language', 'und').lower()
-                if lang_code in ['kor', 'ko']:
-                    lang_suffix = 'ko'
-                elif lang_code in ['eng', 'en']:
-                    lang_suffix = 'en'
-                else:
-                    lang_suffix = 'und'
-
-                subtitle_filename = f"{video_name_no_ext}.{lang_suffix}.srt"
-                subtitle_full_path = os.path.join(parent_dir, subtitle_filename)
-
-                if not os.path.exists(subtitle_full_path):
-                    log("SUBTITLE", f"추출 시작: 스트림 #{stream_index} ({lang_code}) -> {subtitle_filename}")
-                    extract_cmd = [FFMPEG_PATH, "-y", "-i", vp, "-map", f"0:{stream_index}", "-c:s", "srt",
-                                   subtitle_full_path]
-                    try:
-                        subprocess.run(extract_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                        log("SUBTITLE", f"추출 성공: {subtitle_filename}")
-                        # 추출 성공 시, external 목록에 추가
-                        external.append({
-                            "name": subtitle_filename,
-                            "path": nfc(os.path.join(os.path.dirname(rel_path), subtitle_filename))
-                        })
-                    except subprocess.CalledProcessError as e:
-                        log("SUBTITLE_ERROR", f"자막 추출 실패: {e.stderr.decode()}")
-                else:
-                    log("SUBTITLE", f"이미 추출된 자막 파일이 존재합니다: {subtitle_filename}")
+                SUBTITLE_EXECUTOR.submit(run_subtitle_extraction, vp, rel_path, sub_to_extract)
+                extraction_started = True  # 앱에 추출 시작 신호 보내기
 
         return jsonify({
-            "external": sorted(external, key=lambda x: x['name']),  # 정렬하여 일관된 순서 보장
-            "embedded": embedded
+            "external": final_subs,
+            "embedded": embedded,
+            "extraction_triggered": extraction_started
         })
     except Exception as e:
-        log("SUBTITLE_ERROR", f"자막 정보 조회 중 심각한 에러 발생: {str(e)}\\n{traceback.format_exc()}")
-        return jsonify({"error": str(e), "external": [], "embedded": []})
+        log("SUBTITLE_ERROR", f"자막 정보 조회 중 에러: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"error": str(e), "external": [], "embedded": [], "extraction_triggered": False})
 
 
 @app.route('/api/subtitle_extract')
 def subtitle_extract():
-    path_raw, prefix = request.args.get('path'), request.args.get('type')
-    index = request.args.get('index')  # 내장 자막용
-    sub_path = request.args.get('sub_path')  # 외부 자막용
+    path_raw = request.args.get('path')
+    prefix = request.args.get('type')
+    index = request.args.get('index')
+    sub_path = request.args.get('sub_path')
 
     try:
-        base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
-
-        # [경우 1] 외부 자막 파일을 직접 전송하는 경우
         if sub_path:
-            full_sub_path = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(sub_path))))
-            if os.path.exists(full_sub_path):
+            full_sub_path = None
+            if sub_path.startswith("__SUBTITLE_DIR__/"):
+                filename = sub_path.replace("__SUBTITLE_DIR__/", "")
+                full_sub_path = get_real_path(os.path.join(SUBTITLE_DIR, filename))
+            else:
+                base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
+                full_sub_path = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(sub_path))))
+
+            if full_sub_path and os.path.exists(full_sub_path):
                 return send_file(full_sub_path)
+            else:
+                log("SUBTITLE_ERROR", f"외부 자막 파일을 찾을 수 없음: {full_sub_path}")
+                return "Not Found", 404
 
-        # [경우 2] 내장 자막을 추출하는 경우
-        vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
-        cmd = [FFMPEG_PATH, "-y", "-i", vp, "-map", f"0:{index}", "-f", "srt", "pipe:1"]
+        if index is not None:
+            base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
+            vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
 
-        def generate():
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            try:
-                while True:
-                    chunk = proc.stdout.read(4096)
-                    if not chunk: break
-                    yield chunk
-            finally:
-                proc.kill()
+            cmd = [FFMPEG_PATH, "-y", "-nostdin", "-i", vp, "-map", f"0:{index}", "-f", "srt", "pipe:1"]
 
-        return Response(generate(), mimetype='text/plain')
-    except:
-        return "Error", 500
+            def generate():
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                try:
+                    while True:
+                        chunk = proc.stdout.read(4096)
+                        if not chunk: break
+                        yield chunk
+                finally:
+                    proc.kill()
+
+            return Response(generate(), mimetype='text/plain; charset=utf-8')
+
+        return "Bad Request", 400
+    except Exception as e:
+        log("SUBTITLE_ERROR", f"자막 전송 중 에러 발생: {str(e)}\n{traceback.format_exc()}")
+        return "Internal Server Error", 500
+
 
 # --- [UI/캐시 로직 보존] ---
 @app.route('/updater')

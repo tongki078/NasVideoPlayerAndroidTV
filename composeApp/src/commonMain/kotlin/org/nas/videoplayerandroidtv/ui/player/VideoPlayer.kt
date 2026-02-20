@@ -16,7 +16,7 @@ expect fun VideoPlayer(
     onFullscreenClick: (() -> Unit)? = null,
     onVideoEnded: (() -> Unit)? = null,
     onSeekFinished: (() -> Unit)? = null,
-    onSubtitleTracksAvailable: ((List<String>) -> Unit)? = null,
+    onSubtitleTracksAvailable: ((List<String>) -> Unit)? = null, // 기본값 제거
     selectedSubtitleIndex: Int = -2,
-    onSubtitleSelected: ((Int) -> Unit)? = null
+    onSubtitleSelected: ((Int) -> Unit)? = null // 기본값 제거
 )
