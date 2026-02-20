@@ -29,7 +29,7 @@ DATA_DIR = "/volume2/video/thumbnails"
 DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
-CACHE_VERSION = "137.24" # 타임아웃 해결 및 모든 최신 기능 통합 버전
+CACHE_VERSION = "137.31" # 에피소드 실시간 로깅 강화 버전
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -39,6 +39,39 @@ SUCCESS_LOG_PATH = os.path.join(SCRIPT_DIR, "metadata_success.txt")
 TMDB_MEMORY_CACHE = {}
 TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk".strip()
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
+
+# [추가] 매칭 진단용 전역 변수
+MATCH_DIAGNOSTICS = {}
+
+# --- [추가] 실시간 UI 모니터링을 위한 전역 상태 관리 ---
+UPDATE_STATE = {
+    "is_running": False,
+    "task_name": "대기 중",
+    "total": 0,
+    "current": 0,
+    "success": 0,
+    "fail": 0,
+    "current_item": "-",
+    "logs": deque(maxlen=300) # 최근 300개의 로그만 유지하여 메모리 최적화
+}
+UPDATE_LOCK = threading.Lock()
+
+def set_update_state(is_running=None, task_name=None, total=None, current=None, success=None, fail=None, current_item=None, clear_logs=False):
+    with UPDATE_LOCK:
+        if is_running is not None: UPDATE_STATE["is_running"] = is_running
+        if task_name is not None: UPDATE_STATE["task_name"] = task_name
+        if total is not None: UPDATE_STATE["total"] = total
+        if current is not None: UPDATE_STATE["current"] = current
+        if success is not None: UPDATE_STATE["success"] = success
+        if fail is not None: UPDATE_STATE["fail"] = fail
+        if current_item is not None: UPDATE_STATE["current_item"] = current_item
+        if clear_logs: UPDATE_STATE["logs"].clear()
+
+def emit_ui_log(msg, log_type='info'):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    with UPDATE_LOCK:
+        UPDATE_STATE["logs"].append({"time": timestamp, "msg": msg, "type": log_type})
+# -----------------------------------------------------------
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(TMDB_CACHE_DIR, exist_ok=True)
@@ -118,6 +151,8 @@ def get_db():
         conn.execute('PRAGMA journal_mode=WAL')
         # busy_timeout을 한번 더 명시적으로 설정 (밀리초 단위, 30000ms = 30초)
         conn.execute('PRAGMA busy_timeout = 30000')
+        # [추가] temp_store를 메모리로 변경하여 디스크 I/O 최적화 및 디스크 풀림 현상 완화
+        conn.execute('PRAGMA temp_store = MEMORY')
     except sqlite3.OperationalError as e:
         log("DB_ERROR", f"WAL 모드 설정 실패 (무시하고 계속): {e}")
     except Exception as e:
@@ -206,8 +241,8 @@ REGEX_CH_PREFIX = re.compile(r'^\[(?:KBS|SBS|MBC|tvN|JTBC|OCN|Mnet|TV조선|채�
 # [개선] 기술적 태그: 한글 단어 일부를 태그로 오해하지 않도록 경계 조건 강화
 REGEX_TECHNICAL_TAGS = re.compile(r'(?i)[.\s_-](?!(?:\d+\b))(\d{3,4}p|2160p|FHD|QHD|UHD|4K|Bluray|Blu-ray|WEB-DL|WEBRip|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AVC|AAC\d?|DTS-?H?D?|AC3|DDP\d?|DD\+\d?|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|HDR(?:10)?(?:\+)?|Vision|Dolby|NF|AMZN|HMAX|DSNP|AppleTV?|Disney|PCOK|playWEB|ATVP|HULU|HDTV|HD|KBS|SBS|MBC|TVN|JTBC|NEXT|ST|SW|KL|YT|MVC|KN|FLUX|hallowed|PiRaTeS|Jadewind|Movie|pt\s*\d+|KOREAN|KOR|ITALIAN|JAPANESE|JPN|CHINESE|CHN|ENGLISH|ENG|USA|HK|TW|FRENCH|GERMAN|SPANISH|THAI|VIETNAMESE|WEB|DL|TVRip|HDR10Plus|IMAX|Unrated|REMASTERED|Criterion|NonDRM|BRRip|1080i|720i|국어|Mandarin|Cantonese|FanSub|VFQ|VF|2CH|5\.1CH|8m|2398|PROPER|PROMO|LIMITED|RM4K|DC|THEATRICAL|EXTENDED|FINAL|DUB|KORDUB|JAPDUB|ENGDUB|ARROW|EDITION|SPECIAL|COLLECTION|RETAIL|TVING|WAVVE|Coupang|CP|B-Global|TrueHD|E-AC3|EAC3|DV|Dual-Audio|Multi-Audio|Multi-Sub)(?:\b|[.\s_-]|$)')
 
-# [개선] 에피소드 마커: 날짜(\d{6}, \d{8}) 오탐 방지를 위해 제거하고 순수 에피소드 패턴만 유지
-REGEX_EP_MARKER_STRICT = re.compile(r'(?i)(?:(?<=[\uac00-\ud7af\u3040-\u30ff\u4e00-\u9fff])|[.\s_-]|^)(?:第?\s*S(\d+)E(\d+)(?:[-~]E?\d+)?|第?\s*S(\d+)|第?\s*E(\d+)(?:[-~]\d+)?|\d+\s*(?:화|회|기|부|話)|Season\s*\d+|Part\s*\d+|pt\s*\d+|Episode\s*\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+|시즌\s*\d+|[상하]부|최종화)(?:\b|[.\s_-]|$)')
+# [개선] 에피소드 번호 추출 패턴 대폭 강화 (화/회/기/부/話 뒤에 바로 오는 경우도 허용)
+REGEX_EP_MARKER_STRICT = re.compile(r'(?i)(?:(?<=[\uac00-\ud7af\u3040-\u30ff\u4e00-\u9fff])|[.\s_-]|^)(?:第?\s*S(\d+)E(\d+)(?:[-~]E?\d+)?(?:[화회기부話])?|第?\s*S(\d+)|第?\s*E(\d+)(?:[-~]\d+)?(?:[화회기부話])?|(\d+)\s*(?:화|회|기|부|話)|Season\s*(\d+)|Episode\s*(\d+)|시즌\s*(\d+))(?:\b|[.\s_-]|$)')
 
 REGEX_DATE_YYMMDD = re.compile(r'(?<!\d)\d{6}(?!\d)')
 REGEX_FORBIDDEN_CONTENT = re.compile(r'(?i)(Storyboard|Behind the Scenes|Making of|Deleted Scenes|Alternate Scenes|Gag Reel|Gag Menu|Digital Hits|Trailer|Bonus|Extras|Gallery|Production|Visual Effects|VFX|등급고지|예고편|개봉버전|인터뷰|삭제장면|(?<!\S)[상하](?!\S))')
@@ -215,9 +250,11 @@ REGEX_FORBIDDEN_TITLE = re.compile(r'(?i)^\s*(Season\s*\d+|Part\s*\d+|EP\s*\d+|\
 
 REGEX_BRACKETS = re.compile(r'\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\)|$)|\【.*?(?:\】|$)|\『.*?(?:\』|$)|\「.*?(?:\」|$)|\（.*?(?:\）|$)')
 REGEX_TMDB_HINT = re.compile(r'\{tmdb[\s-]*(\d+)\}')
-REGEX_JUNK_KEYWORDS = re.compile(r'(?i)\s*(?:더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|익스텐디드|등급고지|예고편|(?<!\S)[상하](?!\S))\s*')
+# [추가] 불필요한 키워드 추가 (한국어더빙, 큐레이션, 단편 등)
+REGEX_JUNK_KEYWORDS = re.compile(r'(?i)\s*(?:더빙|자막|한국어|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|익스텐디드|등급고지|예고편|(?<!\S)[상하](?!\S)|극장판\s*\d+기|특집\s*다큐|\d+부작|큐레이션|단편|드라마)\s*')
 
-REGEX_SPECIAL_CHARS = re.compile(r'[\[\]()_\-\.!#@*※×,~:;【】『』「」"\'（）]')
+# [수정] 특수문자 제거 시 하이픈(-)과 콜론(:)은 제외하여 부제 분리에 사용 (별표 추가)
+REGEX_SPECIAL_CHARS = re.compile(r'[\[\]()_\.!#@*※×,~;【】『』「」"\'（）☆★]')
 REGEX_LEADING_INDEX = re.compile(r'^\s*(\d{1,5}(?:\s+|[.\s_-]+|(?=[가-힣a-zA-Z])))|^\s*(\d{1,5}\. )')
 REGEX_SPACES = re.compile(r'\s+')
 
@@ -291,12 +328,18 @@ def clean_title_complex(title):
 def extract_episode_numbers(filename):
     match = REGEX_EP_MARKER_STRICT.search(filename)
     if match:
-        s, e = match.group(1), match.group(2)
-        if s and e: return int(s), int(e)
-        s_only = match.group(3)
-        if s_only: return int(s_only), 1
-        e_only = match.group(4)
-        if e_only: return 1, int(e_only)
+        # S01E05 형식
+        if match.group(1) and match.group(2): return int(match.group(1)), int(match.group(2))
+        # S01 형식
+        if match.group(3): return int(match.group(3)), 1
+        # E05 형식
+        if match.group(4): return 1, int(match.group(4))
+        # 13화, 13회 형식
+        if match.group(5): return 1, int(match.group(5))
+        # Season 2, Episode 3, 시즌 2 형식
+        if match.group(6): return int(match.group(6)), 1
+        if match.group(7): return 1, int(match.group(7))
+        if match.group(8): return int(match.group(8)), 1
     return 1, None
 
 def natural_sort_key(s):
@@ -322,7 +365,7 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False): # category �
         return {"failed": True, "forbidden": True}
 
     # 카테고리에 따른 선호 타입 결정 (Taxi Driver 등 동명 타이틀 오매칭 방지)
-    pref_mtype = 'movie' if category == 'movies' else 'tv' if category in ['koreantv', 'foreigntv', 'air', 'animations_all'] else None
+    pref_mtype = 'movie' if (category == 'movies' or '극장판' in title) else 'tv' if category in ['koreantv', 'foreigntv', 'air', 'animations_all'] else None
 
     cache_key = f"{ct}_{year}_{category}" if year else f"{ct}_{category}"
     h = hashlib.md5(nfc(cache_key).encode()).hexdigest()
@@ -358,7 +401,7 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False): # category �
         except: return []
 
     def rank_results(results, target_title, target_year, pref_type=None):
-        if not results: return None
+        if not results: return None, []
         scored = []
         for res in results:
             if res.get('media_type') == 'person': continue
@@ -386,10 +429,24 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False): # category �
             scored.append((score, res))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return scored[0][1] if scored and scored[0][0] > 35 else None
 
+        # [추가] 진단 데이터 수집
+        candidates = []
+        for s, r in scored[:3]:
+            candidates.append({
+                "title": r.get('title') or r.get('name'),
+                "year": (r.get('release_date') or r.get('first_air_date') or "").split('-')[0],
+                "score": round(s, 1),
+                "type": r.get('media_type') or ('movie' if r.get('title') else 'tv')
+            })
+
+        # [수정] 반환 시 항상 두 개의 값을 반환하도록 보장
+        best = scored[0][1] if scored and scored[0][0] > 35 else None
+        return best, candidates
     try:
         best_match = None
+        all_candidates = []
+
         if hint_id:
             log("TMDB", f"💡 힌트 ID 사용: {hint_id}")
             for mt in ['movie', 'tv']:
@@ -401,12 +458,23 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False): # category �
 
         if not best_match:
             results = perform_search(ct, "ko-KR", "multi", year)
-            best_match = rank_results(results, ct, year, pref_mtype)
+            best_match, all_candidates = rank_results(results, ct, year, pref_mtype)
 
             if not best_match and year:
                 log("TMDB", f"🔄 연도 제외 재검색: '{ct}'")
                 results = perform_search(ct, "ko-KR", "multi", None)
-                best_match = rank_results(results, ct, year, pref_mtype)
+                best_match, all_candidates = rank_results(results, ct, year, pref_mtype)
+
+            if not best_match:
+                # [수정] 괄호 안의 원어/영어 제목 추출하여 검색 시도
+                alt_titles = re.findall(r'[\(\[\{【『「（](.*?)[\)\]\}】』」）]', title)
+                for alt in alt_titles:
+                    alt = alt.strip()
+                    if len(alt) >= 2 and not REGEX_TECHNICAL_TAGS.search(alt):
+                        log("TMDB", f"🔄 대체 제목 검색: '{alt}'")
+                        results = perform_search(alt, None, "multi", year)
+                        best_match, all_candidates = rank_results(results, alt, year, pref_mtype)
+                        if best_match: break
 
             if not best_match:
                 # [개선] 한글 제목만 추출하여 검색 (특수문자/영어 제외)
@@ -414,7 +482,7 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False): # category �
                 if ko_only and ko_only != ct and len(ko_only) >= 2:
                     log("TMDB", f"🔄 한글 부분 재검색: '{ko_only}'")
                     results = perform_search(ko_only, "ko-KR", "multi", year)
-                    best_match = rank_results(results, ko_only, year, pref_mtype)
+                    best_match, all_candidates = rank_results(results, ko_only, year, pref_mtype)
 
             if not best_match:
                 # [수정] 원어(일어/한자) 부분 추출 검색 추가
@@ -423,7 +491,7 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False): # category �
                     if len(part) >= 2:
                         log("TMDB", f"🔄 원어 부분 검색: '{part}'")
                         results = perform_search(part, None, "multi", year)
-                        best_match = rank_results(results, part, year, pref_mtype)
+                        best_match, all_candidates = rank_results(results, part, year, pref_mtype)
                         if best_match: break
 
             if not best_match:
@@ -435,7 +503,7 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False): # category �
                         if len(sub_title) >= 2 and not REGEX_FORBIDDEN_TITLE.match(sub_title):
                             log("TMDB", f"🔄 부분 제목 검색: '{sub_title}'")
                             results = perform_search(sub_title, "ko-KR", "multi", year)
-                            best_match = rank_results(results, sub_title, year, pref_mtype)
+                            best_match, all_candidates = rank_results(results, sub_title, year, pref_mtype)
                             if best_match: break
 
         if best_match:
@@ -478,7 +546,11 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False): # category �
                     s_resp = requests.get(f"{TMDB_BASE_URL}/tv/{t_id}/season/{s_num}?language=ko-KR", headers=headers, timeout=10).json()
                     if 'episodes' in s_resp:
                         for ep in s_resp['episodes']:
-                            info['seasons_data'][f"{s_num}_{ep['episode_number']}"] = {"overview": ep.get('overview'), "air_date": ep.get('air_date')}
+                            info['seasons_data'][f"{s_num}_{ep['episode_number']}"] = {
+                                "overview": ep.get('overview'),
+                                "air_date": ep.get('air_date'),
+                                "still_path": ep.get('still_path')
+                            }
 
             TMDB_MEMORY_CACHE[h] = info
             try:
@@ -490,6 +562,14 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False): # category �
             return info
         else:
             log("TMDB", f"❌ 검색 결과 없음: '{ct}'")
+            # [추가] 진단 정보 저장
+            MATCH_DIAGNOSTICS[title] = {
+                "cleaned": ct,
+                "year": year,
+                "category": category,
+                "candidates": all_candidates,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
             log_matching_failure(title, ct, "NOT_FOUND_IN_TMDB")
             try:
                 conn = get_db()
@@ -531,6 +611,8 @@ def scan_recursive_to_db(bp, prefix, category):
     current_ids = set()
     total = len(all_files)
 
+    set_update_state(is_running=True, task_name=f"스캔 ({category})", total=total, current=0, success=0, fail=0, clear_logs=True)
+
     for idx, fp in enumerate(all_files):
         mid = hashlib.md5(fp.encode()).hexdigest()
         current_ids.add(mid)
@@ -538,23 +620,34 @@ def scan_recursive_to_db(bp, prefix, category):
         name = os.path.splitext(os.path.basename(fp))[0]
         spath = f"{category}/{rel}"
 
+        with UPDATE_LOCK:
+            UPDATE_STATE["current"] += 1
+            UPDATE_STATE["current_item"] = name
+
         ct, yr = clean_title_complex(name)
         cursor.execute('INSERT OR IGNORE INTO series (path, category, name, cleanedName, yearVal) VALUES (?, ?, ?, ?, ?)', (spath, category, name, ct, yr))
 
         if mid not in db_data:
             cursor.execute('INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl) VALUES (?, ?, ?, ?, ?)', (mid, spath, os.path.basename(fp), f"/video_serve?type={prefix}&path={urllib.parse.quote(rel)}", f"/thumb_serve?type={prefix}&id={mid}&path={urllib.parse.quote(rel)}"))
+            emit_ui_log(f"신규 추가: '{name}'", 'success')
+            with UPDATE_LOCK: UPDATE_STATE["success"] += 1
         elif db_data[mid] != spath:
             cursor.execute('UPDATE episodes SET series_path = ? WHERE id = ?', (spath, mid))
+            emit_ui_log(f"경로 갱신: '{name}'", 'info')
+            with UPDATE_LOCK: UPDATE_STATE["success"] += 1
+        else:
+            with UPDATE_LOCK: UPDATE_STATE["success"] += 1 # 이미 존재
 
         if (idx + 1) % 2000 == 0:
             conn.commit()
-            log("SCAN", f"⏳ 진행 중... ({idx+1}/{total})")
 
     for rid in (set(db_data.keys()) - current_ids):
         cursor.execute('DELETE FROM episodes WHERE id = ?', (rid,))
     cursor.execute('DELETE FROM series WHERE path NOT IN (SELECT DISTINCT series_path FROM episodes) AND category = ?', (category,))
     conn.commit()
     conn.close()
+
+    set_update_state(is_running=False, current_item="작업 완료")
     log("SCAN", f"✅ '{category}' 스캔 완료 ({total}개)")
 
 def perform_full_scan():
@@ -618,8 +711,12 @@ def fetch_metadata_async(force_all=False):
                 if (idx + 1) % 2000 == 0: conn.commit()
             conn.commit()
 
-        log("METADATA", "📂 DB에서 매칭되지 않은 작품 목록 불러오는 중...")
-        all_names_rows = conn.execute('SELECT name FROM series WHERE tmdbId IS NULL AND failed = 0').fetchall()
+        # [수정] 이미 매칭된 시리즈라도 에피소드 정보(시즌 번호 등)가 없는 경우 포함하도록 쿼리 수정
+        all_names_rows = conn.execute('''
+            SELECT name, category FROM series
+            WHERE failed = 0
+            AND (tmdbId IS NULL OR path IN (SELECT series_path FROM episodes WHERE season_number IS NULL))
+        ''').fetchall()
 
         if not all_names_rows:
             conn.close()
@@ -631,7 +728,9 @@ def fetch_metadata_async(force_all=False):
         group_rows = conn.execute('''
             SELECT cleanedName, yearVal, category, MIN(name) as sample_name, GROUP_CONCAT(name, '|') as orig_names
             FROM series
-            WHERE tmdbId IS NULL AND failed = 0 AND cleanedName IS NOT NULL
+            WHERE failed = 0
+            AND (tmdbId IS NULL OR path IN (SELECT series_path FROM episodes WHERE season_number IS NULL))
+            AND cleanedName IS NOT NULL
             GROUP BY cleanedName, yearVal, category
         ''').fetchall()
         conn.close()
@@ -701,10 +800,15 @@ def fetch_metadata_async(force_all=False):
                             if EN:
                                 ei = info['seasons_data'].get(f"{sn}_{EN}")
                                 if ei:
-                                    ep_batch.append((ei.get('overview'), ei.get('air_date'), sn, EN, ep_row['id']))
+                                    # [수정] TMDB Still 이미지가 있으면 thumbnailUrl을 해당 URL로 업데이트
+                                    still_url = f"https://image.tmdb.org/t/p/w500{ei.get('still_path')}" if ei.get('still_path') else None
+                                    ep_batch.append((ei.get('overview'), ei.get('air_date'), sn, EN, still_url, ep_row['id']))
                         if ep_batch:
-                            cursor.executemany('UPDATE episodes SET overview=?, air_date=?, season_number=?, episode_number=? WHERE id=?', ep_batch)
-
+                            cursor.executemany(
+                                'UPDATE episodes SET overview=?, air_date=?, season_number=?, episode_number=?, thumbnailUrl=COALESCE(?, thumbnailUrl) WHERE id=?',
+                                ep_batch)
+                            # [개선] 어떤 작품의 에피소드가 업데이트되었는지 이름과 개수를 명확히 로깅
+                            log("METADATA", f"📺 '{task['sample_name']}' 에피소드 {Log(len(ep_batch))}개 정보 및 Still 이미지 적용 완료")
             conn.commit()
             conn.close()
             total_success += batch_success
@@ -851,8 +955,10 @@ def get_series_detail_api():
     series['movies'] = sorted(eps, key=lambda x: natural_sort_key(x['title']))
     conn.close()
 
-    for ep in series['movies']:
-        THUMB_EXECUTOR.submit(pre_generate_individual_task, ep['thumbnailUrl'])
+    # [최적화] 상세 페이지 진입 시마다 백그라운드에서 FFmpeg을 돌리던 작업을 중단합니다.
+    # 이제 TMDB 스틸 이미지를 우선 사용하므로 무거운 생성이 필요 없습니다.
+    # for ep in series['movies']:
+    #     THUMB_EXECUTOR.submit(pre_generate_individual_task, ep['thumbnailUrl'])
 
     _DETAIL_CACHE.append((path, series))
     return gzip_response(series)
@@ -899,12 +1005,164 @@ def rescan_metadata():
 def retry_failed_metadata():
     if IS_METADATA_RUNNING:
         return jsonify({"status": "error", "message": "Metadata process is already running."})
+
+    # [추가] 재시도 시 이전 진단 로그 초기화 (Admin 페이지 로딩 문제 해결)
+    MATCH_DIAGNOSTICS.clear()
+
     conn = get_db()
     conn.execute('UPDATE series SET failed = 0 WHERE failed = 1')
     conn.commit()
     conn.close()
-    threading.Thread(target=fetch_metadata_async, daemon=False).start()
-    return jsonify({"status": "success", "message": "Retrying failed metadata with improved regex."})
+    # [수정] 강제 업데이트를 위해 daemon=False로 실행하여 확실히 완료되도록 함
+    threading.Thread(target=fetch_metadata_async, args=(False,), daemon=False).start()
+    return jsonify({"status": "success", "message": "Retrying failed metadata and updating matched series with stills."})
+
+@app.route('/backup_metadata')
+def backup_metadata():
+    try:
+        log("BACKUP", "메타데이터 백업 시작...")
+        conn = get_db()
+        # tmdbId가 있는(성공한) 항목만 조회
+        cursor = conn.execute('SELECT * FROM series WHERE tmdbId IS NOT NULL')
+        rows = cursor.fetchall()
+        conn.close()
+
+        backup_data = []
+        for row in rows:
+            item = dict(row)
+            # JSON 문자열로 저장된 필드들을 실제 객체로 변환하여 저장 (가독성/재사용성 위해)
+            for key in ['genreIds', 'genreNames', 'actors']:
+                if item.get(key):
+                    try: item[key] = json.loads(item[key])
+                    except: pass
+            backup_data.append(item)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"metadata_backup_{timestamp}.json"
+        save_path = os.path.join(SCRIPT_DIR, filename)
+
+        with open(save_path, 'w', encoding='utf-8') as f:
+            json.dump(backup_data, f, ensure_ascii=False, indent=2)
+
+        log("BACKUP", f"백업 완료: {save_path} ({len(backup_data)}건)")
+        return jsonify({"status": "success", "file": save_path, "count": len(backup_data)})
+    except Exception as e:
+        log("BACKUP_ERROR", str(e))
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/apply_tmdb_thumbnails')
+def apply_tmdb_thumbnails():
+    threading.Thread(target=run_apply_thumbnails, daemon=True).start()
+    return jsonify({"status": "success", "message": "Background task started: Applying TMDB thumbnails to episodes."})
+
+def run_apply_thumbnails():
+    log("THUMB_SYNC", "🔄 TMDB 썸네일 일괄 적용 시작 (미처리 항목만 스마트 필터링)")
+
+    # 1. 처음부터 모든 데이터를 가져오지 않고, 아직 http 썸네일이 아닌 에피소드를 가진 시리즈만 뽑아냅니다.
+    conn = get_db()
+    query = """
+        SELECT DISTINCT s.path, s.name, s.category, s.tmdbId
+        FROM series s
+        JOIN episodes e ON s.path = e.series_path
+        WHERE s.tmdbId IS NOT NULL
+        AND (e.thumbnailUrl IS NULL OR e.thumbnailUrl NOT LIKE 'http%')
+    """
+    # 딕셔너리 형태로 리스트에 완전히 적재
+    series_rows = [dict(r) for r in conn.execute(query).fetchall()]
+    conn.close() # 메인 커넥션 즉시 종료 (DB Lock 완전 차단)
+
+    total = len(series_rows)
+    log("THUMB_SYNC", f"🎯 업데이트가 필요한 실제 작품 수: {total}개 (이미 처리된 항목은 완전히 스킵됨)")
+
+    # [수정] UI 상태 초기화 (대시보드 시작)
+    set_update_state(is_running=True, task_name="TMDB 썸네일 일괄 교체", total=total, current=0, success=0, fail=0, clear_logs=True)
+
+    if total == 0:
+        log("THUMB_SYNC", "✅ 모든 에피소드 썸네일이 이미 TMDB 이미지로 적용되어 있습니다.")
+        emit_ui_log("모든 에피소드 썸네일이 이미 최신 상태입니다.", "success")
+        set_update_state(is_running=False, current_item="작업 완료")
+        return
+
+    updated_count = 0
+
+    # 2. 필터링된 진짜 대상들만 반복 처리
+    for idx, s_row in enumerate(series_rows):
+        path = s_row['path']
+        name = s_row['name']
+
+        # [수정] 현재 처리 중인 항목 UI 전송
+        with UPDATE_LOCK:
+            UPDATE_STATE["current"] += 1
+            UPDATE_STATE["current_item"] = name
+
+        try:
+            tmdb_id_full = s_row['tmdbId']
+            if tmdb_id_full and ':' in tmdb_id_full:
+                t_id = tmdb_id_full.split(':')[1]
+                hint_name = f"{{tmdb-{t_id}}} {name}"
+
+                # 메모리/DB 캐시에서 정보 가져오기 (DB를 잠깐 읽고 닫으므로 안전)
+                info = get_tmdb_info_server(hint_name, category=s_row['category'], ignore_cache=False)
+
+                if info and 'seasons_data' in info:
+                    # 쓰기/읽기용 커넥션을 필요할 때만 짧게 엽니다.
+                    u_conn = get_db()
+                    eps = u_conn.execute("SELECT id, title, thumbnailUrl FROM episodes WHERE series_path = ? AND (thumbnailUrl IS NULL OR thumbnailUrl NOT LIKE 'http%')", (path,)).fetchall()
+
+                    ep_batch = []
+                    for ep in eps:
+                        sn, en = extract_episode_numbers(ep['title'])
+                        if en:
+                            key = f"{sn}_{en}"
+                            if key in info['seasons_data']:
+                                still = info['seasons_data'][key].get('still_path')
+                                if still:
+                                    new_url = f"https://image.tmdb.org/t/p/w500{still}"
+                                    ep_batch.append((new_url, ep['id']))
+
+                    if ep_batch:
+                        u_conn.executemany("UPDATE episodes SET thumbnailUrl = ? WHERE id = ?", ep_batch)
+                        u_conn.commit()
+                        updated_count += len(ep_batch)
+                        with UPDATE_LOCK: UPDATE_STATE["success"] += 1
+                        emit_ui_log(f"'{name}' 에피소드 {len(ep_batch)}개 썸네일 업데이트 완료", "success")
+                    else:
+                        with UPDATE_LOCK: UPDATE_STATE["success"] += 1
+                        # [추가] 변경 사항이 없을 때 스킵 로그 출력
+                        emit_ui_log(f"'{name}' 건너뜀 (TMDB에 스틸컷 없음 또는 이미 적용됨)", "info")
+
+                    u_conn.close() # 볼일이 끝나면 즉시 닫음
+                else:
+                    # [추가] TMDB에서 상세 정보를 못 가져왔을 때
+                    with UPDATE_LOCK: UPDATE_STATE["success"] += 1
+                    emit_ui_log(f"'{name}' 건너뜀 (TMDB에서 시즌/에피소드 정보를 찾을 수 없음)", "warning")
+
+        except Exception as e:
+            log("THUMB_SYNC", f"Error processing {name}: {e}")
+            with UPDATE_LOCK: UPDATE_STATE["fail"] += 1
+            emit_ui_log(f"'{name}' 처리 중 에러 발생: {str(e)}", "error")
+
+        if (idx + 1) % 50 == 0:
+            log("THUMB_SYNC", f"진행 중... ({idx+1}/{total}) - 이번 작업으로 업데이트된 썸네일: {updated_count}개")
+
+    log("THUMB_SYNC", f"✅ 완료. 총 {updated_count}개 에피소드 썸네일 신규 업데이트 됨.")
+    # [수정] 작업 종료 처리
+    set_update_state(is_running=False, current_item=f"작업 완료 (총 {updated_count}개 교체됨)")
+    emit_ui_log(f"작업이 성공적으로 완료되었습니다. (총 {updated_count}개 교체됨)", "success")
+
+FFMPEG_PROCS = {}
+
+def kill_old_processes(sid):
+    if sid in FFMPEG_PROCS:
+        try:
+            FFMPEG_PROCS[sid].terminate()
+            FFMPEG_PROCS[sid].wait()
+        except: pass
+        del FFMPEG_PROCS[sid]
+    sdir = os.path.join(HLS_ROOT, sid)
+    if os.path.exists(sdir):
+        try: shutil.rmtree(sdir)
+        except: pass
 
 @app.route('/video_serve')
 def video_serve():
@@ -915,10 +1173,36 @@ def video_serve():
         if not os.path.exists(full_path):
              log("VIDEO", f"File not found: {full_path}")
              return "Not Found", 404
+
+        # [iOS HLS Logic]
+        ua = request.headers.get('User-Agent', '').lower()
+        is_ios = any(x in ua for x in ['iphone', 'ipad', 'apple', 'avfoundation'])
+        if is_ios and not full_path.lower().endswith(('.mp4', '.m4v', '.mov')):
+            sid = hashlib.md5(full_path.encode()).hexdigest()
+            kill_old_processes(sid)
+
+            sdir = os.path.join(HLS_ROOT, sid)
+            os.makedirs(sdir, exist_ok=True)
+            video_m3u8 = os.path.join(sdir, "video.m3u8")
+
+            if not os.path.exists(video_m3u8):
+                cmd = [FFMPEG_PATH, '-y', '-i', full_path, '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
+                       '-sn', '-c:a', 'aac', '-f', 'hls', '-hls_time', '6', '-hls_list_size', '0', video_m3u8]
+                FFMPEG_PROCS[sid] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                for _ in range(40):
+                    if os.path.exists(video_m3u8): break
+                    time.sleep(0.5)
+
+            return redirect(f"http://{MY_IP}:5000/hls/{sid}/video.m3u8")
+
         return send_file(full_path, conditional=True)
     except:
         log("VIDEO", f"Error serving video: {traceback.format_exc()}")
         return "Internal Server Error", 500
+
+@app.route('/hls/<sid>/<filename>')
+def serve_hls(sid, filename):
+    return send_from_directory(os.path.join(HLS_ROOT, sid), filename)
 
 # --- [새로운 고속 미리보기 엔드포인트] ---
 @app.route('/preview_serve')
@@ -958,6 +1242,182 @@ def preview_serve():
         return Response(generate(), mimetype='video/x-matroska')
     except:
         return "Error", 500
+
+# --- [관리자 및 진단 로직 추가] ---
+@app.route('/admin')
+def admin_page():
+    return """
+    <html>
+    <head>
+        <title>NAS Player Admin - Metadata Failures</title>
+        <style>
+            body { font-family: sans-serif; background: #141414; color: white; padding: 20px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { padding: 12px; text-align: left; border-bottom: 1px solid #333; }
+            th { background: #222; }
+            .candidate { font-size: 0.85em; color: #aaa; margin-bottom: 5px; }
+            .score { color: #46D369; font-weight: bold; }
+            input { padding: 5px; border-radius: 4px; border: 1px solid #444; background: #222; color: white; }
+            button { padding: 5px 10px; background: #E50914; color: white; border: none; border-radius: 4px; cursor: pointer; }
+            button:hover { background: #b20710; }
+            .pagination { margin-top: 20px; text-align: center; }
+            .pagination button { margin: 0 5px; }
+        </style>
+    </head>
+    <body>
+        <h1>메타데이터 매칭 실패 진단 및 수동 수정</h1>
+        <div id="content">로딩 중...</div>
+        <div class="pagination">
+            <button onclick="prevPage()">이전</button>
+            <span id="pageInfo" style="margin: 0 10px;"></span>
+            <button onclick="nextPage()">다음</button>
+        </div>
+        <script>
+            let currentOffset = 0;
+            const LIMIT = 50;
+            let totalCount = 0;
+
+            async function loadFailures() {
+                const resp = await fetch(`/api/admin/diagnostics?offset=${currentOffset}&limit=${LIMIT}`);
+                const data = await resp.json();
+                totalCount = data.total;
+
+                let html = '<table><tr><th>원본 파일명</th><th>정제된 제목</th><th>TMDB 후보군 (점수)</th><th>수동 매칭 (Type:ID)</th></tr>';
+                for (const [orig, info] of Object.entries(data.items)) {
+                    let candHtml = info.candidates.map(c =>
+                        `<div class="candidate">${c.title} (${c.year}) - <span class="score">${c.score}점</span> [${c.type}]</div>`
+                    ).join('') || '후보 없음';
+
+                    html += `<tr>
+                        <td>${orig}</td>
+                        <td>${info.cleaned} (${info.year || ''})</td>
+                        <td>${candHtml}</td>
+                        <td>
+                            <input type="text" id="id_${btoa(orig)}" placeholder="movie:123 or tv:456">
+                            <button onclick="manualMatch('${orig}')">적용</button>
+                        </td>
+                    </tr>`;
+                }
+                html += '</table>';
+                document.getElementById('content').innerHTML = html;
+                document.getElementById('pageInfo').innerText = `${currentOffset + 1} ~ ${Math.min(currentOffset + LIMIT, totalCount)} / 총 ${totalCount}건`;
+            }
+
+            function prevPage() {
+                if (currentOffset - LIMIT >= 0) {
+                    currentOffset -= LIMIT;
+                    loadFailures();
+                }
+            }
+
+            function nextPage() {
+                if (currentOffset + LIMIT < totalCount) {
+                    currentOffset += LIMIT;
+                    loadFailures();
+                }
+            }
+
+            async function manualMatch(orig) {
+                const val = document.getElementById('id_' + btoa(orig)).value;
+                if (!val.includes(':')) { alert('형식 오류! movie:ID 또는 tv:ID 로 입력하세요.'); return; }
+                const [type, id] = val.split(':');
+                const resp = await fetch('/api/admin/manual_match', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({orig_name: orig, type: type, tmdb_id: id})
+                });
+                const res = await resp.json();
+                if (res.status === 'success') { alert('수정 완료!'); loadFailures(); }
+                else { alert('에러: ' + res.message); }
+            }
+            loadFailures();
+        </script>
+    </body>
+    </html>
+    """
+
+@app.route('/api/admin/diagnostics')
+def get_diagnostics():
+    offset = int(request.args.get('offset', 0))
+    limit = int(request.args.get('limit', 50))
+
+    all_items = list(MATCH_DIAGNOSTICS.items())
+    total_count = len(all_items)
+    paged_items = all_items[offset : offset + limit]
+
+    return jsonify({
+        "total": total_count,
+        "items": dict(paged_items),
+        "offset": offset,
+        "limit": limit
+    })
+
+@app.route('/api/admin/manual_match', methods=['POST'])
+def manual_match():
+    data = request.json
+    orig_name = data.get('orig_name')
+    m_type = data.get('type')
+    t_id = data.get('tmdb_id')
+
+    if not all([orig_name, m_type, t_id]):
+        return jsonify({"status": "error", "message": "Missing data"})
+
+    try:
+        headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
+        d_resp = requests.get(f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings,credits", headers=headers, timeout=10).json()
+
+        if 'id' not in d_resp:
+            return jsonify({"status": "error", "message": "TMDB ID not found"})
+
+        yv = (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0]
+        rating = None
+        if 'content_ratings' in d_resp:
+            res_r = d_resp['content_ratings'].get('results', [])
+            kr = next((r['rating'] for r in res_r if r.get('iso_3166_1') == 'KR'), None)
+            if kr: rating = f"{kr}+" if kr.isdigit() else kr
+
+        genre_names = [g['name'] for g in d_resp.get('genres', [])]
+        cast_data = d_resp.get('credits', {}).get('cast', [])
+        actors = [{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in cast_data[:10]]
+        crew_data = d_resp.get('credits', {}).get('crew', [])
+        director = next((c['name'] for c in crew_data if c.get('job') == 'Director'), "")
+
+        info = {
+            "tmdbId": f"{m_type}:{t_id}",
+            "genreIds": [g['id'] for g in d_resp.get('genres', [])],
+            "genreNames": genre_names,
+            "director": director,
+            "actors": actors,
+            "posterPath": d_resp.get('poster_path'),
+            "year": yv,
+            "overview": d_resp.get('overview'),
+            "rating": rating,
+            "seasonCount": d_resp.get('number_of_seasons'),
+            "failed": False
+        }
+
+        conn = get_db()
+        cursor = conn.cursor()
+        up = (
+            info['posterPath'], info['year'], info['overview'],
+            info['rating'], info['seasonCount'],
+            json.dumps(info['genreIds']),
+            json.dumps(info['genreNames'], ensure_ascii=False),
+            info['director'],
+            json.dumps(info['actors'], ensure_ascii=False),
+            info['tmdbId']
+        )
+        cursor.execute('UPDATE series SET posterPath=?, year=?, overview=?, rating=?, seasonCount=?, genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0 WHERE name=?', (*up, orig_name))
+        conn.commit()
+        conn.close()
+
+        if orig_name in MATCH_DIAGNOSTICS:
+            del MATCH_DIAGNOSTICS[orig_name]
+
+        build_all_caches()
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": "Missing data"})
 
 def _generate_thumb_file(path_raw, prefix, tid, t, w):
     tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{w}.jpg")
@@ -1104,6 +1564,151 @@ def get_server_status():
     except:
         return jsonify({"error": traceback.format_exc()})
 
+# --- [새로운 UI 엔드포인트] ---
+@app.route('/updater')
+def updater_ui():
+    return """
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>NAS Player - 메타데이터 모니터링</title>
+        <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; margin: 0; padding: 20px; }
+            .container { max-width: 900px; margin: 0 auto; background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 30px; }
+            h1 { font-size: 24px; color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 15px; margin-top: 0; display: flex; align-items: center; gap: 10px; }
+            .btn-group { margin-bottom: 25px; display: flex; gap: 10px; flex-wrap: wrap; }
+            button { background: #6c757d; color: white; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; transition: opacity 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            button:hover { opacity: 0.8; }
+            button.btn-primary { background: #007bff; }
+            button.btn-success { background: #28a745; }
+            button.btn-warning { background: #ffc107; color: #212529; }
+            .status-box { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+            .status-header { font-size: 18px; font-weight: bold; margin-bottom: 15px; color: #34495e; display: flex; justify-content: space-between;}
+            .task-badge { background: #e9ecef; color: #495057; padding: 3px 10px; border-radius: 15px; font-size: 13px; font-weight: bold;}
+            .progress-container { background: #e9ecef; border-radius: 8px; height: 20px; width: 100%; overflow: hidden; margin-bottom: 15px; }
+            .progress-bar { background: #28a745; height: 100%; width: 0%; transition: width 0.3s; }
+            .stats { display: flex; justify-content: space-between; font-size: 14px; font-weight: bold; color: #495057; }
+            .stats span.success { color: #28a745; }
+            .stats span.fail { color: #dc3545; }
+            .terminal { background: #1e1e1e; border-radius: 8px; padding: 15px; height: 500px; overflow-y: auto; font-family: 'Consolas', 'Courier New', monospace; font-size: 13px; line-height: 1.6; color: #d4d4d4; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); }
+            .log-success { color: #4CAF50; }
+            .log-error { color: #F44336; }
+            .log-info { color: #9E9E9E; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>⚙️ 메타데이터 실시간 업데이트 모니터</h1>
+
+            <div class="btn-group">
+                <button class="btn-primary" onclick="triggerTask('/retry_failed_metadata')">↻ 실패 메타데이터 재매칭</button>
+                <button class="btn-success" onclick="triggerTask('/apply_tmdb_thumbnails')">🖼️ TMDB 썸네일 일괄 교체</button>
+                <button class="btn-warning" onclick="triggerTask('/rematch_metadata')">⚠️ 전체 강제 재스캔</button>
+            </div>
+
+            <div class="status-box">
+                <div class="status-header">
+                    <span id="statusText">처리 중: 대기 중</span>
+                    <span class="task-badge" id="taskName">대기 중</span>
+                </div>
+
+                <div class="progress-container">
+                    <div class="progress-bar" id="progressBar"></div>
+                </div>
+
+                <div class="stats">
+                    <div>
+                        <span id="progressCount">0 / 0</span>
+                        <span id="progressPercent" style="margin-left: 10px; color: #007bff;">0%</span>
+                    </div>
+                    <div>
+                        <span class="success" id="successCount">성공: 0</span> &nbsp;|&nbsp;
+                        <span class="fail" id="failCount">실패: 0</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="terminal" id="terminalBox"></div>
+        </div>
+
+        <script>
+            async function triggerTask(url) {
+                if (confirm('작업을 시작하시겠습니까? (백그라운드에서 실행되며 모니터링 창에 반영됩니다)')) {
+                    await fetch(url);
+                }
+            }
+
+            async function updateStatus() {
+                try {
+                    const res = await fetch('/api/updater/status');
+                    const data = await res.json();
+
+                    document.getElementById('statusText').innerText = data.is_running ? `처리 중: ${data.current_item}` : `완료됨: ${data.current_item}`;
+                    document.getElementById('taskName').innerText = data.task_name;
+
+                    const percent = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
+                    document.getElementById('progressBar').style.width = percent + '%';
+
+                    if(!data.is_running && data.total > 0) {
+                        document.getElementById('progressBar').style.width = '100%';
+                    }
+
+                    document.getElementById('progressCount').innerText = `${data.current.toLocaleString()} / ${data.total.toLocaleString()}`;
+                    document.getElementById('progressPercent').innerText = `${percent}%`;
+                    document.getElementById('successCount').innerText = `성공: ${data.success.toLocaleString()}`;
+                    document.getElementById('failCount').innerText = `실패: ${data.fail.toLocaleString()}`;
+
+                    const term = document.getElementById('terminalBox');
+
+                    if (data.logs.length > 0) {
+                        let html = '';
+                        data.logs.forEach(log => {
+                            let cssClass = 'log-info';
+                            let icon = 'ℹ️';
+
+                            if (log.type === 'success') { cssClass = 'log-success'; icon = '✅'; }
+                            else if (log.type === 'error') { cssClass = 'log-error'; icon = '❌'; }
+                            else if (log.type === 'warning') { cssClass = 'log-error'; icon = '⚠️'; }
+
+                            html += `<div class="${cssClass}">${log.time} ${icon} [UPDATE] ${log.msg}</div>`;
+                        });
+
+                        const isScrolledToBottom = term.scrollHeight - term.clientHeight <= term.scrollTop + 50;
+                        term.innerHTML = html;
+
+                        if (isScrolledToBottom) {
+                            term.scrollTop = term.scrollHeight;
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to fetch status:', e);
+                }
+            }
+
+            setInterval(updateStatus, 500);
+            updateStatus();
+        </script>
+    </body>
+    </html>
+    """
+
+@app.route('/api/updater/status')
+def get_updater_status():
+    with UPDATE_LOCK:
+        logs = list(UPDATE_STATE['logs'])
+        return jsonify({
+            "is_running": UPDATE_STATE['is_running'],
+            "task_name": UPDATE_STATE['task_name'],
+            "total": UPDATE_STATE['total'],
+            "current": UPDATE_STATE['current'],
+            "success": UPDATE_STATE['success'],
+            "fail": UPDATE_STATE['fail'],
+            "current_item": UPDATE_STATE['current_item'],
+            "logs": logs
+        })
+
 def build_all_caches():
     global _SECTION_CACHE
     _SECTION_CACHE = {}
@@ -1120,11 +1725,9 @@ def _rebuild_fast_memory_cache():
         all_rows = conn.execute('SELECT path, name, posterPath, year, rating, genreIds, genreNames, director, actors, tmdbId, cleanedName, yearVal, overview FROM series WHERE category = ? ORDER BY name ASC', (cat,)).fetchall()
         for row in all_rows:
             path, name, poster, year, rating, g_ids, g_names, director, actors, t_id, c_name, y_val, overview = row
-            if c_name is not None:
-                ct, yr = c_name, y_val
-            else:
-                ct, yr = clean_title_complex(name)
-
+            if not poster and cat != 'air': continue
+            if c_name is not None: ct, yr = c_name, y_val
+            else: ct, yr = clean_title_complex(name)
             group_key = f"tmdb:{t_id}" if t_id else f"name:{ct}_{yr}"
             if group_key not in rows_dict:
                 try: genre_list = json.loads(g_names) if g_names else []
@@ -1153,8 +1756,7 @@ def build_home_recommend():
         unique_map = {}
         for item in combined:
             uid = item.get('tmdbId') or item.get('path')
-            if uid not in unique_map:
-                unique_map[uid] = item
+            if uid not in unique_map: unique_map[uid] = item
         unique_hot_list = list(unique_map.values())
         hot_picks = random.sample(unique_hot_list, min(100, len(unique_hot_list))) if unique_hot_list else []
         seen_ids = { (p.get('tmdbId') or p.get('path')) for p in hot_picks }
@@ -1169,8 +1771,7 @@ def build_home_recommend():
             {"title": "실시간 방영 중", "items": airing_picks}
         ]
         log("CACHE", f"🏠 홈 추천 빌드 완료 ({len(hot_picks)} / {len(airing_picks)})")
-    except:
-        traceback.print_exc()
+    except: traceback.print_exc()
 
 def background_init_tasks():
     build_all_caches()

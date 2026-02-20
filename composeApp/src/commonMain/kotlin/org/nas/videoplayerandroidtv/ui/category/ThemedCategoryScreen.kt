@@ -34,7 +34,7 @@ fun ThemedCategoryScreen(
     repository: VideoRepository,
     selectedMode: Int,
     onModeChange: (Int) -> Unit,
-    cache: MutableMap<String, List<HomeSection>>, // ThemeSection -> HomeSection으로 변경
+    cache: MutableMap<String, List<HomeSection>>, 
     lazyListState: LazyListState = rememberLazyListState(),
     onSeriesClick: (Series) -> Unit
 ) {
@@ -69,7 +69,6 @@ fun ThemedCategoryScreen(
         
         isLoading = true
         try {
-            // [서버 사이드 큐레이션] 모든 분류 로직을 서버로 위임
             val sections = withContext(Dispatchers.IO) {
                 repository.getCategorySections(categoryKey, selectedKeyword)
             }
@@ -113,8 +112,10 @@ fun ThemedCategoryScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     items(themedSections, key = { it.title }) { section ->
-                        // 서버에서 받아온 Category 객체들을 Series 객체로 변환하여 MovieRow에 전달
-                        val seriesList = section.items.map { cat ->
+                        // [필터링] 포스터가 없는 항목은 리스트에서 제외하여 완성도 향상 (mapNotNull 사용)
+                        val seriesList = section.items.mapNotNull { cat ->
+                            if (cat.posterPath.isNullOrBlank() && categoryKey != "air") return@mapNotNull null
+                            
                             Series(
                                 title = cat.name ?: "",
                                 episodes = cat.movies ?: emptyList(),
@@ -130,12 +131,14 @@ fun ThemedCategoryScreen(
                             )
                         }
                         
-                        MovieRow(
-                            title = section.title, 
-                            seriesList = seriesList,
-                            repository = repository,
-                            onSeriesClick = onSeriesClick
-                        )
+                        if (seriesList.isNotEmpty()) {
+                            MovieRow(
+                                title = section.title, 
+                                seriesList = seriesList, 
+                                repository = repository,
+                                onSeriesClick = onSeriesClick
+                            )
+                        }
                     }
                 }
             }

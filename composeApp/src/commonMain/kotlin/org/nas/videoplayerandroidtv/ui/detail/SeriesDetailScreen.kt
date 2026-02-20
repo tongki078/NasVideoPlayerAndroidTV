@@ -44,13 +44,11 @@ import kotlinx.coroutines.*
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.Series
-import org.nas.videoplayerandroidtv.domain.model.Cast
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.detail.components.EpisodeItem
 import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractEpisode
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractSeason
-import org.nas.videoplayerandroidtv.util.TitleUtils.isGenericTitle
 
 @Composable
 fun SeriesDetailScreen(
@@ -128,19 +126,17 @@ fun SeriesDetailScreen(
 
         Box(modifier = Modifier.fillMaxSize().background(brush = Brush.horizontalGradient(0.0f to Color.Black, 0.5f to Color.Black.copy(alpha = 0.8f), 1.0f to Color.Transparent)))
 
-        // [수정] 상단 패딩을 줄이고, Row의 높이를 fillMaxHeight로 채우지 않고 필요한 만큼만 쓰도록 하거나
-        // Column의 정렬을 Top으로 확실하게 설정.
         Row(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 60.dp)
-                .padding(top = 40.dp) // 상단 패딩을 100dp -> 40dp로 축소 (App.kt 구조상 이미 TopBar 아래에 있음)
+                .padding(top = 40.dp) 
         ) { 
             Column(
                 modifier = Modifier
                     .weight(1.5f)
-                    .fillMaxHeight(), // 높이를 꽉 채우되
-                verticalArrangement = Arrangement.Top // 내용은 위쪽부터 정렬
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.Top
             ) {
                 Text(
                     text = currentSeries.title.cleanTitle(includeYear = false), 
@@ -154,6 +150,7 @@ fun SeriesDetailScreen(
                     maxLines = 1, 
                     overflow = TextOverflow.Ellipsis
                 )
+                
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(modifier = Modifier.height(20.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (state.isLoading) {
@@ -166,26 +163,16 @@ fun SeriesDetailScreen(
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
-                
                 Box(modifier = Modifier.wrapContentHeight().fillMaxWidth()) {
                     if (!state.isLoading) {
-                        Text(
-                            text = currentSeries.overview ?: "정보가 없습니다.", 
-                            color = Color.White.copy(alpha = 0.7f), 
-                            fontSize = 11.sp, 
-                            lineHeight = 17.sp, 
-                            maxLines = 2, 
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Text(text = currentSeries.overview ?: "정보가 없습니다.", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, lineHeight = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 Spacer(modifier = Modifier.height(11.dp))
                 if (!state.isLoading && currentSeries.actors.isNotEmpty()) {
                     Text(text = "출연: " + currentSeries.actors.take(4).joinToString { it.name }, color = Color.White.copy(alpha = 0.4f), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) 
                 }
-                
                 Spacer(modifier = Modifier.height(34.dp))
-                
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     if (!state.isLoading && playableEpisode != null) {
                         if (initialPlaybackPosition > 0) {
@@ -201,7 +188,6 @@ fun SeriesDetailScreen(
                                 onClick = { onPlay(playableEpisode, allEpisodes, initialPlaybackPosition) }
                             )
                         }
-                        
                         PremiumTvButton(
                             text = if (initialPlaybackPosition > 0) "처음부터" else "재생", 
                             icon = if (initialPlaybackPosition > 0) Icons.Default.Refresh else Icons.Default.PlayArrow, 
@@ -209,7 +195,6 @@ fun SeriesDetailScreen(
                             modifier = Modifier.focusRequester(playButtonFocusRequester), 
                             onClick = { onPlay(playableEpisode, allEpisodes, 0L) }
                         )
-                        
                         if (state.seasons.isNotEmpty()) {
                             PremiumTvButton(
                                 text = "회차 정보", 
@@ -227,7 +212,10 @@ fun SeriesDetailScreen(
 
         if (state.showEpisodeOverlay && state.seasons.isNotEmpty()) {
             AnimatedVisibility(visible = state.showEpisodeOverlay, enter = fadeIn() + slideInHorizontally { it }, exit = fadeOut() + slideOutHorizontally { it }, modifier = Modifier.zIndex(10f)) {
-                EpisodeOverlay(seriesTitle = currentSeries.title, state = state, seriesOverview = currentSeries.overview, focusRequester = overlayFocusRequester, onSeasonChange = { state = state.copy(selectedSeasonIndex = it) }, onEpisodeClick = { ep ->
+                val seriesPosterUrl = currentSeries.posterPath?.let { 
+                    if (it.startsWith("http")) it else if (it.startsWith("/")) "https://image.tmdb.org/t/p/w500$it" else "${NasApiClient.BASE_URL}/$it"
+                }
+                EpisodeOverlay(seriesTitle = currentSeries.title, state = state, seriesOverview = currentSeries.overview, seriesPosterPath = seriesPosterUrl, focusRequester = overlayFocusRequester, onSeasonChange = { state = state.copy(selectedSeasonIndex = it) }, onEpisodeClick = { ep ->
                     onPositionUpdate(0L)
                     val currentEpisodes = state.seasons.getOrNull(state.selectedSeasonIndex)?.episodes ?: emptyList()
                     onPlay(ep, currentEpisodes, 0L)
@@ -237,93 +225,31 @@ fun SeriesDetailScreen(
     }
 }
 
-private fun formatTime(ms: Long): String {
-    val totalSec = ms / 1000
-    val h = totalSec / 3600
-    val m = (totalSec % 3600) / 60
-    val s = totalSec % 60
-    return if (h > 0) "${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}"
-    else "${m}:${s.toString().padStart(2, '0')}"
-}
-
 @Composable
 private fun InfoBadge(text: String, color: Color = Color.White.copy(alpha = 0.15f), textColor: Color = Color.White, isOutlined: Boolean = false) {
-    Box(
-        modifier = Modifier
-            .padding(end = 8.dp)
-            .clip(RoundedCornerShape(4.dp))
-            .background(if (isOutlined) Color.Transparent else color)
-            .then(if (isOutlined) Modifier.border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(4.dp)) else Modifier)
-            .padding(horizontal = 7.dp, vertical = 2.dp),
-        contentAlignment = Alignment.Center 
-    ) {
-        Text(
-            text = text, 
-            color = textColor, 
-            fontSize = 8.sp, 
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center, 
-            lineHeight = 8.sp
-        )
+    Box(modifier = Modifier.padding(end = 8.dp).clip(RoundedCornerShape(4.dp)).background(if (isOutlined) Color.Transparent else color).then(if (isOutlined) Modifier.border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(4.dp)) else Modifier).padding(horizontal = 7.dp, vertical = 2.dp), contentAlignment = Alignment.Center) {
+        Text(text = text, color = textColor, fontSize = 8.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, lineHeight = 8.sp)
     }
 }
 
 @Composable
-private fun PremiumTvButton(
-    text: String, 
-    icon: androidx.compose.ui.graphics.vector.ImageVector, 
-    isPrimary: Boolean, 
-    progress: Float? = null, 
-    modifier: Modifier = Modifier, 
-    onClick: () -> Unit
-) {
+private fun PremiumTvButton(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector, isPrimary: Boolean, progress: Float? = null, modifier: Modifier = Modifier, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(targetValue = if (isFocused) 1.08f else 1.0f)
-    
     val backgroundColor by animateColorAsState(when { 
-        isFocused -> Color.White 
+        isFocused -> Color.White
         isPrimary -> Color.White.copy(alpha = 0.95f) 
         else -> Color.White.copy(alpha = 0.15f) 
     })
     val contentColor by animateColorAsState(when { 
-        isFocused -> Color.Black 
-        isPrimary -> Color.Black 
+        isFocused -> Color.Black
+        isPrimary -> Color.Black
         else -> Color.White 
     })
-
-    Surface(
-        onClick = onClick, 
-        color = backgroundColor,
-        shape = RoundedCornerShape(10.dp), 
-        modifier = modifier
-            .onFocusChanged { isFocused = it.isFocused }
-            .graphicsLayer { scaleX = scale; scaleY = scale }
-            .height(36.dp) 
-            .wrapContentWidth()
-            .shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(10.dp), spotColor = Color.White.copy(alpha = 0.4f))
-    ) {
+    Surface(onClick = onClick, color = backgroundColor, shape = RoundedCornerShape(10.dp), modifier = modifier.onFocusChanged { isFocused = it.isFocused }.graphicsLayer { scaleX = scale; scaleY = scale }.height(36.dp).wrapContentWidth().shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(10.dp), spotColor = Color.White.copy(alpha = 0.4f))) {
         Box(modifier = Modifier.wrapContentWidth(), contentAlignment = Alignment.Center) { 
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = 17.dp)
-                    .fillMaxHeight(), 
-                verticalAlignment = Alignment.CenterVertically, 
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Icon(imageVector = icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(15.dp)) 
-                Spacer(modifier = Modifier.width(7.dp))
-                Text(text = text, color = contentColor, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) 
-            }
-            
-            if (progress != null && progress > 0f) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .height(3.dp)
-                        .background(if (isFocused) Color.Red else Color.Red.copy(alpha = 0.8f))
-                )
-            }
+            Row(modifier = Modifier.padding(horizontal = 17.dp).fillMaxHeight(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) { Icon(imageVector = icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(15.dp)); Spacer(modifier = Modifier.width(7.dp)); Text(text = text, color = contentColor, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
+            if (progress != null && progress > 0f) { Box(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth(progress.coerceIn(0f, 1f)).height(3.dp).background(if (isFocused) Color.Red else Color.Red.copy(alpha = 0.8f))) }
         }
     }
 }
@@ -332,30 +258,19 @@ data class Season(val number: Int, val name: String, val episodes: List<Movie>)
 private data class SeriesDetailState(val seasons: List<Season> = emptyList(), val isLoading: Boolean = true, val selectedSeasonIndex: Int = 0, val showEpisodeOverlay: Boolean = false)
 
 @Composable
-private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, seriesOverview: String?, focusRequester: FocusRequester, onSeasonChange: (Int) -> Unit, onEpisodeClick: (Movie) -> Unit, onClose: () -> Unit) {
+private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, seriesOverview: String?, seriesPosterPath: String?, focusRequester: FocusRequester, onSeasonChange: (Int) -> Unit, onEpisodeClick: (Movie) -> Unit, onClose: () -> Unit) {
     Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-        Row(modifier = Modifier.fillMaxSize().padding(42.dp)) { // 패딩 줄임
+        Row(modifier = Modifier.fillMaxSize().padding(42.dp)) {
             Column(modifier = Modifier.weight(0.35f)) {
-                Text(text = seriesTitle.cleanTitle(includeYear = false), color = Color.White, style = TextStyle(fontSize = 22.sp, fontWeight = FontWeight.Bold, lineHeight = 29.sp, shadow = Shadow(color = Color.Black, offset = Offset(2f, 2f), blurRadius = 4f)), maxLines = 2, overflow = TextOverflow.Ellipsis) // 크기 30% 줄임
-                Spacer(modifier = Modifier.height(6.dp)); Text(text = "시즌 ${state.seasons.size}개", color = Color.Gray, fontSize = 13.sp) // 크기 30% 줄임
+                Text(text = seriesTitle.cleanTitle(includeYear = false), color = Color.White, style = TextStyle(fontSize = 22.sp, fontWeight = FontWeight.Bold, lineHeight = 29.sp, shadow = Shadow(color = Color.Black, offset = Offset(2f, 2f), blurRadius = 4f)), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(modifier = Modifier.height(6.dp)); Text(text = "시즌 ${state.seasons.size}개", color = Color.Gray, fontSize = 13.sp)
                 Spacer(modifier = Modifier.height(28.dp))
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) { // 간격 줄임
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
                     items(state.seasons.size) { index ->
                         val isSelected = index == state.selectedSeasonIndex
                         var isFocused by remember { mutableStateOf(false) }
-                        Surface(
-                            onClick = { onSeasonChange(index) }, 
-                            color = if (isFocused) Color.White else if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent, 
-                            shape = RoundedCornerShape(8.dp), 
-                            border = BorderStroke(width = 2.dp, color = if (isFocused) Color.White else Color.Transparent), 
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(35.dp) // 높이 절반으로 줄임
-                                .onFocusChanged { isFocused = it.isFocused }
-                                .then(if (index == state.selectedSeasonIndex) Modifier.focusRequester(focusRequester) else Modifier)
-                                .focusable()
-                        ) {
-                            Text(text = state.seasons[index].name, color = if (isFocused) Color.Black else Color.White, modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp), fontSize = 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium) // 크기 30% 줄임
+                        Surface(onClick = { onSeasonChange(index) }, color = if (isFocused) Color.White else if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent, shape = RoundedCornerShape(8.dp), border = BorderStroke(width = 2.dp, color = if (isFocused) Color.White else Color.Transparent), modifier = Modifier.fillMaxWidth().height(35.dp).onFocusChanged { isFocused = it.isFocused }.then(if (index == state.selectedSeasonIndex) Modifier.focusRequester(focusRequester) else Modifier).focusable()) {
+                            Text(text = state.seasons[index].name, color = if (isFocused) Color.Black else Color.White, modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp), fontSize = 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium)
                         }
                     }
                 }
@@ -363,11 +278,11 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, series
             }
             Spacer(modifier = Modifier.width(42.dp))
             Column(modifier = Modifier.weight(0.65f)) {
-                Text(text = state.seasons.getOrNull(state.selectedSeasonIndex)?.name ?: "회차 정보", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold) // 크기 30% 줄임
+                Text(text = state.seasons.getOrNull(state.selectedSeasonIndex)?.name ?: "회차 정보", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(17.dp))
                 val episodes = state.seasons.getOrNull(state.selectedSeasonIndex)?.episodes ?: emptyList()
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(11.dp), contentPadding = PaddingValues(bottom = 28.dp)) { // 간격/패딩 줄임
-                    items(episodes) { movie -> EpisodeItem(movie = movie, seriesOverview = seriesOverview, onPlay = { onEpisodeClick(movie) }) }
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(11.dp), contentPadding = PaddingValues(bottom = 28.dp)) {
+                    items(episodes) { movie -> EpisodeItem(movie = movie, seriesOverview = seriesOverview, seriesPosterPath = seriesPosterPath, onPlay = { onEpisodeClick(movie) }) }
                 }
             }
         }
@@ -399,5 +314,16 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
         movie.copy(videoUrl = updatedVideoUrl, thumbnailUrl = updatedThumbUrl)
     }
     val seasonsMap = totalMovies.groupBy { it.title?.extractSeason() ?: 1 }
-    seasonsMap.map { (num, eps) -> Season(number = num, name = "시즌 $num", episodes = eps.sortedWith(compareBy { it.title?.extractEpisode()?.filter { c -> c.isDigit() }?.toIntOrNull() ?: 0 })) }.sortedBy { it.number }
+    seasonsMap.map { (num, eps) -> 
+        Season(
+            number = num, 
+            name = "시즌 $num", 
+            episodes = eps.sortedWith(
+                compareBy(
+                    { it.title?.extractSeason() ?: 1 },
+                    { it.title?.extractEpisode()?.filter { c -> c.isDigit() }?.toIntOrNull() ?: 0 }
+                )
+            )
+        ) 
+    }.sortedBy { it.number }
 }

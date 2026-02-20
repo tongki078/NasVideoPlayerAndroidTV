@@ -25,11 +25,14 @@ import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
 import org.nas.videoplayerandroidtv.util.TitleUtils.prettyTitle
 
 @Composable
-fun EpisodeItem(movie: Movie, seriesOverview: String?, onPlay: () -> Unit) {
+fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String? = null, onPlay: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.03f else 1f, label = "EpisodeItemScale")
 
-    val imageUrl = movie.thumbnailUrl ?: ""
+    // TMDB Still 이미지 -> FFmpeg 썸네일 -> 시리즈 포스터 순으로 우선순위 결정
+    val imageUrl = remember(movie.thumbnailUrl, seriesPosterPath) {
+        movie.thumbnailUrl ?: seriesPosterPath ?: ""
+    }
 
     Row(
         modifier = Modifier
@@ -49,15 +52,15 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, onPlay: () -> Unit) {
                 color = if (isFocused) Color.White else Color.Transparent,
                 shape = RoundedCornerShape(8.dp)
             )
-            .padding(11.dp), // 패딩 줄임
+            .padding(11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         var isImageLoading by remember { mutableStateOf(true) }
         
         Box(
             modifier = Modifier
-                .width(144.dp) // 너비 10% 줄임
-                .height(81.dp) // 높이 10% 줄임
+                .width(144.dp)
+                .height(81.dp)
                 .clip(RoundedCornerShape(6.dp))
                 .background(Color.DarkGray.copy(alpha = 0.3f))
         ) {
@@ -66,6 +69,7 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, onPlay: () -> Unit) {
                     model = imageUrl,
                     contentDescription = movie.title ?: "",
                     onState = { state -> isImageLoading = state is AsyncImagePainter.State.Loading },
+                    // 로딩 중이거나 실패 시 시리즈 포스터를 배경/대체 이미지로 활용
                     modifier = Modifier.fillMaxSize().background(shimmerBrush(showShimmer = isImageLoading)),
                     contentScale = ContentScale.Crop
                 )
@@ -77,7 +81,7 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, onPlay: () -> Unit) {
             Text(
                 text = (movie.title ?: "").prettyTitle(),
                 color = if (isFocused) Color.White else Color.White.copy(alpha = 0.9f), 
-                fontSize = 14.sp, // 크기 10% 줄임
+                fontSize = 14.sp, 
                 fontWeight = FontWeight.Bold, 
                 maxLines = 1, 
                 overflow = TextOverflow.Ellipsis
@@ -87,10 +91,10 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, onPlay: () -> Unit) {
             Text(
                 text = episodeOverview,
                 color = Color.White.copy(alpha = 0.5f),
-                fontSize = 12.sp, // 크기 10% 줄임
+                fontSize = 12.sp, 
                 maxLines = 2, 
                 overflow = TextOverflow.Ellipsis, 
-                lineHeight = 16.sp // 줄 간격 조정
+                lineHeight = 16.sp
             )
         }
     }
