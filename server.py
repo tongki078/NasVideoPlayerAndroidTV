@@ -1698,7 +1698,7 @@ def gen_seek_thumbnails():
                 return "Generation Failed", 500
     except Exception as e:
         log("STORYBOARD", f"에러 발생: {str(e)}")
-        return "Internal Server Error", 500
+        return "Internal Server Error", 501
 
 
 @app.route('/api/status')
@@ -1709,17 +1709,64 @@ def get_server_status():
         ser = conn.execute("SELECT COUNT(*) FROM series").fetchone()[0]
         mtch = conn.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NOT NULL").fetchone()[0]
         fail = conn.execute("SELECT COUNT(*) FROM series WHERE failed = 1").fetchone()[0]
+
+        # --- [추가/수정된 부분: 서브카테고리 포함 스틸컷 현황] ---
+        # 1. 썸네일이 변경된(http) 에피소드만 우선 조회
+        applied_eps = conn.execute("""
+            SELECT series_path, COUNT(id) as tmdb_eps
+            FROM episodes
+            WHERE thumbnailUrl LIKE 'http%'
+            GROUP BY series_path
+        """).fetchall()
+
+        applied_map = {row['series_path']: row['tmdb_eps'] for row in applied_eps}
+
+        # 2. TMDB 매칭된 작품의 기본 정보(전체 회차수, 이름, 카테고리, 상세경로) 조회
+        series_info = conn.execute("""
+            SELECT s.path, s.name, s.category, COUNT(e.id) as total_eps
+            FROM series s
+            JOIN episodes e ON s.path = e.series_path
+            WHERE s.tmdbId IS NOT NULL
+            GROUP BY s.path
+        """).fetchall()
+
+        stills_applied = []
+        for row in series_info:
+            path = row['path']
+            tmdb_eps = applied_map.get(path, 0)
+            if tmdb_eps > 0:
+                # 서브 카테고리 추출 로직 (예: air/라프텔 애니메이션/나혼렙 -> 방송중 > 라프텔 애니메이션)
+                # category_name 매핑
+                cat_map = {"movies": "영화", "foreigntv": "외국TV", "koreantv": "국내TV", "animations_all": "애니메이션",
+                           "air": "방송중"}
+                main_cat_ko = cat_map.get(row['category'], row['category'])
+
+                parts = path.split('/')
+                sub_cat = parts[1] if len(parts) > 2 else "일반"
+                display_cat = f"{main_cat_ko} > {sub_cat}"
+
+                stills_applied.append({
+                    "name": row['name'],
+                    "category": display_cat,
+                    "applied": f"{tmdb_eps}/{row['total_eps']}"
+                })
+
+        # 보기 좋게 카테고리, 이름순으로 정렬
+        stills_applied.sort(key=lambda x: (x['category'], x['name']))
+        # --- [추가된 부분 끝] ---
+
         conn.close()
         return jsonify({
             "total_episodes": eps,
             "total_series": ser,
             "matched_series": mtch,
             "failed_series": fail,
-            "success_rate": f"{round(mtch / ser * 100, 1)}%" if ser > 0 else "0%"
+            "success_rate": f"{round(mtch / ser * 100, 1)}%" if ser > 0 else "0%",
+            "stills_applied_count": len(stills_applied),
+            "stills_applied_series": stills_applied
         })
     except:
         return jsonify({"error": traceback.format_exc()})
-
 
 # --- [자막 기능: 비동기 추출, 검색 로직 개선, 타임아웃 해결 버전] ---
 def run_subtitle_extraction(vp, rel_path, sub_to_extract):
@@ -1870,6 +1917,172 @@ def subtitle_extract():
         log("SUBTITLE_ERROR", f"자막 전송 중 에러 발생: {str(e)}\n{traceback.format_exc()}")
         return "Internal Server Error", 500
 
+def pre_extract_movie_subtitles():
+    """영화 카테고리에서 자막이 없는 영상만 대상으로 자막 사전 추출을 실행합니다."""
+    set_update_state(is_running=True, task_name="영화 자막 사전 추출", total=0, current=0, success=0, fail=0, clear_logs=True)
+    log("SUBTITLE_PRE", "영화 카테고리 자막 사전 추출 시작...")
+    emit_ui_log("영화 카테고리에서 자막이 없는 항목을 찾아 추출을 시작합니다.", "info")
+
+    try:
+        conn = get_db()
+        # [수정] 'episodes' 테이블에서 'path'가 아닌 'videoUrl' 컬럼을 조회합니다.
+        video_rows = conn.execute("SELECT videoUrl FROM episodes WHERE series_path LIKE 'movies/%'").fetchall()
+        conn.close()
+
+        total_videos = len(video_rows)
+        set_update_state(total=total_videos)
+        log("SUBTITLE_PRE", f"사전 추출 대상 영화 수: {total_videos}개")
+        emit_ui_log(f"전체 영화 {total_videos}개를 대상으로 검사를 시작합니다.", "info")
+
+        base_movie_path = PATH_MAP.get("영화", (None, None))[0]
+        if not base_movie_path:
+            log("SUBTITLE_PRE_ERROR", "영화 경로를 찾을 수 없습니다.")
+            emit_ui_log("설정에서 영화 카테고리 경로를 찾을 수 없습니다.", "error")
+            return
+
+        extraction_queued_count = 0
+
+        for idx, row in enumerate(video_rows):
+            with UPDATE_LOCK:
+                UPDATE_STATE["current"] = idx + 1
+
+            # [수정] row['path'] -> row['videoUrl']
+            video_url = row['videoUrl']
+            rel_path = video_url.replace('/video_serve?type=movie&path=', '')
+            rel_path = nfc(urllib.parse.unquote(rel_path))
+
+            vp = get_real_path(os.path.join(base_movie_path, rel_path))
+            video_filename = os.path.basename(rel_path)
+
+            with UPDATE_LOCK:
+                UPDATE_STATE["current_item"] = video_filename
+
+            if not os.path.exists(vp):
+                emit_ui_log(f"파일 없음, 건너뜀: {video_filename}", "warning")
+                with UPDATE_LOCK: UPDATE_STATE["fail"] += 1
+                continue
+
+            # --- [핵심 로직] 이미 자막 파일이 있는지 확인 ---
+            parent_dir = os.path.dirname(vp)
+            video_name_no_ext = os.path.splitext(video_filename)[0]
+
+            has_external = False
+
+            # 1. 원본 폴더 확인
+            if os.path.exists(parent_dir):
+                for f in os.listdir(parent_dir):
+                    if f.lower().endswith(('.srt', '.smi', '.ass', '.vtt')):
+                        sub_name_no_ext = os.path.splitext(f)[0]
+                        if video_name_no_ext.startswith(sub_name_no_ext) or sub_name_no_ext.startswith(
+                                video_name_no_ext):
+                            has_external = True;
+                            break
+
+            if has_external:
+                with UPDATE_LOCK: UPDATE_STATE["success"] += 1
+                continue
+
+            # 2. 서버 캐시 폴더 확인
+            video_rel_hash = hashlib.md5(rel_path.encode()).hexdigest()
+            if os.path.exists(SUBTITLE_DIR):
+                for f in os.listdir(SUBTITLE_DIR):
+                    if f.startswith(video_rel_hash):
+                        has_external = True;
+                        break
+
+            if has_external:
+                with UPDATE_LOCK: UPDATE_STATE["success"] += 1
+                continue
+
+            # --- 자막이 없는 경우에만 아래 로직 실행 ---
+            try:
+                cmd = [FFPROBE_PATH, "-v", "error", "-show_streams", "-of", "json", vp]
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+                                        timeout=60)
+                all_streams = json.loads(result.stdout).get('streams', [])
+                embedded = [s for s in all_streams if
+                            s.get('codec_type') == 'subtitle' or 'sub' in s.get('codec_name', '').lower()]
+            except Exception:
+                embedded = []
+
+            if embedded:
+                sub_to_extract = min(embedded, key=lambda s: {'ko': 1, 'kor': 1, 'en': 2, 'eng': 2}.get(
+                    s.get('tags', {}).get('language', 'und').lower(), 99))
+                with EXTRACTION_LOCK:
+                    if rel_path not in ACTIVE_EXTRACTIONS:
+                        SUBTITLE_EXECUTOR.submit(run_subtitle_extraction, vp, rel_path, sub_to_extract)
+                        extraction_queued_count += 1
+                        emit_ui_log(f"내장 자막 발견, 추출 예약: {video_filename}", "success")
+
+            if (idx + 1) % 100 == 0:
+                log("SUBTITLE_PRE", f"진행 상황: {idx + 1}/{total_videos} 검사 완료, {extraction_queued_count}개 추출 예약됨.")
+
+    except Exception as e:
+        log("SUBTITLE_PRE_ERROR", f"사전 추출 중 오류 발생: {traceback.format_exc()}")
+        emit_ui_log(f"치명적 오류 발생: {e}", "error")
+    finally:
+        set_update_state(is_running=False, current_item="영화 자막 사전 추출 완료")
+        log("SUBTITLE_PRE", f"영화 카테고리 자막 사전 추출 완료. 총 {extraction_queued_count}개의 자막 추출 작업을 예약했습니다.")
+        emit_ui_log(f"모든 작업이 완료되었습니다. (신규 추출 {extraction_queued_count}개)", "success")
+
+
+@app.route('/pre_extract_subtitles')
+def pre_extract_subtitles_route():
+    # 다른 작업이 실행 중일 때는 새 작업을 시작하지 않음
+    if UPDATE_STATE.get("is_running", False):
+        return jsonify({"status": "error", "message": "다른 작업이 이미 실행 중입니다."}), 409
+
+    threading.Thread(target=pre_extract_movie_subtitles, daemon=True).start()
+    return jsonify({"status": "success", "message": "영화 자막 사전 추출 작업을 시작합니다."})
+
+
+@app.route('/admin_stills')
+def admin_stills_page():
+    return """
+    <html>
+    <head>
+        <title>NAS Player - TMDB 스틸컷 적용 현황</title>
+        <style>
+            body { font-family: sans-serif; background: #141414; color: white; padding: 20px; }
+            h1 { margin-bottom: 5px; }
+            .summary { font-size: 1.1em; color: #46D369; margin-bottom: 20px; font-weight: bold; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 0.9em; }
+            th, td { padding: 10px; text-align: left; border-bottom: 1px solid #333; }
+            th { background: #222; position: sticky; top: 0; }
+            .tag { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.85em; font-weight: bold; background: #333; color: #ccc; border: 1px solid #555;}
+        </style>
+    </head>
+    <body>
+        <h1>TMDB 스틸컷 적용 작품 목록</h1>
+        <div class="summary" id="summary">데이터 불러오는 중...</div>
+        <div id="content"></div>
+        <script>
+            async function loadData() {
+                try {
+                    const resp = await fetch('/api/status');
+                    const data = await resp.json();
+
+                    document.getElementById('summary').innerText = `총 ${data.stills_applied_count}개의 작품에 스틸컷이 반영되었습니다. (매칭된 총 작품 수: ${data.matched_series}개)`;
+
+                    let html = '<table><tr><th>카테고리</th><th>작품명</th><th>스틸컷 반영 에피소드 비율</th></tr>';
+                    data.stills_applied_series.forEach(item => {
+                        html += `<tr>
+                            <td><span class="tag">${item.category}</span></td>
+                            <td>${item.name}</td>
+                            <td>${item.applied}</td>
+                        </tr>`;
+                    });
+                    html += '</table>';
+                    document.getElementById('content').innerHTML = html;
+                } catch (e) {
+                    document.getElementById('summary').innerText = "데이터를 불러오는 중 오류가 발생했습니다.";
+                }
+            }
+            loadData();
+        </script>
+    </body>
+    </html>
+    """
 
 # --- [UI/캐시 로직 보존] ---
 @app.route('/updater')
@@ -1912,7 +2125,9 @@ def updater_ui():
             <div class="btn-group">
                 <button class="btn-primary" onclick="triggerTask('/retry_failed_metadata')">↻ 실패 메타데이터 재매칭</button>
                 <button class="btn-success" onclick="triggerTask('/apply_tmdb_thumbnails')">🖼️ TMDB 썸네일 일괄 교체</button>
+                <button class ="btn-primary" style="background-color: #343a40;" onclick="triggerTask('/pre_extract_subtitles')"> 🎬 영화 자막 일괄 추출 </button>
                 <button class="btn-warning" onclick="triggerTask('/rematch_metadata')">⚠️ 전체 강제 재스캔</button>
+                <button class="btn-info" onclick="window.open('/admin_stills', '_blank')" style="background-color: #17a2b8;">📊 스틸컷 적용 확인</button>
             </div>
 
             <div class="status-box">

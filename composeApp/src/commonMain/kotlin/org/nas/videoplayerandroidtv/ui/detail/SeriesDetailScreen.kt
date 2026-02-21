@@ -298,14 +298,17 @@ private suspend fun loadSeasons(series: Series, repository: VideoRepository): Li
             NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl
         } else movie.videoUrl
         
-        val rawThumb = if (!movie.thumbnailUrl.isNullOrEmpty()) movie.thumbnailUrl else series.posterPath
+        // FFmpeg 생성 썸네일을 무시하고, TMDB 스틸컷만 사용하며, 없을 경우 시리즈 포스터로 대체
+        val isFfmpegThumb = movie.thumbnailUrl?.contains("thumb_serve") == true || movie.thumbnailUrl?.contains("video_serve") == true
+        val rawThumb = if (!movie.thumbnailUrl.isNullOrEmpty() && !isFfmpegThumb) {
+            movie.thumbnailUrl
+        } else {
+            series.posterPath
+        }
+        
         val updatedThumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
             if (rawThumb.startsWith("/")) {
-                if (rawThumb.contains("thumb_serve") || rawThumb.contains("video_serve")) {
-                    NasApiClient.BASE_URL + rawThumb + (if (rawThumb.contains("?")) "&" else "?") + "w=320"
-                } else {
-                    "https://image.tmdb.org/t/p/w500$rawThumb"
-                }
+                "https://image.tmdb.org/t/p/w500$rawThumb"
             } else {
                 NasApiClient.BASE_URL + "/" + rawThumb + "?w=320"
             }
