@@ -41,6 +41,7 @@ class VideoRepositoryImpl : VideoRepository {
         title = name ?: "",
         episodes = movies ?: emptyList(),
         fullPath = path,
+        category = category, // 추가
         posterPath = posterPath,
         genreIds = genreIds ?: emptyList(),
         genreNames = genreNames ?: emptyList(),
@@ -135,7 +136,19 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getKtvEdu(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("국내TV", "교양", limit, offset)
     override suspend fun getKtvDocu(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("국내TV", "다큐멘터리", limit, offset)
     override suspend fun getCategoryVideoCount(path: String): Int = 0
-    override suspend fun searchVideos(query: String, category: String): List<Series> = emptyList()
+    
+    override suspend fun searchVideos(query: String, category: String): List<Series> = try {
+        val response = client.get("$baseUrl/search") {
+            parameter("q", query)
+            parameter("cat", category)
+        }.body<List<Category>>()
+        
+        response.filter { !isGenericFolder(it.name) }.map { it.fixUrls().toSeries() }
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        emptyList()
+    }
+
     override suspend fun getAnimations(): List<Series> = getAnimationsAll()
     override suspend fun getDramas(): List<Series> = emptyList()
     override suspend fun getLatestForeignTV(): List<Series> = getCategoryListAsSeries("외국TV", null)

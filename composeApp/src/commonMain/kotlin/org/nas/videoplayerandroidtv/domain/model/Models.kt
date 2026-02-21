@@ -7,6 +7,7 @@ data class Category(
     val name: String? = "",
     val movies: List<Movie>? = emptyList(),
     val path: String? = null,
+    val category: String? = null,                // 추가: 메인 카테고리 코드
     val genreIds: List<Int>? = emptyList(),
     val genreNames: List<String>? = emptyList(), // 추가: 한글 장르명
     val director: String? = null,                // 추가: 감독
@@ -49,6 +50,7 @@ data class Series(
     val episodes: List<Movie>,
     val thumbnailUrl: String? = null,
     val fullPath: String? = null,
+    val category: String? = null,              // 추가
     val genreIds: List<Int> = emptyList(),
     val genreNames: List<String> = emptyList(), // 추가
     val director: String? = null,              // 추가

@@ -249,6 +249,38 @@ private fun SearchGridItem(series: Series, onSeriesClick: (Series) -> Unit) {
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
             )
+
+            // 카테고리 뱃지 추가
+            val categoryLabel = remember(series.category, series.fullPath) {
+                when(series.category) {
+                    "movies" -> "영화"
+                    "koreantv" -> "국내TV"
+                    "foreigntv" -> "외국TV"
+                    "animations_all" -> "애니메이션"
+                    "air" -> {
+                        if (series.fullPath?.contains("라프텔 애니메이션") == true) "방송중 > 애니"
+                        else if (series.fullPath?.contains("드라마") == true) "방송중 > 드라마"
+                        else "방송중"
+                    }
+                    else -> ""
+                }
+            }
+
+            if (categoryLabel.isNotEmpty()) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(bottomEnd = 8.dp),
+                    modifier = Modifier.align(Alignment.TopStart)
+                ) {
+                    Text(
+                        text = categoryLabel,
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
         }
         
         // 포커스 시 제목 표시 - 정제된 제목 사용

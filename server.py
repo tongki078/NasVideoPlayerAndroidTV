@@ -646,31 +646,55 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False):  # category 
     return {"failed": True}
 
 
-# --- [스캔 및 탐색] ---
-def scan_recursive_to_db(bp, prefix, category):
-    log("SCAN", f"📂 '{category}' 탐색 중: {bp}")
+# [추가] 카테고리별로 스캔할 허용 폴더 목록 정의
+WHITELISTS = {
+    "movies": ["제목", "UHD", "최신"],
+    "koreantv": ["드라마", "시트콤", "교양", "예능", "다큐멘터리"],
+    "foreigntv": ["미국 드라마", "일본 드라마", "중국 드라마", "기타국가 드라마", "다큐"],
+    "animations_all": ["라프텔", "시리즈"],
+    "air": ["라프텔 애니메이션", "드라마"]
+}
+
+
+def scan_recursive_to_db(bp, prefix, category, include_only=None):
+    log("SCAN", f"📂 '{category}' 탐색 시작 (허용 폴더만: {include_only if include_only else '전체'})")
     base = nfc(get_real_path(bp))
     all_files = []
-    stack = [base]
-    visited = set()
-    while stack:
-        curr = stack.pop()
-        real_curr = os.path.realpath(curr)
-        if real_curr in visited: continue
-        visited.add(real_curr)
-        try:
-            with os.scandir(curr) as it:
-                for entry in it:
-                    if entry.is_dir():
-                        if not any(ex in entry.name for ex in EXCLUDE_FOLDERS) and not entry.name.startswith('.'):
-                            stack.append(entry.path)
-                    elif entry.is_file() and entry.name.lower().endswith(VIDEO_EXTS):
-                        all_files.append(nfc(entry.path))
-        except:
-            pass
+
+    # 허용 목록이 있으면 해당 폴더들만 시작 지점으로 설정
+    targets = []
+    if include_only:
+        for folder in include_only:
+            target = os.path.join(base, folder)
+            if os.path.exists(target):
+                targets.append(target)
+            elif os.path.exists(nfc(target)):
+                targets.append(nfc(target))
+    else:
+        targets = [base]
+
+    for start_point in targets:
+        stack = [start_point]
+        visited = set()
+        while stack:
+            curr = stack.pop()
+            real_curr = os.path.realpath(curr)
+            if real_curr in visited: continue
+            visited.add(real_curr)
+            try:
+                with os.scandir(curr) as it:
+                    for entry in it:
+                        if entry.is_dir():
+                            if not any(ex in entry.name for ex in EXCLUDE_FOLDERS) and not entry.name.startswith('.'):
+                                stack.append(entry.path)
+                        elif entry.is_file() and entry.name.lower().endswith(VIDEO_EXTS):
+                            all_files.append(nfc(entry.path))
+            except:
+                pass
 
     conn = get_db()
     cursor = conn.cursor()
+    # 해당 카테고리의 기존 데이터 가져오기
     cursor.execute('SELECT id, series_path FROM episodes WHERE series_path LIKE ?', (f"{category}/%",))
     db_data = {row['id']: row['series_path'] for row in cursor.fetchall()}
     current_ids = set()
@@ -710,11 +734,12 @@ def scan_recursive_to_db(bp, prefix, category):
                 UPDATE_STATE["success"] += 1
         else:
             with UPDATE_LOCK:
-                UPDATE_STATE["success"] += 1  # 이미 존재
+                UPDATE_STATE["success"] += 1
 
         if (idx + 1) % 2000 == 0:
             conn.commit()
 
+    # 허용되지 않은 폴더에서 스캔되지 않은 이전 데이터 삭제
     for rid in (set(db_data.keys()) - current_ids):
         cursor.execute('DELETE FROM episodes WHERE id = ?', (rid,))
     cursor.execute('DELETE FROM series WHERE path NOT IN (SELECT DISTINCT series_path FROM episodes) AND category = ?',
@@ -738,7 +763,8 @@ def perform_full_scan():
         if ck in done: continue
         path, prefix = PATH_MAP[label]
         if os.path.exists(path):
-            scan_recursive_to_db(path, prefix, ck)
+            # [수정] 해당 카테고리의 화이트리스트 폴더만 스캔하도록 인자 추가
+            scan_recursive_to_db(path, prefix, ck, include_only=WHITELISTS.get(ck))
             conn = get_db()
             conn.execute("INSERT OR REPLACE INTO server_config (key, value) VALUES (?, 'true')", (f'scan_done_{ck}',))
             conn.commit()
@@ -1091,18 +1117,52 @@ def pre_generate_individual_task(ep_thumb_url):
 
 @app.route('/search')
 def search_videos():
-    q = request.args.get('q', '').lower()
+    # 1. 입력받은 검색어를 NFC로 정규화하여 한글 깨짐/불일치 방지
+    q = nfc(request.args.get('q', '')).lower().strip()
     if not q: return jsonify([])
+
     conn = get_db()
-    cursor = conn.execute(
-        'SELECT s.*, e.id as ep_id, e.videoUrl, e.thumbnailUrl, e.title FROM series s LEFT JOIN episodes e ON s.path = e.series_path WHERE (s.path LIKE ? OR s.name LIKE ?) GROUP BY s.path ORDER BY s.name ASC',
-        (f'%{q}%', f'%{q}%'))
+
+    # 2. 검색 범위에 s.overview(줄거리) 추가
+    # s.overview 에는 보통 '장송의 프리렌' 이라는 한글 제목이 포함되어 있습니다.
+    query = """
+        SELECT s.*, e.id as ep_id, e.videoUrl, e.thumbnailUrl, e.title
+        FROM series s
+        LEFT JOIN episodes e ON s.path = e.series_path
+        WHERE (
+            s.path LIKE ?
+            OR s.name LIKE ?
+            OR s.cleanedName LIKE ?
+            OR s.tmdbId LIKE ?
+            OR s.overview LIKE ?
+        )
+        GROUP BY s.path
+        ORDER BY
+            CASE
+                WHEN s.name LIKE ? THEN 1
+                WHEN s.cleanedName LIKE ? THEN 2
+                ELSE 3
+            END, s.name ASC
+    """
+
+    # % 를 앞뒤로 붙여서 중간에 포함된 단어도 찾도록 설정
+    search_param = f'%{q}%'
+
+    # 인자 개수에 맞춰서 (5개 WHERE 절 + 2개 ORDER BY 절) 총 7개 인자 전달
+    cursor = conn.execute(query, (
+        search_param, search_param, search_param, search_param, search_param,
+        f'{q}%', f'{q}%'
+    ))
+
     rows = []
     for row in cursor.fetchall():
         item = dict(row)
+        # 에피소드 정보 구성
         item['movies'] = [
             {"id": item.pop('ep_id'), "videoUrl": item.pop('videoUrl'), "thumbnailUrl": item.pop('thumbnailUrl'),
              "title": item.pop('title')}] if item.get('ep_id') else []
+
+        # JSON 문자열 필드들을 리스트로 변환
         for col in ['genreIds', 'genreNames', 'actors']:
             if item.get(col):
                 try:
@@ -1110,9 +1170,9 @@ def search_videos():
                 except:
                     item[col] = []
         rows.append(item)
+
     conn.close()
     return gzip_response(rows)
-
 
 @app.route('/rescan_broken')
 def rescan_broken():
@@ -1949,7 +2009,7 @@ def pre_extract_movie_subtitles():
         emit_ui_log(f"전체 영화 {total_videos}개를 대상으로 검사를 시작합니다.", "info")
 
         base_movie_path = PATH_MAP.get("영화", (None, None))[0]
-        if not base_movie_path:
+        if disabled_movie_path := not base_movie_path:
             log("SUBTITLE_PRE_ERROR", "영화 경로를 찾을 수 없습니다.")
             emit_ui_log("설정에서 영화 카테고리 경로를 찾을 수 없습니다.", "error")
             return

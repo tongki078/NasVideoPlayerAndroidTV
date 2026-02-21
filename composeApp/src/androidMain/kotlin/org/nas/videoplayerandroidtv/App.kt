@@ -41,6 +41,7 @@ import org.nas.videoplayerandroidtv.ui.player.VideoPlayerScreen
 import org.nas.videoplayerandroidtv.ui.search.SearchScreen
 import org.nas.videoplayerandroidtv.db.AppDatabase
 import app.cash.sqldelight.db.SqlDriver
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -70,6 +71,25 @@ fun App(driver: SqlDriver) {
     var moviePlaylist by remember { mutableStateOf<List<Movie>>(emptyList()) }
     var lastPlaybackPosition by rememberSaveable { mutableLongStateOf(0L) }
     var lastVideoDuration by rememberSaveable { mutableLongStateOf(0L) }
+
+    // 검색 실행 로직 추가
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.isBlank()) {
+            searchResultSeries = emptyList()
+            isSearchLoading = false
+            return@LaunchedEffect
+        }
+        
+        isSearchLoading = true
+        delay(500) // 디바운스
+        try {
+            searchResultSeries = repository.searchVideos(searchQuery, "")
+        } catch (e: Exception) {
+            searchResultSeries = emptyList()
+        } finally {
+            isSearchLoading = false
+        }
+    }
 
     val subModeStates = remember { mutableStateMapOf<Screen, Int>() }
     val selectedSubMode = subModeStates.getOrDefault(currentScreen, 0)
