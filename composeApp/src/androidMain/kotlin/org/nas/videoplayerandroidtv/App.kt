@@ -1,11 +1,7 @@
 package org.nas.videoplayerandroidtv
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
@@ -37,6 +33,7 @@ import org.nas.videoplayerandroidtv.data.repository.VideoRepositoryImpl
 import org.nas.videoplayerandroidtv.domain.model.*
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.common.NetflixTopBar
+import org.nas.videoplayerandroidtv.ui.common.SophisticatedTabChip
 import org.nas.videoplayerandroidtv.ui.detail.SeriesDetailScreen
 import org.nas.videoplayerandroidtv.ui.home.HomeScreen
 import org.nas.videoplayerandroidtv.ui.player.VideoPlayerScreen
@@ -190,6 +187,7 @@ fun App(driver: SqlDriver) {
                         selectedMovie != null -> {
                             VideoPlayerScreen(
                                 movie = selectedMovie!!, 
+                                repository = repository, 
                                 playlist = moviePlaylist, 
                                 initialPosition = lastPlaybackPosition, 
                                 onPositionUpdate = { pos: Long, dur: Long -> 
@@ -239,45 +237,5 @@ fun App(driver: SqlDriver) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun SophisticatedTabChip(
-    title: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    var isFocused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1.0f)
-    
-    val backgroundColor by animateColorAsState(targetValue = when { 
-        isFocused -> Color.White.copy(alpha = 0.1f)
-        else -> Color.Transparent 
-    })
-    
-    val contentColor by animateColorAsState(targetValue = when { 
-        isSelected -> Color.White 
-        isFocused -> Color.White 
-        else -> Color.Gray 
-    })
-
-    Box(
-        modifier = Modifier
-            .scale(scale)
-            .clip(RoundedCornerShape(4.dp))
-            .background(backgroundColor)
-            .onFocusChanged { isFocused = it.isFocused }
-            .focusable()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = title, 
-            color = contentColor, 
-            fontSize = 11.sp, 
-            fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
-        )
     }
 }

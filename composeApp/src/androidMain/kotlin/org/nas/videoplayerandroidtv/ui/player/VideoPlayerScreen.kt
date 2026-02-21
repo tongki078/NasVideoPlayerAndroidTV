@@ -42,6 +42,8 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import kotlinx.coroutines.delay
 import org.nas.videoplayerandroidtv.domain.model.Movie
+import org.nas.videoplayerandroidtv.domain.model.SubtitleTrack
+import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractEpisode
@@ -75,9 +77,10 @@ val MyPauseIcon: ImageVector
 @Composable
 fun VideoPlayerScreen(
     movie: Movie,
+    repository: VideoRepository,
     playlist: List<Movie> = emptyList(),
     initialPosition: Long = 0L,
-    onPositionUpdate: (Long, Long) -> Unit = { _, _ -> }, // (current, total) 로 변경
+    onPositionUpdate: (Long, Long) -> Unit = { _, _ -> }, 
     onBack: () -> Unit
 ) {
     var currentMovie by remember(movie) { mutableStateOf(movie) }
@@ -98,6 +101,7 @@ fun VideoPlayerScreen(
 
     // 자막 관련 상태
     var subtitleTracks by remember { mutableStateOf<List<String>>(emptyList()) }
+    var serverSubtitles by remember { mutableStateOf<List<SubtitleTrack>>(emptyList()) }
     var selectedSubtitleIndex by remember { mutableStateOf(-2) } // -2: auto
     var isSubtitleDialogOpen by remember { mutableStateOf(false) }
 
@@ -116,6 +120,22 @@ fun VideoPlayerScreen(
         if (currentIndex != -1 && currentIndex < playlist.size - 1) {
             playlist[currentIndex + 1]
         } else null
+    }
+
+    // 서버 자막 정보 로드 및 추출 연동 (실시간 감시)
+    LaunchedEffect(currentMovie.videoUrl) {
+        val videoUrl = currentMovie.videoUrl ?: return@LaunchedEffect
+        var retryCount = 0
+        while (retryCount < 10) { // 조금 더 넉넉하게 대기 (30초)
+            val info = repository.getSubtitleInfo(videoUrl)
+            serverSubtitles = info.external
+            
+            // 추출이 완료되었거나 외부 자막이 발견되면 중단
+            if (info.external.isNotEmpty() || !info.extraction_triggered) break
+            
+            delay(3000)
+            retryCount++
+        }
     }
 
     val introStart = currentMovie.introStart ?: 0L
@@ -288,7 +308,6 @@ fun VideoPlayerScreen(
                             isControllerVisible = false
                             true 
                         } else { 
-                            // 뒤로 가기 시 상태 안전하게 정리 후 콜백 호출
                             isSeeking = false
                             isControllerVisible = false
                             onBack()
@@ -323,7 +342,8 @@ fun VideoPlayerScreen(
             },
             onSubtitleTracksAvailable = { subtitleTracks = it },
             selectedSubtitleIndex = selectedSubtitleIndex,
-            onSubtitleSelected = { selectedSubtitleIndex = it }
+            onSubtitleSelected = { selectedSubtitleIndex = it },
+            externalSubtitles = serverSubtitles // 서버에서 가져온 자막 주입
         )
 
         AnimatedVisibility(
@@ -353,7 +373,7 @@ fun VideoPlayerScreen(
                 ) {
                     val titleText = currentMovie.title ?: ""
                     val cleanBase = titleText.cleanTitle(keepAfterHyphen = true, includeYear = false)
-                    val season = titleText.extractSeason()
+                    val season = titleText.extractSeason() ?: 1
                     val episode = titleText.extractEpisode()
 
                     Text(
@@ -394,7 +414,6 @@ fun VideoPlayerScreen(
                     .fillMaxSize()
                     .padding(48.dp)
             ) {
-                // 다음 에피소드 버튼
                 AnimatedVisibility(
                     visible = isControllerVisible && nextMovie != null && !isSeeking,
                     enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
@@ -418,7 +437,6 @@ fun VideoPlayerScreen(
                     )
                 }
 
-                // 오프닝 건너뛰기 버튼
                 AnimatedVisibility(
                     visible = isControllerVisible && isDuringOpening && !isSeeking,
                     enter = fadeIn() + slideInHorizontally(initialOffsetX = { -it }),
@@ -440,7 +458,6 @@ fun VideoPlayerScreen(
                     )
                 }
                 
-                // 자막 버튼 추가 (우측 하단)
                 AnimatedVisibility(
                     visible = isControllerVisible && !isSeeking,
                     enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
@@ -458,7 +475,6 @@ fun VideoPlayerScreen(
                 }
             }
 
-            // 하단 시크바 및 썸네일 탐색
             AnimatedVisibility(
                 visible = isControllerVisible || isSeeking,
                 enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
@@ -483,7 +499,6 @@ fun VideoPlayerScreen(
                                 .height(220.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            // 1. 썸네일 리스트
                             LazyRow(
                                 state = thumbListState,
                                 contentPadding = PaddingValues(horizontal = horizontalPadding),
@@ -533,7 +548,6 @@ fun VideoPlayerScreen(
                                 }
                             }
                             
-                            // 2. 정중앙 고정 포커스 프레임
                             Box(
                                 modifier = Modifier
                                     .width(thumbWidth + 12.dp)
@@ -594,18 +608,36 @@ fun VideoPlayerScreen(
                 Surface(
                     shape = RoundedCornerShape(16.dp),
                     color = Color(0xFF1E1E1E),
-                    modifier = Modifier.width(400.dp).padding(16.dp)
+                    modifier = Modifier.width(450.dp).padding(16.dp)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            "자막 선택",
+                            "자막 설정",
                             color = Color.White,
                             fontSize = 22.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(bottom = 16.dp)
+                            modifier = Modifier.padding(bottom = 8.dp)
                         )
+
+                        if (subtitleTracks.isEmpty() && serverSubtitles.isEmpty()) {
+                            Text(
+                                "이 영상은 조절 가능한 내장 자막을 포함하고 있지 않습니다. (영상 자체에 입혀진 자막은 끌 수 없습니다.)",
+                                color = Color.Gray,
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(bottom = 16.dp)
+                            )
+                        } else {
+                            Text(
+                                "원하는 자막 트랙을 선택하세요.",
+                                color = Color.LightGray,
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(bottom = 16.dp)
+                            )
+                        }
                         
-                        val options = listOf("자막 끔") + subtitleTracks
+                        // 서버 자막과 ExoPlayer 감지 자막을 합침
+                        val options = listOf("자막 끔") + subtitleTracks + serverSubtitles.map { it.name }
+
                         LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
                             itemsIndexed(options) { index, title ->
                                 val trackIdx = index - 1

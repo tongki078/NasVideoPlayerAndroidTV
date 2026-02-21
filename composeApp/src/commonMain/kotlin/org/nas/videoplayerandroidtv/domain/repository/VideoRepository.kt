@@ -3,6 +3,7 @@ package org.nas.videoplayerandroidtv.domain.repository
 import org.nas.videoplayerandroidtv.domain.model.Category
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.model.HomeSection
+import org.nas.videoplayerandroidtv.domain.model.SubtitleInfo
 
 interface VideoRepository {
     // 홈 화면 및 카테고리별 테마 섹션 가져오기
@@ -46,4 +47,7 @@ interface VideoRepository {
     suspend fun getKtvVariety(limit: Int, offset: Int): List<Series>
     suspend fun getKtvEdu(limit: Int, offset: Int): List<Series>
     suspend fun getKtvDocu(limit: Int, offset: Int): List<Series>
+
+    // 자막 관련
+    suspend fun getSubtitleInfo(videoUrl: String): SubtitleInfo
 }

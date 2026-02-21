@@ -61,3 +61,23 @@ data class Series(
     val rating: String? = null,
     val seasonCount: Int? = null
 )
+
+@Serializable
+data class SubtitleInfo(
+    val external: List<SubtitleTrack> = emptyList(),
+    val embedded: List<EmbeddedSubtitleStream> = emptyList(),
+    val extraction_triggered: Boolean = false
+)
+
+@Serializable
+data class SubtitleTrack(
+    val name: String,
+    val path: String
+)
+
+@Serializable
+data class EmbeddedSubtitleStream(
+    val index: Int,
+    val codec_name: String? = null,
+    val tags: Map<String, String>? = null
+)

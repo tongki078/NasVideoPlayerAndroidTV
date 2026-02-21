@@ -104,7 +104,6 @@ fun SeriesDetailScreen(
             .firstOrNull()
             
         if (history == null) {
-            // 기록 없으면 첫 화
             ResumeInfo(allEpisodes.first(), 0L, isNew = true)
         } else {
             val lastEpIndex = allEpisodes.indexOfFirst { it.videoUrl == history.videoUrl || it.id == history.id }
@@ -115,13 +114,10 @@ fun SeriesDetailScreen(
                 val isFinished = history.duration > 0 && history.lastPosition > history.duration * 0.95
                 
                 if (isFinished && lastEpIndex < allEpisodes.size - 1) {
-                    // 다 봤으면 다음 화
                     ResumeInfo(allEpisodes[lastEpIndex + 1], 0L, isNext = true)
                 } else if (isFinished) {
-                    // 마지막 화까지 다 봤으면 다시 처음부터
                     ResumeInfo(lastEp, 0L, isFinished = true)
                 } else {
-                    // 보던 중이면 이어보기
                     ResumeInfo(lastEp, history.lastPosition)
                 }
             }
@@ -204,7 +200,8 @@ fun SeriesDetailScreen(
                         if (!resumeInfo.isNew) {
                             val epTitle = resumeInfo.episode.title ?: ""
                             val seasonNum = epTitle.extractSeason()
-                            val episodeStr = epTitle.extractEpisode()
+                            val episodeStr = epTitle.extractEpisode() ?: "회차"
+
                             val buttonText = when {
                                 resumeInfo.isNext -> "시즌 $seasonNum : $episodeStr 재생"
                                 resumeInfo.isFinished -> "다시 보기"

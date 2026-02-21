@@ -1875,7 +1875,9 @@ def run_subtitle_extraction(vp, rel_path, sub_to_extract):
         ACTIVE_EXTRACTIONS.add(rel_path)
     try:
         stream_index = sub_to_extract['index']
-        lang = sub_to_extract.get('tags', {}).get('language', 'und').lower()
+        # tags가 None일 가능성 완벽 차단
+        tags = sub_to_extract.get('tags') if sub_to_extract.get('tags') else {}
+        lang = str(tags.get('language') if tags.get('language') else 'und').lower()
         lang_suffix = 'ko' if lang in ['ko', 'kor'] else 'en' if lang in ['en', 'eng'] else 'und'
 
         video_rel_hash = hashlib.md5(rel_path.encode()).hexdigest()
@@ -1884,8 +1886,17 @@ def run_subtitle_extraction(vp, rel_path, sub_to_extract):
 
         if not os.path.exists(subtitle_full_path):
             log("SUBTITLE", f"백그라운드 추출 시작: 스트림 #{stream_index} ({lang}) -> {subtitle_filename}")
-            extract_cmd = [FFMPEG_PATH, "-y", "-nostdin", "-i", vp, "-vn", "-an", "-map", f"0:{stream_index}", "-c:s",
-                           "srt", subtitle_full_path]
+            extract_cmd = [
+                FFMPEG_PATH, "-y", "-nostdin",
+                "-analyzeduration", "1000000",  # 분석 시간 단축 (1초)
+                "-probesize", "1000000",  # 분석 용량 단축 (1MB)
+                "-i", vp,
+                "-vn", "-an",
+                "-map", f"0:{stream_index}",
+                "-c:s", "srt",
+                "-map_metadata", "-1",  # 메타데이터 무시
+                subtitle_full_path
+            ]
             try:
                 subprocess.run(extract_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                timeout=300)
@@ -1908,14 +1919,8 @@ def get_subtitle_info_api():
     path_raw, prefix = request.args.get('path'), request.args.get('type')
     try:
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
-        rel_path = nfc(urllib.parse.unquote(path_raw))
-
-        # [수정] 진행 중인 작업이 있는지 먼저 확인
-        with EXTRACTION_LOCK:
-            if rel_path in ACTIVE_EXTRACTIONS:
-                log("SUBTITLE", f"추출 진행 중... 클라이언트에 대기 신호 전송: {os.path.basename(rel_path)}")
-                return jsonify({"external": [], "embedded": [], "extraction_triggered": True})
-
+        # 1. 경로 디코딩 (공백 + 처리 포함)
+        rel_path = nfc(urllib.parse.unquote_plus(path_raw))
         vp = get_real_path(os.path.join(base, rel_path))
         video_filename = os.path.basename(vp)
         video_name_no_ext = os.path.splitext(video_filename)[0]
@@ -1923,6 +1928,7 @@ def get_subtitle_info_api():
         log("SUBTITLE", f"자막 조회 시작: {video_filename}")
         external, embedded = [], []
 
+        # 2. 외부 자막 탐색 (원본 폴더)
         parent_dir = os.path.dirname(vp)
         if os.path.exists(parent_dir):
             for f in os.listdir(parent_dir):
@@ -1931,42 +1937,63 @@ def get_subtitle_info_api():
                     sub_name_no_ext = os.path.splitext(f_nfc)[0]
                     if video_name_no_ext.startswith(sub_name_no_ext) or sub_name_no_ext.startswith(video_name_no_ext):
                         if f_nfc != video_filename:
-                            external.append(
-                                {"name": f_nfc, "path": nfc(os.path.join(os.path.dirname(rel_path), f_nfc))})
+                            external.append({"name": f_nfc, "path": nfc(os.path.join(os.path.dirname(rel_path), f_nfc))})
 
+        # 3. 외부 자막 탐색 (서버 캐시 폴더)
         video_rel_hash = hashlib.md5(rel_path.encode()).hexdigest()
         if os.path.exists(SUBTITLE_DIR):
             for f in os.listdir(SUBTITLE_DIR):
                 if f.startswith(video_rel_hash):
-                    display_name = f.replace(f"{video_rel_hash}.", f"{video_name_no_ext}.")
-                    external.append({"name": display_name, "path": f"__SUBTITLE_DIR__/{f}"})
+                    full_p = os.path.join(SUBTITLE_DIR, f)
+                    # [중요] 추출 중이 아니고, 파일 크기가 0보다 클 때만 목록에 추가
+                    with EXTRACTION_LOCK:
+                        is_extracting = rel_path in ACTIVE_EXTRACTIONS
 
-        if not external:
-            try:
-                cmd = [FFPROBE_PATH, "-v", "error", "-show_streams", "-of", "json", vp]
-                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
-                                        timeout=60)
-                all_streams = json.loads(result.stdout).get('streams', [])
-                embedded = [s for s in all_streams if
-                            s.get('codec_type') == 'subtitle' or 'sub' in s.get('codec_name', '').lower()]
-            except Exception as e:
-                log("SUBTITLE_ERROR", f"내장 자막 분석 실패: {e}")
+                    if not is_extracting and os.path.exists(full_p) and os.path.getsize(full_p) > 0:
+                        display_name = f.replace(f"{video_rel_hash}.", f"{video_name_no_ext}.")
+                        external.append({"name": display_name, "path": f"__SUBTITLE_DIR__/{f}"})
+        # 4. 내장 자막 정보 수집 (외부 자막이 없을 때 대비)
+        try:
+            cmd = [FFPROBE_PATH, "-v", "error", "-show_streams", "-of", "json", vp]
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True, timeout=60)
+            all_streams = json.loads(result.stdout).get('streams', [])
+            embedded = [s for s in all_streams if s.get('codec_type') == 'subtitle' or 'sub' in s.get('codec_name', '').lower()]
+        except Exception as e:
+            log("SUBTITLE_ERROR", f"내장 자막 분석 실패: {e}")
 
+        # 5. 자막 목록 확정 및 정렬
         final_subs = sorted(list({sub['path']: sub for sub in external}.values()), key=lambda x: x['name'])
         log("SUBTITLE", f"탐색 완료 - 최종 외부 자막: {len(final_subs)}개, 내장 자막: {len(embedded)}개")
 
+        # 6. [중요] 추출 진행 여부 확인 및 대기 신호 전송
+        # 파일이 아직 없는데 현재 추출 중이라면 앱에 대기 신호를 보냅니다.
+        if not final_subs:
+            with EXTRACTION_LOCK:
+                if rel_path in ACTIVE_EXTRACTIONS:
+                    log("SUBTITLE", f"추출 진행 중... 클라이언트에 대기 신호 전송: {video_filename}")
+                    return jsonify({"external": [], "embedded": [], "extraction_triggered": True})
+
+        # 7. 자동 추출 트리거
         extraction_started = False
         if not final_subs and embedded:
-            sub_to_extract = min(embedded, key=lambda s: {'ko': 1, 'kor': 1, 'en': 2, 'eng': 2}.get(
-                s.get('tags', {}).get('language', 'und').lower(), 99))
-            if sub_to_extract:
-                with EXTRACTION_LOCK:
-                    if rel_path not in ACTIVE_EXTRACTIONS:
-                        log("SUBTITLE", "외부 자막 없음. 내장 자막 백그라운드 추출을 예약합니다.")
-                        SUBTITLE_EXECUTOR.submit(run_subtitle_extraction, vp, rel_path, sub_to_extract)
-                extraction_started = True
+            def get_lang_score(s):
+                t = s.get('tags') if s.get('tags') else {}
+                l = str(t.get('language') if t.get('language') else 'und').lower()
+                return {'ko': 1, 'kor': 1, 'en': 2, 'eng': 2}.get(l, 99)
+
+            try:
+                sub_to_extract = min(embedded, key=get_lang_score)
+                if sub_to_extract:
+                    with EXTRACTION_LOCK:
+                        if rel_path not in ACTIVE_EXTRACTIONS:
+                            log("SUBTITLE", f"자동 추출 시작: {video_filename} (Stream #{sub_to_extract['index']})")
+                            SUBTITLE_EXECUTOR.submit(run_subtitle_extraction, vp, rel_path, sub_to_extract)
+                            extraction_started = True
+            except Exception as e:
+                log("SUBTITLE_ERROR", f"추출 트리거 중 에러: {e}")
 
         return jsonify({"external": final_subs, "embedded": embedded, "extraction_triggered": extraction_started})
+
     except Exception as e:
         log("SUBTITLE_ERROR", f"자막 정보 조회 중 에러: {traceback.format_exc()}")
         return jsonify({"error": str(e), "external": [], "embedded": [], "extraction_triggered": False})
@@ -2106,8 +2133,13 @@ def pre_extract_movie_subtitles():
                 embedded = []
 
             if embedded:
-                sub_to_extract = min(embedded, key=lambda s: {'ko': 1, 'kor': 1, 'en': 2, 'eng': 2}.get(
-                    s.get('tags', {}).get('language', 'und').lower(), 99))
+                def get_lang_score(s):
+                    tags = s.get('tags') or {}
+                    lang = str(tags.get('language') or 'und').lower()
+                    return {'ko': 1, 'kor': 1, 'en': 2, 'eng': 2}.get(lang, 99)
+
+                sub_to_extract = min(embedded, key=get_lang_score)
+
                 with EXTRACTION_LOCK:
                     if rel_path not in ACTIVE_EXTRACTIONS:
                         SUBTITLE_EXECUTOR.submit(run_subtitle_extraction, vp, rel_path, sub_to_extract)

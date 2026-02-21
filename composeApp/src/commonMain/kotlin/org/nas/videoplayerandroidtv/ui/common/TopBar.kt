@@ -1,6 +1,7 @@
 package org.nas.videoplayerandroidtv.ui.common
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -10,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -86,12 +88,12 @@ private fun TopBarItem(
 
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp)) // 원래 모양으로 복구
-            .background(Color.Transparent)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isFocused) Color.White.copy(alpha = 0.1f) else Color.Transparent)
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable { onClick(screen) }
-            .padding(horizontal = if (icon != null) 10.dp else 14.dp, vertical = 6.dp), // 원래 패딩으로 복구
+            .padding(horizontal = if (icon != null) 10.dp else 14.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -100,22 +102,71 @@ private fun TopBarItem(
                     imageVector = icon, 
                     contentDescription = label, 
                     tint = contentColor, 
-                    modifier = Modifier.size(24.dp) // 원래 크기로 복구
+                    modifier = Modifier.size(24.dp)
                 )
             } else {
                 Text(
                     text = label,
                     color = contentColor,
                     fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium,
-                    fontSize = 15.sp // 원래 크기로 복구
+                    fontSize = 15.sp
                 )
             }
             
-            // 빨간 점 인디케이터 복구 (원래 디자인 요소)
             if (isSelected && !isFocused) {
                 Spacer(Modifier.height(2.dp))
                 Box(modifier = Modifier.size(4.dp).clip(RoundedCornerShape(2.dp)).background(Color.Red))
             }
+        }
+    }
+}
+
+/**
+ * App.kt에서 사용되는 서브 카테고리 칩 컴포넌트
+ */
+@Composable
+fun SophisticatedTabChip(
+    title: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    
+    val backgroundColor by animateColorAsState(
+        when {
+            isFocused -> Color.White
+            isSelected -> Color.Red
+            else -> Color.White.copy(alpha = 0.1f)
+        }
+    )
+    
+    val contentColor by animateColorAsState(
+        if (isFocused) Color.Black else Color.White
+    )
+    
+    val elevation by animateDpAsState(if (isFocused) 8.dp else 0.dp)
+
+    Surface(
+        onClick = onClick,
+        modifier = Modifier
+            .height(36.dp)
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable(),
+        shape = RoundedCornerShape(18.dp),
+        color = backgroundColor,
+        tonalElevation = elevation,
+        shadowElevation = elevation
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 20.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = title,
+                color = contentColor,
+                fontSize = 14.sp,
+                fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
+            )
         }
     }
 }

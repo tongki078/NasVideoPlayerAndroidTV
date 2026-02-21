@@ -155,4 +155,20 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getPopularForeignTV(): List<Series> = getLatestForeignTV()
     override suspend fun getLatestKoreanTV(): List<Series> = getCategoryListAsSeries("국내TV", null)
     override suspend fun getPopularKoreanTV(): List<Series> = getLatestKoreanTV()
+
+    // 자막 정보 조회 구현
+    override suspend fun getSubtitleInfo(videoUrl: String): SubtitleInfo = try {
+        // videoUrl: http://192.168.0.2:5000/video_serve?type=movie&path=...
+        val url = Url(videoUrl)
+        val type = url.parameters["type"]
+        val path = url.parameters["path"]
+        
+        client.get("$baseUrl/api/subtitle_info") {
+            parameter("type", type)
+            parameter("path", path)
+        }.body<SubtitleInfo>()
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        SubtitleInfo()
+    }
 }

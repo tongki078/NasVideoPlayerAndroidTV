@@ -24,6 +24,9 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
 import org.nas.videoplayerandroidtv.R
+import org.nas.videoplayerandroidtv.domain.model.SubtitleTrack
+import org.nas.videoplayerandroidtv.data.network.NasApiClient
+import java.net.URLEncoder
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -41,7 +44,8 @@ actual fun VideoPlayer(
     onSeekFinished: (() -> Unit)?,
     onSubtitleTracksAvailable: ((List<String>) -> Unit)?,
     selectedSubtitleIndex: Int,
-    onSubtitleSelected: ((Int) -> Unit)?
+    onSubtitleSelected: ((Int) -> Unit)?,
+    externalSubtitles: List<SubtitleTrack>
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -63,14 +67,17 @@ actual fun VideoPlayer(
             .setMediaSourceFactory(DefaultMediaSourceFactory(context).setDataSourceFactory(httpDataSourceFactory))
             .build().apply {
                 playWhenReady = true
+                // [추가] 기본적으로 한국어 자막을 선호하도록 설정
+                val params = trackSelectionParameters.buildUpon()
+                    .setPreferredTextLanguage("ko")
+                    .setSelectUndeterminedTextLanguage(true)
+                    .build()
+                trackSelectionParameters = params
+
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
-                        if (playbackState == Player.STATE_ENDED) {
-                            currentOnVideoEnded?.invoke()
-                        }
-                        if (playbackState == Player.STATE_READY) {
-                            currentOnDurationDetermined?.invoke(duration)
-                        }
+                        if (playbackState == Player.STATE_ENDED) currentOnVideoEnded?.invoke()
+                        if (playbackState == Player.STATE_READY) currentOnDurationDetermined?.invoke(duration)
                     }
                     override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
                         if (reason == Player.DISCONTINUITY_REASON_SEEK) currentOnSeekFinished?.invoke()
@@ -84,50 +91,72 @@ actual fun VideoPlayer(
                             format.label ?: format.language ?: "자막 ${index + 1}"
                         }
                         onSubtitleTracksAvailable?.invoke(names)
+                        
+                        if (selectedSubtitleIndex == -1) {
+                            val builder = trackSelectionParameters.buildUpon()
+                            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                            trackSelectionParameters = builder.build()
+                        }
                     }
                 })
             }
     }
 
-    LaunchedEffect(url) {
+    // URL 및 외부 자막 로드 로직 (재생 위치 유지)
+    LaunchedEffect(url, externalSubtitles) {
         if (url.isNotBlank()) {
-            val mediaItem = MediaItem.Builder()
+            // 현재 재생 중인 위치를 캡처 (자막이 중간에 추가되었을 때 끊김 방지)
+            val currentPos = if (exoPlayer.playbackState != Player.STATE_IDLE) {
+                exoPlayer.currentPosition
+            } else {
+                initialPosition
+            }
+
+            val mediaItemBuilder = MediaItem.Builder()
                 .setUri(Uri.parse(url))
-                .build()
-            exoPlayer.setMediaItem(mediaItem, initialPosition)
+            
+            // 외부 자막 설정 (URL 인코딩 적용)
+            val subtitleConfigs = externalSubtitles.map { track ->
+                val encodedPath = URLEncoder.encode(track.path, "UTF-8")
+                val subUrl = if (track.path.startsWith("http")) track.path 
+                             else "${NasApiClient.BASE_URL}/api/subtitle_extract?sub_path=$encodedPath"
+                
+                MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
+                    .setMimeType(MimeTypes.APPLICATION_SUBRIP)
+                    .setLanguage("ko")
+                    .setLabel(track.name)
+                    .setSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED)
+                    .build()
+            }
+            mediaItemBuilder.setSubtitleConfigurations(subtitleConfigs)
+            
+            exoPlayer.setMediaItem(mediaItemBuilder.build(), currentPos)
             exoPlayer.prepare()
         }
     }
 
-    // 자막 트랙 선택 로직 보강
     LaunchedEffect(selectedSubtitleIndex, subtitleTrackGroups.size) {
-        val parametersBuilder = exoPlayer.trackSelectionParameters.buildUpon()
-        
+        val builder = exoPlayer.trackSelectionParameters.buildUpon()
         when (selectedSubtitleIndex) {
-            -1 -> { // 자막 끔
-                parametersBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                parametersBuilder.clearOverridesOfType(C.TRACK_TYPE_TEXT)
-                // 강제 자막 속성 등도 모두 무시하도록 설정
-                parametersBuilder.setIgnoredTextSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED)
+            -1 -> {
+                builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                builder.setIgnoredTextSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED)
             }
-            -2 -> { // 자동 (기본)
-                parametersBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                parametersBuilder.clearOverridesOfType(C.TRACK_TYPE_TEXT)
-                parametersBuilder.setIgnoredTextSelectionFlags(0)
+            -2 -> {
+                builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                builder.clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                builder.setPreferredTextLanguage("ko") // 자동 모드에서도 한국어 선호
             }
-            else -> { // 특정 자막 선택
+            else -> {
                 if (selectedSubtitleIndex in subtitleTrackGroups.indices) {
-                    parametersBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                    parametersBuilder.setOverrideForType(
-                        TrackSelectionOverride(
-                            subtitleTrackGroups[selectedSubtitleIndex].mediaTrackGroup,
-                            0
-                        )
+                    builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    builder.setOverrideForType(
+                        TrackSelectionOverride(subtitleTrackGroups[selectedSubtitleIndex].mediaTrackGroup, 0)
                     )
                 }
             }
         }
-        exoPlayer.trackSelectionParameters = parametersBuilder.build()
+        exoPlayer.trackSelectionParameters = builder.build()
     }
 
     LaunchedEffect(seekToPosition) {
@@ -175,9 +204,14 @@ actual fun VideoPlayer(
                 }
             },
             update = { view ->
-                // UI 레벨에서도 자막 뷰의 가시성을 확실히 제어
-                view.subtitleView?.let { 
-                    it.visibility = if (selectedSubtitleIndex == -1) View.GONE else View.VISIBLE
+                val subView = view.subtitleView
+                if (subView != null) {
+                    if (selectedSubtitleIndex == -1) {
+                        subView.visibility = View.GONE
+                        subView.setCues(null)
+                    } else {
+                        subView.visibility = View.VISIBLE
+                    }
                 }
             },
             modifier = Modifier.fillMaxSize()
