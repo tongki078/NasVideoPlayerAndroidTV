@@ -273,9 +273,9 @@ REGEX_CH_PREFIX = re.compile(
 REGEX_TECHNICAL_TAGS = re.compile(
     r'(?i)[.\s_-](?!(?:\d+\b))(\d{3,4}p|2160p|FHD|QHD|UHD|4K|Bluray|Blu-ray|WEB-DL|WEBRip|HDRip|BDRip|DVDRip|H\.?26[45]|x26[45]|HEVC|AVC|AAC\d?|DTS-?H?D?|AC3|DDP\d?|DD\+\d?|Dual|Atmos|REPACK|10bit|REMUX|FLAC|xvid|DivX|MKV|MP4|AVI|HDR(?:10)?(?:\+)?|Vision|Dolby|NF|AMZN|HMAX|DSNP|AppleTV?|Disney|PCOK|playWEB|ATVP|HULU|HDTV|HD|KBS|SBS|MBC|TVN|JTBC|NEXT|ST|SW|KL|YT|MVC|KN|FLUX|hallowed|PiRaTeS|Jadewind|Movie|pt\s*\d+|KOREAN|KOR|ITALIAN|JAPANESE|JPN|CHINESE|CHN|ENGLISH|ENG|USA|HK|TW|FRENCH|GERMAN|SPANISH|THAI|VIETNAMESE|WEB|DL|TVRip|HDR10Plus|IMAX|Unrated|REMASTERED|Criterion|NonDRM|BRRip|1080i|720i|국어|Mandarin|Cantonese|FanSub|VFQ|VF|2CH|5\.1CH|8m|2398|PROPER|PROMO|LIMITED|RM4K|DC|THEATRICAL|EXTENDED|FINAL|DUB|KORDUB|JAPDUB|ENGDUB|ARROW|EDITION|SPECIAL|COLLECTION|RETAIL|TVING|WAVVE|Coupang|CP|B-Global|TrueHD|E-AC3|EAC3|DV|Dual-Audio|Multi-Audio|Multi-Sub)(?:\b|[.\s_-]|$)')
 
-# [개선] 에피소드 번호 추출 패턴 대폭 강화 (화/회/기/부/話 뒤에 바로 오는 경우도 허용)
+# [수정] 에피소드 마커 정규식 (마지막 괄호 확인 필수!)
 REGEX_EP_MARKER_STRICT = re.compile(
-    r'(?i)(?:(?<=[\uac00-\ud7af\u3040-\u30ff\u4e00-\u9fff])|[.\s_-]|^)(?:第?\s*S(\d+)E(\d+)(?:[-~]E?\d+)?(?:[화회기부話])?|第?\s*S(\d+)|第?\s*E(\d+)(?:[-~]\d+)?(?:[화회기부話])?|(\d+)\s*(?:화|회|기|부|話)|Season\s*(\d+)|Episode\s*(\d+)|시즌\s*(\d+))(?:\b|[.\s_-]|$)')
+    r'(?i)(?:(?<=[\uac00-\ud7af\u3040-\u30ff\u4e00-\u9fff])|[.\s_-]|^)(?:第?\s*S(\d+)E(\d+)(?:[-~]E?\d+)?(?:[화회기부話장쿨편])?|第?\s*S(\d+)|第?\s*E(\d+)(?:[-~]\d+)?(?:[화회기부話장쿨편])?|(\d+)\s*(?:화|회|기|부|話|장|쿨|편)|Season\s*(\d+)|Episode\s*(\d+)|시즌\s*(\d+)|Part\s*(\d+))(?:\b|[.\s_-]|$)')
 
 REGEX_DATE_YYMMDD = re.compile(r'(?<!\d)\d{6}(?!\d)')
 REGEX_FORBIDDEN_CONTENT = re.compile(
@@ -287,10 +287,9 @@ REGEX_FORBIDDEN_TITLE = re.compile(
 REGEX_BRACKETS = re.compile(
     r'\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\)|$)|\【.*?(?:\】|$)|\『.*?(?:\』|$)|\「.*?(?:\」|$)|\（.*?(?:\）|$)')
 REGEX_TMDB_HINT = re.compile(r'\{tmdb[\s-]*(\d+)\}')
-# [추가] 불필요한 키워드 추가 (한국어더빙, 큐레이션, 단편 등)
+# [수정] 불필요한 키워드 제거 목록 보강
 REGEX_JUNK_KEYWORDS = re.compile(
-    r'(?i)\s*(?:더빙|자막|한국어|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|익스텐디드|등급고지|예고편|(?<!\S)[상하](?!\S)|극장판\s*\d+기|특집\s*다큐|\d+부작|큐레이션|단편|드라마)\s*')
-
+    r'(?i)\s*(?:더빙|자막|한국어|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|익스텐디드|등급고지|예고편|(?<!\S)[상하](?!\S)|극장판\s*\d+[기장쿨]|특집\s*다큐|\d+부작|큐레이션|단편|드라마)\s*')
 # [수정] 특수문자 제거 시 하이픈(-)과 콜론(:)은 제외하여 부제 분리에 사용 (별표 추가)
 REGEX_SPECIAL_CHARS = re.compile(r'[\[\]()_\.!#@*※×,~;【】『』「」"\'（）☆★]')
 REGEX_LEADING_INDEX = re.compile(r'^\s*(\d{1,5}(?:\s+|[.\s_-]+|(?=[가-힣a-zA-Z])))|^\s*(\d{1,5}\. )')
@@ -372,18 +371,14 @@ def clean_title_complex(title):
 def extract_episode_numbers(filename):
     match = REGEX_EP_MARKER_STRICT.search(filename)
     if match:
-        # S01E05 형식
         if match.group(1) and match.group(2): return int(match.group(1)), int(match.group(2))
-        # S01 형식
         if match.group(3): return int(match.group(3)), 1
-        # E05 형식
         if match.group(4): return 1, int(match.group(4))
-        # 13화, 13회 형식
         if match.group(5): return 1, int(match.group(5))
-        # Season 2, Episode 3, 시즌 2 형식
         if match.group(6): return int(match.group(6)), 1
         if match.group(7): return 1, int(match.group(7))
         if match.group(8): return int(match.group(8)), 1
+        if match.group(9): return int(match.group(9)), 1 # Part 번호를 시즌으로 간주
     return 1, None
 
 
@@ -657,6 +652,7 @@ WHITELISTS = {
 
 
 def scan_recursive_to_db(bp, prefix, category, include_only=None):
+    emit_ui_log("파일 목록을 불러오는 중입니다...", "info")
     log("SCAN", f"📂 '{category}' 탐색 시작 (허용 폴더만: {include_only if include_only else '전체'})")
     base = nfc(get_real_path(bp))
     all_files = []
@@ -689,6 +685,10 @@ def scan_recursive_to_db(bp, prefix, category, include_only=None):
                                 stack.append(entry.path)
                         elif entry.is_file() and entry.name.lower().endswith(VIDEO_EXTS):
                             all_files.append(nfc(entry.path))
+                        # --- [여기에 아래 코드 추가] ---
+                        if len(all_files) % 1000 == 0:
+                            log("SCAN", f"⏳ 파일 찾는 중... 현재 {len(all_files)}개 발견")
+                        # ------------------------------
             except:
                 pass
 
@@ -787,15 +787,21 @@ def fetch_metadata_async(force_all=False):
         return
     IS_METADATA_RUNNING = True
     log("METADATA", f"⚙️ 병렬 매칭 프로세스 시작 (force_all={force_all})")
+
     try:
+        # [수정] DB 통계 파악을 최상단으로 이동 (변수를 먼저 확보해야 UI에 보낼 수 있음)
         conn = get_db()
-        # [로그 강화] 작업 시작 전 현재 DB 통계 파악
         cursor = conn.cursor()
         t_all = cursor.execute("SELECT COUNT(*) FROM series").fetchone()[0]
         t_ok = cursor.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NOT NULL").fetchone()[0]
         t_fail = cursor.execute("SELECT COUNT(*) FROM series WHERE failed = 1").fetchone()[0]
         t_wait = cursor.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NULL AND failed = 0").fetchone()[0]
         t_rate = (t_ok / t_all * 100) if t_all > 0 else 0
+
+        # [수정] 변수가 확보된 후 UI 상태 업데이트 호출
+        set_update_state(is_running=True, task_name="메타데이터 매칭", total=t_all,
+                         current=t_ok + t_fail, success=t_ok, fail=t_fail, clear_logs=True)
+        emit_ui_log(f"메타데이터 매칭 작업을 시작합니다. (대상: {t_wait}개)", "info")
 
         log("METADATA_STATS",
             f"📊 [작업 전 통계] 전체: {t_all} | 성공: {t_ok} | 실패: {t_fail} | 대기: {t_wait} | 성공률: {round(t_rate, 2)}%")
@@ -809,7 +815,6 @@ def fetch_metadata_async(force_all=False):
             'SELECT name FROM series WHERE cleanedName IS NULL AND tmdbId IS NULL AND failed = 0 GROUP BY name').fetchall()
         if uncleaned_names_rows:
             log("METADATA", f"🧪 누락된 항목 제목 정제 중 ({len(uncleaned_names_rows)}개 고유 제목)...")
-            cursor = conn.cursor()
             for idx, r in enumerate(uncleaned_names_rows):
                 name = r['name']
                 ct, yr = clean_title_complex(name)
@@ -818,7 +823,6 @@ def fetch_metadata_async(force_all=False):
                 if (idx + 1) % 2000 == 0: conn.commit()
             conn.commit()
 
-        # [수정] 이미 매칭된 시리즈라도 에피소드 정보(시즌 번호 등)가 없는 경우 포함하도록 쿼리 수정
         all_names_rows = conn.execute('''
             SELECT name, category FROM series
             WHERE failed = 0
@@ -830,6 +834,7 @@ def fetch_metadata_async(force_all=False):
             log("METADATA", "✅ 매칭 대상 없음 (모든 작품이 이미 매칭되었거나 실패 처리됨)")
             IS_METADATA_RUNNING = False
             build_all_caches()
+            set_update_state(is_running=False, current_item="작업 대상 없음")
             return
 
         group_rows = conn.execute('''
@@ -856,7 +861,6 @@ def fetch_metadata_async(force_all=False):
         log("METADATA", f"📊 그룹화 완료: {total}개의 고유 작품 식별됨")
 
         def process_one(task):
-            # [수정] 카테고리 정보를 넘겨주어 TV/영화 구분 매칭
             info = get_tmdb_info_server(task['sample_name'], category=task['category'], ignore_cache=force_all)
             return (task, info)
 
@@ -911,7 +915,6 @@ def fetch_metadata_async(force_all=False):
                             if EN:
                                 ei = info['seasons_data'].get(f"{sn}_{EN}")
                                 if ei:
-                                    # [수정] TMDB Still 이미지가 있으면 thumbnailUrl을 해당 URL로 업데이트
                                     still_url = f"https://image.tmdb.org/t/p/w500{ei.get('still_path')}" if ei.get(
                                         'still_path') else None
                                     ep_batch.append(
@@ -920,34 +923,38 @@ def fetch_metadata_async(force_all=False):
                             cursor.executemany(
                                 'UPDATE episodes SET overview=?, air_date=?, season_number=?, episode_number=?, thumbnailUrl=COALESCE(?, thumbnailUrl) WHERE id=?',
                                 ep_batch)
-                            # [개선] 어떤 작품의 에피소드가 업데이트되었는지 이름과 개수를 명확히 로깅
-                            log("METADATA",
-                                f"📺 '{task['sample_name']}' 에피소드 {Log(len(ep_batch))}개 정보 및 Still 이미지 적용 완료")
+                            log("METADATA", f"📺 '{task['sample_name']}' 에피소드 {len(ep_batch)}개 정보 업데이트 완료")
+
             conn.commit()
             conn.close()
             total_success += batch_success
             total_fail += batch_fail
 
-            log("METADATA",
-                f"📈 진행 상황: ✅ 이번 배치 성공 {batch_success} / ❌ 실패 {batch_fail} (누적: ✅ {total_success} / ❌ {total_fail})")
+            # [UI 업데이트 부분]
+            with UPDATE_LOCK:
+                UPDATE_STATE["current"] = (t_ok + t_fail + total_success + total_fail)
+                UPDATE_STATE["success"] = (t_ok + total_success)
+                UPDATE_STATE["fail"] = (t_fail + total_fail)
+                if batch: UPDATE_STATE["current_item"] = batch[-1]['sample_name']
+
+            emit_ui_log(f"배치 처리 완료: 성공 {batch_success}, 실패 {batch_fail} (누적 성공: {total_success})",
+                        "success" if batch_success > 0 else "info")
 
             if (i // batch_size) % 10 == 0:
-                log("METADATA", "♻️ 중간 캐시 갱신 중...")
                 build_all_caches()
 
         build_all_caches()
 
-        # [로그 강화] 작업 종료 후 최종 통계 출력
         conn = get_db()
-        cursor = conn.cursor()
-        f_ok = cursor.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NOT NULL").fetchone()[0]
+        f_ok = conn.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NOT NULL").fetchone()[0]
         f_rate = (f_ok / t_all * 100) if t_all > 0 else 0
         conn.close()
 
-        log("METADATA_STATS", f"🎊 작업 종료! 성공: {t_ok} -> {f_ok} (개선: +{f_ok - t_ok}) | 최종 성공률: {round(f_rate, 2)}%")
-        log("METADATA", f"🏁 최종 완료: 총 ✅ {total_success}개 신규 매칭, ❌ {total_fail}개 실패 유지")
+        log("METADATA_STATS", f"🎊 작업 종료! 성공: {t_ok} -> {f_ok} | 최종 성공률: {round(f_rate, 2)}%")
+        set_update_state(is_running=False, current_item=f"매칭 완료 (+{total_success}건)")
     except:
         log("METADATA", f"⚠️ 치명적 에러 발생: {traceback.format_exc()}")
+        emit_ui_log(f"작업 중 치명적 에러 발생: {traceback.format_exc()}", "error")
     finally:
         IS_METADATA_RUNNING = False
         log("METADATA", "🏁 병렬 매칭 프로세스 종료")
@@ -964,7 +971,7 @@ def get_sections_for_category(cat, kw=None):
     # Filter by keyword if provided (e.g., "라프텔", "제목", "드라마")
     target_list = base_list
     is_search = False
-    if kw and kw not in ["전체", "All", "제목"]:
+    if kw and kw not in ["전체", "All"]:
         search_kw = kw.strip().lower()
         # [수정] "방송중" 키워드 검색 시 "방송중(기타)"가 섞이지 않도록 폴더 단위 정확히 매칭 검사
         target_list = [i for i in base_list if
@@ -1043,7 +1050,7 @@ def get_list():
     lim = int(request.args.get('limit', 1000))
     off = int(request.args.get('offset', 0))
 
-    # [수정] "방송중(기타)" 등 비슷한 이름의 폴더가 섞이지 않도록 슬래시(/)를 붙여서 검사
+    # [수정] "제목" 예외 제거 및 폴더 단위 필터링 강화
     if kw and kw not in ["전체", "All"]:
         search_kw = nfc(kw).lower()
         res = [item for item in bl if
@@ -1117,18 +1124,16 @@ def pre_generate_individual_task(ep_thumb_url):
 
 @app.route('/search')
 def search_videos():
-    # 1. 입력받은 검색어를 NFC로 정규화하여 한글 깨짐/불일치 방지
+    # 1. 검색어 정규화 (한글 자모 분리 방지)
     q = nfc(request.args.get('q', '')).lower().strip()
     if not q: return jsonify([])
 
     conn = get_db()
 
-    # 2. 검색 범위에 s.overview(줄거리) 추가
-    # s.overview 에는 보통 '장송의 프리렌' 이라는 한글 제목이 포함되어 있습니다.
+    # 2. 검색 및 그룹화 쿼리 (카테고리별 제목 단위로 묶음)
     query = """
-        SELECT s.*, e.id as ep_id, e.videoUrl, e.thumbnailUrl, e.title
+        SELECT s.*
         FROM series s
-        LEFT JOIN episodes e ON s.path = e.series_path
         WHERE (
             s.path LIKE ?
             OR s.name LIKE ?
@@ -1136,7 +1141,8 @@ def search_videos():
             OR s.tmdbId LIKE ?
             OR s.overview LIKE ?
         )
-        GROUP BY s.path
+        AND EXISTS (SELECT 1 FROM episodes WHERE series_path = s.path)
+        GROUP BY s.category, TRIM(s.cleanedName)
         ORDER BY
             CASE
                 WHEN s.name LIKE ? THEN 1
@@ -1145,10 +1151,9 @@ def search_videos():
             END, s.name ASC
     """
 
-    # % 를 앞뒤로 붙여서 중간에 포함된 단어도 찾도록 설정
     search_param = f'%{q}%'
 
-    # 인자 개수에 맞춰서 (5개 WHERE 절 + 2개 ORDER BY 절) 총 7개 인자 전달
+    # 총 7개의 인자를 전달합니다.
     cursor = conn.execute(query, (
         search_param, search_param, search_param, search_param, search_param,
         f'{q}%', f'{q}%'
@@ -1157,12 +1162,10 @@ def search_videos():
     rows = []
     for row in cursor.fetchall():
         item = dict(row)
-        # 에피소드 정보 구성
-        item['movies'] = [
-            {"id": item.pop('ep_id'), "videoUrl": item.pop('videoUrl'), "thumbnailUrl": item.pop('thumbnailUrl'),
-             "title": item.pop('title')}] if item.get('ep_id') else []
 
-        # JSON 문자열 필드들을 리스트로 변환
+        # [핵심] 에피소드 목록을 비워서 보내야 앱에서 상세 회차 정보를 서버에 다시 요청합니다.
+        item['movies'] = []
+
         for col in ['genreIds', 'genreNames', 'actors']:
             if item.get(col):
                 try:
@@ -1178,6 +1181,36 @@ def search_videos():
 def rescan_broken():
     threading.Thread(target=perform_full_scan, daemon=True).start()
     return jsonify({"status": "success"})
+
+
+@app.route('/db_cleanup')
+def db_cleanup():
+    """파일 스캔 없이 DB에서 화이트리스트 외의 데이터를 즉시 삭제합니다."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 카테고리별 허용된 폴더가 아니면 DB에서 삭제
+    for cat, folders in WHITELISTS.items():
+        if not folders: continue
+
+        # SQL 조건 생성: path가 'koreantv/드라마/%' 형식이 아닌 것들을 찾음
+        # Path 예시: "koreantv/애니메이션/프리렌.mp4" -> 삭제 대상
+        conditions = [f"path NOT LIKE '{cat}/{f}/%'" for f in folders]
+        where_clause = " AND ".join(conditions)
+
+        query = f"DELETE FROM series WHERE category = ? AND ({where_clause})"
+        cursor.execute(query, (cat,))
+        log("CLEANUP", f"'{cat}' 카테고리 정리 완료")
+
+    # 연결된 에피소드(회차) 정보도 함께 정리
+    cursor.execute("DELETE FROM episodes WHERE series_path NOT IN (SELECT path FROM series)")
+
+    conn.commit()
+    conn.close()
+
+    # 메모리 캐시 즉시 갱신
+    build_all_caches()
+    return jsonify({"status": "success", "message": "DB cleanup completed instantly without scanning files."})
 
 
 @app.route('/rematch_metadata')
@@ -2109,6 +2142,27 @@ def pre_extract_subtitles_route():
     threading.Thread(target=pre_extract_movie_subtitles, daemon=True).start()
     return jsonify({"status": "success", "message": "영화 자막 사전 추출 작업을 시작합니다."})
 
+@app.route('/refresh_cleaned_names')
+def refresh_cleaned_names():
+    """DB에 저장된 모든 제목을 현재 정규식으로 다시 정제하여 업데이트합니다."""
+    conn = get_db()
+    cursor = conn.cursor()
+    rows = cursor.execute("SELECT path, name FROM series").fetchall()
+
+    update_count = 0
+    for row in rows:
+        path, name = row['path'], row['name']
+        ct, yr = clean_title_complex(name)
+        # [추가] 공백 차이로 인한 분리 방지를 위해 제목 정규화 (선택 사항)
+        # ct = ct.replace(" ", "") # 모든 공백을 붙여버리고 싶다면 이 주석을 해제하세요.
+
+        cursor.execute("UPDATE series SET cleanedName = ?, yearVal = ? WHERE path = ?", (ct, yr, path))
+        update_count += 1
+
+    conn.commit()
+    conn.close()
+    build_all_caches()  # 메모리 캐시 갱신
+    return jsonify({"status": "success", "updated": update_count})
 
 @app.route('/admin_stills')
 def admin_stills_page():
@@ -2202,6 +2256,7 @@ def updater_ui():
                 <button class ="btn-primary" style="background-color: #343a40;" onclick="triggerTask('/pre_extract_subtitles')"> 🎬 영화 자막 일괄 추출 </button>
                 <button class="btn-warning" onclick="triggerTask('/rematch_metadata')">⚠️ 전체 강제 재스캔</button>
                 <button class="btn-info" onclick="window.open('/admin_stills', '_blank')" style="background-color: #17a2b8;">📊 스틸컷 적용 확인</button>
+                <button class ="btn-secondary" onclick="triggerTask('/rescan_broken')" style="background-color: #6c757d;"> 🔍 로컬 폴더 스캔 </button>
             </div>
 
             <div class="status-box">

@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -33,6 +34,8 @@ fun HomeScreen(
     homeSections: List<HomeSection>,
     isLoading: Boolean,
     lazyListState: LazyListState, 
+    rowStates: MutableMap<String, LazyListState>,
+    rowFocusIndices: SnapshotStateMap<String, Int>,
     currentScreen: Screen = Screen.HOME,
     onSeriesClick: (Series) -> Unit,
     onPlayClick: (Movie) -> Unit,
@@ -40,8 +43,6 @@ fun HomeScreen(
 ) {
     val repository: VideoRepository = remember { VideoRepositoryImpl() }
     val standardMargin = 20.dp 
-    val rowStates = remember { mutableMapOf<String, LazyListState>() }
-    val rowFocusIndices = remember { mutableStateMapOf<String, Int>() }
     val coroutineScope = rememberCoroutineScope()
 
     var extraSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }

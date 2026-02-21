@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -14,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -131,7 +133,10 @@ fun App(driver: SqlDriver) {
         }
     }
 
-    val lazyListStates = remember { mutableMapOf<String, androidx.compose.foundation.lazy.LazyListState>() }
+    val lazyListStates = remember { mutableMapOf<String, LazyListState>() }
+    // 가로 스크롤 상태 및 포커스 인덱스 보존을 위한 Map 추가
+    val allRowStates = remember { mutableMapOf<String, MutableMap<String, LazyListState>>() }
+    val allRowFocusIndices = remember { mutableMapOf<String, SnapshotStateMap<String, Int>>() }
 
     BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME) {
         when {
@@ -219,7 +224,9 @@ fun App(driver: SqlDriver) {
                                 watchHistory = if (currentScreen == Screen.HOME) watchHistory else emptyList(), 
                                 homeSections = allCategorySections[currentCacheKey] ?: emptyList(),
                                 isLoading = categoryLoadingStates[currentCacheKey] ?: false,
-                                lazyListState = lazyListStates.getOrPut(currentCacheKey) { androidx.compose.foundation.lazy.LazyListState() },
+                                lazyListState = lazyListStates.getOrPut(currentCacheKey) { LazyListState() },
+                                rowStates = allRowStates.getOrPut(currentCacheKey) { mutableMapOf() },
+                                rowFocusIndices = allRowFocusIndices.getOrPut(currentCacheKey) { mutableStateMapOf() },
                                 onSeriesClick = { selectedSeries = it }, 
                                 onPlayClick = { m: Movie -> 
                                     selectedMovie = m; moviePlaylist = listOf(m); lastPlaybackPosition = 0L 
