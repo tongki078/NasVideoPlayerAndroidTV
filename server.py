@@ -1040,7 +1040,7 @@ def get_series_detail_api():
         conn.close()
         return gzip_response([])
     series = dict(row)
-    cat = series.get('category')
+
     for col in ['genreIds', 'genreNames', 'actors']:
         if series.get(col):
             try:
@@ -1048,13 +1048,22 @@ def get_series_detail_api():
             except:
                 series[col] = []
 
-    # [수정] TMDB ID가 같더라도 '상세경로(path)'가 정확히 일치하는 에피소드만 가져오도록 변경 (타 폴더 혼용 방지)
+    # [수정] 상위 폴더 경로를 추출하여 해당 폴더(및 하위 시즌 폴더) 내의 파일들만 가져오도록 변경
+    parent_path = os.path.dirname(path)
+    # 만약 상위 폴더가 'Season 1', '1기', '2쿨' 등 시즌/파트 폴더면 한 단계 더 올라가서 전체를 포함함
+    if re.search(r'(?i)(Season\s*\d+|시즌\s*\d+|Part\s*\d+|\d+기|\d+쿨|\d+부)', os.path.basename(parent_path)):
+        parent_path = os.path.dirname(parent_path)
+
     if series.get('tmdbId'):
+        # [수정] TMDB ID가 같더라도 '물리적 상위 폴더(parent_path)'가 일치하는 에피소드만 가져옴
         cursor = conn.execute(
-            "SELECT e.* FROM episodes e JOIN series s ON e.series_path = s.path WHERE s.tmdbId = ? AND s.path = ?",
-            (series['tmdbId'], path))
+            "SELECT e.* FROM episodes e JOIN series s ON e.series_path = s.path WHERE s.tmdbId = ? AND s.path LIKE ?",
+            (series['tmdbId'], parent_path + "/%"))
     else:
-        cursor = conn.execute("SELECT * FROM episodes WHERE series_path = ?", (path,))
+        # TMDB 매칭이 안 된 경우도 같은 폴더 구조 내의 파일들을 회차로 묶어줌
+        cursor = conn.execute(
+            "SELECT e.* FROM episodes e JOIN series s ON e.series_path = s.path WHERE s.cleanedName = ? AND s.path LIKE ?",
+            (series.get('cleanedName'), parent_path + "/%"))
 
     eps = []
     seen = set()
@@ -1065,13 +1074,9 @@ def get_series_detail_api():
     series['movies'] = sorted(eps, key=lambda x: natural_sort_key(x['title']))
     conn.close()
 
-    # [최적화] 상세 페이지 진입 시마다 백그라운드에서 FFmpeg을 돌리던 작업을 중단합니다.
-    # 이제 TMDB 스틸 이미지를 우선 사용하므로 무거운 생성이 필요 없습니다.
-    # for ep in series['movies']:
-    #     THUMB_EXECUTOR.submit(pre_generate_individual_task, ep['thumbnailUrl'])
-
     _DETAIL_CACHE.append((path, series))
     return gzip_response(series)
+
 
 
 def pre_generate_individual_task(ep_thumb_url):
