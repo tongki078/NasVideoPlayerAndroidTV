@@ -1067,6 +1067,7 @@ def get_series_detail_api():
     if not path: return gzip_response([])
     for c_path, data in _DETAIL_CACHE:
         if c_path == path: return gzip_response(data)
+
     conn = get_db()
     row = conn.execute('SELECT * FROM series WHERE path = ?', (path,)).fetchone()
     if not row:
@@ -1081,22 +1082,13 @@ def get_series_detail_api():
             except:
                 series[col] = []
 
-    # [수정] 상위 폴더 경로를 추출하여 해당 폴더(및 하위 시즌 폴더) 내의 파일들만 가져오도록 변경
-    parent_path = os.path.dirname(path)
-    # 만약 상위 폴더가 'Season 1', '1기', '2쿨' 등 시즌/파트 폴더면 한 단계 더 올라가서 전체를 포함함
-    if re.search(r'(?i)(Season\s*\d+|시즌\s*\d+|Part\s*\d+|\d+기|\d+쿨|\d+부)', os.path.basename(parent_path)):
-        parent_path = os.path.dirname(parent_path)
-
-    if series.get('tmdbId'):
-        # [수정] TMDB ID가 같더라도 '물리적 상위 폴더(parent_path)'가 일치하는 에피소드만 가져옴
-        cursor = conn.execute(
-            "SELECT e.* FROM episodes e JOIN series s ON e.series_path = s.path WHERE s.tmdbId = ? AND s.path LIKE ?",
-            (series['tmdbId'], parent_path + "/%"))
-    else:
-        # TMDB 매칭이 안 된 경우도 같은 폴더 구조 내의 파일들을 회차로 묶어줌
-        cursor = conn.execute(
-            "SELECT e.* FROM episodes e JOIN series s ON e.series_path = s.path WHERE s.cleanedName = ? AND s.path LIKE ?",
-            (series.get('cleanedName'), parent_path + "/%"))
+    # [핵심 수정] 폴더 경로가 아니라 '정제된 제목(cleanedName)'과 '카테고리'를 기준으로 모든 회차를 찾습니다.
+    # 이렇게 하면 폴더가 1기, 2기로 나뉘어 있어도 '장송의 프리렌'이라는 이름으로 모든 영상을 다 긁어옵니다.
+    cursor = conn.execute("""
+        SELECT e.* FROM episodes e
+        JOIN series s ON e.series_path = s.path
+        WHERE s.cleanedName = ? AND s.category = ?
+    """, (series['cleanedName'], series['category']))
 
     eps = []
     seen = set()
@@ -1104,6 +1096,7 @@ def get_series_detail_api():
         if r['videoUrl'] not in seen:
             eps.append(dict(r))
             seen.add(r['videoUrl'])
+
     series['movies'] = sorted(eps, key=lambda x: natural_sort_key(x['title']))
     conn.close()
 
@@ -2144,25 +2137,31 @@ def pre_extract_subtitles_route():
 
 @app.route('/refresh_cleaned_names')
 def refresh_cleaned_names():
-    """DB에 저장된 모든 제목을 현재 정규식으로 다시 정제하여 업데이트합니다."""
-    conn = get_db()
-    cursor = conn.cursor()
-    rows = cursor.execute("SELECT path, name FROM series").fetchall()
+    """DB의 모든 제목을 재정제하고 공백을 제거하여 강제로 하나로 합칩니다."""
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=60)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        rows = cursor.execute("SELECT path, name FROM series").fetchall()
 
-    update_count = 0
-    for row in rows:
-        path, name = row['path'], row['name']
-        ct, yr = clean_title_complex(name)
-        # [추가] 공백 차이로 인한 분리 방지를 위해 제목 정규화 (선택 사항)
-        # ct = ct.replace(" ", "") # 모든 공백을 붙여버리고 싶다면 이 주석을 해제하세요.
+        update_data = []
+        for row in rows:
+            path, name = row['path'], row['name']
+            # 1. '장', '기', 'Part', '쿨' 등을 포함한 강력한 정제 수행
+            ct, yr = clean_title_complex(name)
+            # 2. 공백을 완전히 제거하여 '불꽃 소방대'와 '불꽃소방대'를 동일하게 만듦
+            ct = ct.replace(" ", "")
+            update_data.append((ct, yr, path))
 
-        cursor.execute("UPDATE series SET cleanedName = ?, yearVal = ? WHERE path = ?", (ct, yr, path))
-        update_count += 1
+        # 3. 제목과 연도를 업데이트하고, 꼬여있을 수 있는 TMDB ID를 초기화하여 재매칭을 준비합니다.
+        cursor.executemany("UPDATE series SET cleanedName = ?, yearVal = ?, tmdbId = NULL, failed = 0 WHERE path = ?", update_data)
 
-    conn.commit()
-    conn.close()
-    build_all_caches()  # 메모리 캐시 갱신
-    return jsonify({"status": "success", "updated": update_count})
+        conn.commit()
+        conn.close()
+        build_all_caches()
+        return jsonify({"status": "success", "updated": len(update_data)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/admin_stills')
 def admin_stills_page():
