@@ -940,7 +940,9 @@ def get_sections_for_category(cat, kw=None):
     is_search = False
     if kw and kw not in ["전체", "All", "제목"]:
         search_kw = kw.strip().lower()
-        target_list = [i for i in base_list if search_kw in i['path'].lower() or search_kw in i['name'].lower()]
+        # [수정] "방송중" 키워드 검색 시 "방송중(기타)"가 섞이지 않도록 폴더 단위 정확히 매칭 검사
+        target_list = [i for i in base_list if
+                       f"/{search_kw}/" in f"/{i['path'].lower()}/" or search_kw in i['name'].lower()]
         is_search = True
 
     if not target_list: return []
@@ -1014,8 +1016,15 @@ def get_list():
     kw = request.args.get('keyword')
     lim = int(request.args.get('limit', 1000))
     off = int(request.args.get('offset', 0))
-    res = [item for item in bl if not kw or nfc(kw).lower() in item['path'].lower() or nfc(kw).lower() in item[
-        'name'].lower()] if kw and kw not in ["전체", "All"] else bl
+
+    # [수정] "방송중(기타)" 등 비슷한 이름의 폴더가 섞이지 않도록 슬래시(/)를 붙여서 검사
+    if kw and kw not in ["전체", "All"]:
+        search_kw = nfc(kw).lower()
+        res = [item for item in bl if
+               f"/{search_kw}/" in f"/{item['path'].lower()}/" or search_kw in item['name'].lower()]
+    else:
+        res = bl
+
     return gzip_response(res[off:off + lim])
 
 
@@ -1039,11 +1048,11 @@ def get_series_detail_api():
             except:
                 series[col] = []
 
-    # [수정] TMDB ID가 같더라도 '같은 카테고리' 내의 에피소드만 가져오도록 변경 (드라마/영화 섞임 방지)
+    # [수정] TMDB ID가 같더라도 '상세경로(path)'가 정확히 일치하는 에피소드만 가져오도록 변경 (타 폴더 혼용 방지)
     if series.get('tmdbId'):
         cursor = conn.execute(
-            "SELECT e.* FROM episodes e JOIN series s ON e.series_path = s.path WHERE s.tmdbId = ? AND s.category = ?",
-            (series['tmdbId'], cat))
+            "SELECT e.* FROM episodes e JOIN series s ON e.series_path = s.path WHERE s.tmdbId = ? AND s.path = ?",
+            (series['tmdbId'], path))
     else:
         cursor = conn.execute("SELECT * FROM episodes WHERE series_path = ?", (path,))
 
