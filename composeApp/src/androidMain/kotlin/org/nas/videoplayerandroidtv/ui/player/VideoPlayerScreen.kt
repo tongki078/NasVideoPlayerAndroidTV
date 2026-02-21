@@ -131,7 +131,7 @@ fun VideoPlayerScreen(
     }
 
     LaunchedEffect(Unit) {
-        mainBoxFocusRequester.requestFocus()
+        runCatching { mainBoxFocusRequester.requestFocus() }
     }
 
     // 시청 기록 업데이트를 위한 타이머
@@ -186,18 +186,60 @@ fun VideoPlayerScreen(
                         if (!isControllerVisible) {
                             isControllerVisible = true
                             true
-                        } else if (nextMovie != null) {
-                            try { nextButtonFocusRequester.requestFocus() } catch(_: Exception) {}
-                            true
-                        } else false
+                        } else {
+                            when {
+                                isSubtitleFocused -> {
+                                    if (isDuringOpening) {
+                                        runCatching { skipOpeningFocusRequester.requestFocus() }
+                                    } else if (nextMovie != null) {
+                                        runCatching { nextButtonFocusRequester.requestFocus() }
+                                    }
+                                    true
+                                }
+                                isSkipOpeningFocused -> {
+                                    if (nextMovie != null) {
+                                        runCatching { nextButtonFocusRequester.requestFocus() }
+                                    }
+                                    true
+                                }
+                                !isNextButtonFocused -> {
+                                    if (nextMovie != null) {
+                                        runCatching { nextButtonFocusRequester.requestFocus() }
+                                        true
+                                    } else false
+                                }
+                                else -> false
+                            }
+                        }
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
                         if (!isControllerVisible) {
                             isControllerVisible = true
                             true
                         } else {
-                            try { subtitleFocusRequester.requestFocus() } catch(_: Exception) {}
-                            true
+                            when {
+                                isNextButtonFocused -> {
+                                    if (isDuringOpening) {
+                                        runCatching { skipOpeningFocusRequester.requestFocus() }
+                                    } else {
+                                        runCatching { subtitleFocusRequester.requestFocus() }
+                                    }
+                                    true
+                                }
+                                isSkipOpeningFocused -> {
+                                    runCatching { subtitleFocusRequester.requestFocus() }
+                                    true
+                                }
+                                !isSubtitleFocused && !isSkipOpeningFocused -> {
+                                    if (isDuringOpening) {
+                                        runCatching { skipOpeningFocusRequester.requestFocus() }
+                                    } else {
+                                        runCatching { subtitleFocusRequester.requestFocus() }
+                                    }
+                                    true
+                                }
+                                else -> false
+                            }
                         }
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
@@ -226,7 +268,7 @@ fun VideoPlayerScreen(
                             lastInteractionTime = System.currentTimeMillis()
                             true
                         } else if (isNextButtonFocused || isSkipOpeningFocused || isSubtitleFocused) {
-                            false
+                            false 
                         } else {
                             userPaused = !userPaused
                             isControllerVisible = true
@@ -246,6 +288,9 @@ fun VideoPlayerScreen(
                             isControllerVisible = false
                             true 
                         } else { 
+                            // 뒤로 가기 시 상태 안전하게 정리 후 콜백 호출
+                            isSeeking = false
+                            isControllerVisible = false
                             onBack()
                             true 
                         }
@@ -364,7 +409,7 @@ fun VideoPlayerScreen(
                                 currentMovie = nextMovie
                                 isControllerVisible = true
                                 userPaused = false
-                                try { mainBoxFocusRequester.requestFocus() } catch(_: Exception) {}
+                                runCatching { mainBoxFocusRequester.requestFocus() }
                             }
                         },
                         modifier = Modifier
@@ -387,7 +432,7 @@ fun VideoPlayerScreen(
                         compact = true,
                         onClick = { 
                             finalSeekPosition = introEnd
-                            try { mainBoxFocusRequester.requestFocus() } catch(_: Exception) {}
+                            runCatching { mainBoxFocusRequester.requestFocus() }
                         },
                         modifier = Modifier
                             .focusRequester(skipOpeningFocusRequester)
@@ -570,7 +615,7 @@ fun VideoPlayerScreen(
                                     onClick = {
                                         selectedSubtitleIndex = trackIdx
                                         isSubtitleDialogOpen = false
-                                        mainBoxFocusRequester.requestFocus()
+                                        runCatching { mainBoxFocusRequester.requestFocus() }
                                     },
                                     color = if (isSelected) Color.White.copy(alpha = 0.1f) else Color.Transparent,
                                     shape = RoundedCornerShape(8.dp),
@@ -610,8 +655,7 @@ fun NetflixIconButton(
     Surface(
         onClick = onClick,
         modifier = modifier
-            .size(48.dp)
-            .focusable(),
+            .size(48.dp),
         shape = CircleShape,
         color = if (isFocused) Color.White else Color.Black.copy(alpha = 0.6f),
         border = if (isFocused) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.8f))
@@ -640,8 +684,7 @@ fun NetflixPlayerButton(
         onClick = onClick,
         modifier = modifier
             .height(if (compact) 44.dp else 52.dp)
-            .widthIn(min = if (compact) 120.dp else 180.dp)
-            .focusable(),
+            .widthIn(min = if (compact) 120.dp else 180.dp),
         shape = RoundedCornerShape(6.dp),
         color = if (isFocused) Color.White else Color.Black.copy(alpha = 0.6f),
         border = if (isFocused) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.8f))

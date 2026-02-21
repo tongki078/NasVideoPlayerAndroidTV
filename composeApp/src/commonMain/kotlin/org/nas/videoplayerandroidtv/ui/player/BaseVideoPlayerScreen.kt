@@ -61,7 +61,7 @@ fun BaseVideoPlayerScreen(
                     isControllerVisible = visible
                 },
                 onVideoEnded = {
-                    nextMovie?.let { currentMovie = it }
+                    // nextMovie?.let { currentMovie = it }
                 }
             )
         }

@@ -13,8 +13,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -41,6 +39,7 @@ import coil3.compose.AsyncImage
 import coil3.compose.LocalPlatformContext
 import coil3.request.ImageRequest
 import kotlinx.coroutines.*
+import org.nas.videoplayerandroidtv.data.WatchHistory
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.Series
@@ -54,10 +53,8 @@ import org.nas.videoplayerandroidtv.util.TitleUtils.extractSeason
 fun SeriesDetailScreen(
     series: Series,
     repository: VideoRepository,
-    initialPlaybackPosition: Long = 0L,
-    initialDuration: Long = 0L,
+    watchHistory: List<WatchHistory>,
     onPlay: (Movie, List<Movie>, Long) -> Unit,
-    onPositionUpdate: (Long) -> Unit,
     onBackPressed: () -> Unit
 ) {
     var state by remember { mutableStateOf(SeriesDetailState(isLoading = true)) }
@@ -96,21 +93,50 @@ fun SeriesDetailScreen(
         }
     }
 
-    LaunchedEffect(state.isLoading) {
-        if (!state.isLoading) {
-            delay(100) 
-            try {
-                val playableEpisode = state.seasons.flatMap { it.episodes }.firstOrNull()
-                if (playableEpisode != null) {
-                    if (initialPlaybackPosition > 0) resumeButtonFocusRequester.requestFocus()
-                    else playButtonFocusRequester.requestFocus()
+    val allEpisodes = state.seasons.flatMap { it.episodes }
+    
+    // 이어보기 정보 계산
+    val resumeInfo = remember(allEpisodes, watchHistory, currentSeries.fullPath) {
+        if (allEpisodes.isEmpty()) return@remember null
+        
+        val history = watchHistory.filter { it.seriesPath == currentSeries.fullPath }
+            .sortedByDescending { it.timestamp }
+            .firstOrNull()
+            
+        if (history == null) {
+            // 기록 없으면 첫 화
+            ResumeInfo(allEpisodes.first(), 0L, isNew = true)
+        } else {
+            val lastEpIndex = allEpisodes.indexOfFirst { it.videoUrl == history.videoUrl || it.id == history.id }
+            if (lastEpIndex == -1) {
+                ResumeInfo(allEpisodes.first(), 0L, isNew = true)
+            } else {
+                val lastEp = allEpisodes[lastEpIndex]
+                val isFinished = history.duration > 0 && history.lastPosition > history.duration * 0.95
+                
+                if (isFinished && lastEpIndex < allEpisodes.size - 1) {
+                    // 다 봤으면 다음 화
+                    ResumeInfo(allEpisodes[lastEpIndex + 1], 0L, isNext = true)
+                } else if (isFinished) {
+                    // 마지막 화까지 다 봤으면 다시 처음부터
+                    ResumeInfo(lastEp, 0L, isFinished = true)
+                } else {
+                    // 보던 중이면 이어보기
+                    ResumeInfo(lastEp, history.lastPosition)
                 }
-            } catch (e: Exception) { }
+            }
         }
     }
 
-    val allEpisodes = state.seasons.flatMap { it.episodes }
-    val playableEpisode = allEpisodes.firstOrNull()
+    LaunchedEffect(state.isLoading, resumeInfo) {
+        if (!state.isLoading && resumeInfo != null) {
+            delay(100) 
+            try {
+                if (!resumeInfo.isNew) resumeButtonFocusRequester.requestFocus()
+                else playButtonFocusRequester.requestFocus()
+            } catch (e: Exception) { }
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(color = Color.Black)) {
         val backdropUrl = currentSeries.posterPath?.let { 
@@ -174,27 +200,33 @@ fun SeriesDetailScreen(
                 }
                 Spacer(modifier = Modifier.height(34.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    if (!state.isLoading && playableEpisode != null) {
-                        if (initialPlaybackPosition > 0) {
-                            val epTitle = playableEpisode.title ?: ""
+                    if (!state.isLoading && resumeInfo != null) {
+                        if (!resumeInfo.isNew) {
+                            val epTitle = resumeInfo.episode.title ?: ""
                             val seasonNum = epTitle.extractSeason()
                             val episodeStr = epTitle.extractEpisode()
+                            val buttonText = when {
+                                resumeInfo.isNext -> "시즌 $seasonNum : $episodeStr 재생"
+                                resumeInfo.isFinished -> "다시 보기"
+                                else -> "시즌 $seasonNum : $episodeStr 이어보기"
+                            }
                             PremiumTvButton(
-                                text = if (episodeStr != null) "시즌 $seasonNum : $episodeStr 이어보기" else "계속 시청" ,
+                                text = buttonText,
                                 icon = Icons.Default.PlayArrow, 
                                 isPrimary = true, 
-                                progress = if (initialDuration > 0) initialPlaybackPosition.toFloat() / initialDuration else 0f,
                                 modifier = Modifier.focusRequester(resumeButtonFocusRequester), 
-                                onClick = { onPlay(playableEpisode, allEpisodes, initialPlaybackPosition) }
+                                onClick = { onPlay(resumeInfo.episode, allEpisodes, resumeInfo.position) }
                             )
                         }
+                        
                         PremiumTvButton(
-                            text = if (initialPlaybackPosition > 0) "처음부터" else "재생", 
-                            icon = if (initialPlaybackPosition > 0) Icons.Default.Refresh else Icons.Default.PlayArrow, 
-                            isPrimary = initialPlaybackPosition <= 0, 
+                            text = if (!resumeInfo.isNew) "처음부터" else "재생", 
+                            icon = if (!resumeInfo.isNew) Icons.Default.Refresh else Icons.Default.PlayArrow, 
+                            isPrimary = resumeInfo.isNew, 
                             modifier = Modifier.focusRequester(playButtonFocusRequester), 
-                            onClick = { onPlay(playableEpisode, allEpisodes, 0L) }
+                            onClick = { onPlay(allEpisodes.first(), allEpisodes, 0L) }
                         )
+                        
                         if (state.seasons.isNotEmpty()) {
                             PremiumTvButton(
                                 text = "회차 정보", 
@@ -216,7 +248,6 @@ fun SeriesDetailScreen(
                     if (it.startsWith("http")) it else if (it.startsWith("/")) "https://image.tmdb.org/t/p/w500$it" else "${NasApiClient.BASE_URL}/$it"
                 }
                 EpisodeOverlay(seriesTitle = currentSeries.title, state = state, seriesOverview = currentSeries.overview, seriesPosterPath = seriesPosterUrl, focusRequester = overlayFocusRequester, onSeasonChange = { state = state.copy(selectedSeasonIndex = it) }, onEpisodeClick = { ep ->
-                    onPositionUpdate(0L)
                     val currentEpisodes = state.seasons.getOrNull(state.selectedSeasonIndex)?.episodes ?: emptyList()
                     onPlay(ep, currentEpisodes, 0L)
                 }, onClose = { state = state.copy(showEpisodeOverlay = false) })
@@ -256,6 +287,14 @@ private fun PremiumTvButton(text: String, icon: androidx.compose.ui.graphics.vec
 
 data class Season(val number: Int, val name: String, val episodes: List<Movie>)
 private data class SeriesDetailState(val seasons: List<Season> = emptyList(), val isLoading: Boolean = true, val selectedSeasonIndex: Int = 0, val showEpisodeOverlay: Boolean = false)
+
+private data class ResumeInfo(
+    val episode: Movie,
+    val position: Long,
+    val isNew: Boolean = false,
+    val isNext: Boolean = false,
+    val isFinished: Boolean = false
+)
 
 @Composable
 private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, seriesOverview: String?, seriesPosterPath: String?, focusRequester: FocusRequester, onSeasonChange: (Int) -> Unit, onEpisodeClick: (Movie) -> Unit, onClose: () -> Unit) {

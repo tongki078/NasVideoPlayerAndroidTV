@@ -72,9 +72,8 @@ fun App(driver: SqlDriver) {
     var selectedMovie by remember { mutableStateOf<Movie?>(null) }
     var moviePlaylist by remember { mutableStateOf<List<Movie>>(emptyList()) }
     var lastPlaybackPosition by rememberSaveable { mutableLongStateOf(0L) }
-    var lastVideoDuration by rememberSaveable { mutableLongStateOf(0L) }
 
-    // 검색 실행 로직 추가
+    // 검색 실행 로직
     LaunchedEffect(searchQuery) {
         if (searchQuery.isBlank()) {
             searchResultSeries = emptyList()
@@ -83,7 +82,7 @@ fun App(driver: SqlDriver) {
         }
         
         isSearchLoading = true
-        delay(500) // 디바운스
+        delay(500)
         try {
             searchResultSeries = repository.searchVideos(searchQuery, "")
         } catch (e: Exception) {
@@ -133,10 +132,9 @@ fun App(driver: SqlDriver) {
         }
     }
 
-    val lazyListStates = remember { mutableMapOf<String, LazyListState>() }
-    // 가로 스크롤 상태 및 포커스 인덱스 보존을 위한 Map 추가
-    val allRowStates = remember { mutableMapOf<String, MutableMap<String, LazyListState>>() }
-    val allRowFocusIndices = remember { mutableMapOf<String, SnapshotStateMap<String, Int>>() }
+    val lazyListStates = remember { mutableStateMapOf<String, LazyListState>() }
+    val allRowStates = remember { mutableStateMapOf<String, MutableMap<String, LazyListState>>() }
+    val allRowFocusIndices = remember { mutableStateMapOf<String, SnapshotStateMap<String, Int>>() }
 
     BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME) {
         when {
@@ -166,7 +164,7 @@ fun App(driver: SqlDriver) {
                         LazyRow(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 8.dp), // 상하 여백을 8dp로 균일하게 설정
+                                .padding(vertical = 8.dp),
                             contentPadding = PaddingValues(horizontal = 48.dp), 
                             horizontalArrangement = Arrangement.spacedBy(16.dp), 
                             verticalAlignment = Alignment.CenterVertically
@@ -195,7 +193,7 @@ fun App(driver: SqlDriver) {
                                 playlist = moviePlaylist, 
                                 initialPosition = lastPlaybackPosition, 
                                 onPositionUpdate = { pos: Long, dur: Long -> 
-                                    lastPlaybackPosition = pos; lastVideoDuration = dur; 
+                                    lastPlaybackPosition = pos; 
                                     saveWatchHistory(selectedMovie!!, selectedSeries?.posterPath, pos, dur, selectedSeries?.title, selectedSeries?.fullPath)
                                 }, 
                                 onBack = { selectedMovie = null }
@@ -204,14 +202,12 @@ fun App(driver: SqlDriver) {
                         selectedSeries != null -> {
                             SeriesDetailScreen(
                                 series = selectedSeries!!, 
-                                repository = repository, 
-                                initialPlaybackPosition = lastPlaybackPosition, 
-                                initialDuration = lastVideoDuration, 
-                                onPositionUpdate = { pos: Long -> lastPlaybackPosition = pos }, 
+                                repository = repository,
+                                watchHistory = watchHistory,
                                 onBackPressed = { selectedSeries = null }, 
                                 onPlay = { m: Movie, p: List<Movie>, pos: Long ->
                                     selectedMovie = m; moviePlaylist = p; lastPlaybackPosition = pos; 
-                                    saveWatchHistory(m, selectedSeries?.posterPath, pos, lastVideoDuration, selectedSeries?.title, selectedSeries?.fullPath)
+                                    saveWatchHistory(m, selectedSeries?.posterPath, pos, 0L, selectedSeries?.title, selectedSeries?.fullPath)
                                 }
                             )
                         }
@@ -236,7 +232,6 @@ fun App(driver: SqlDriver) {
                                     selectedMovie = movie
                                     moviePlaylist = listOf(movie)
                                     lastPlaybackPosition = h.lastPosition
-                                    lastVideoDuration = h.duration
                                 }
                             )
                         }
