@@ -33,7 +33,7 @@ DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
 SUBTITLE_DIR = "/volume2/video/subtitles"  # 자막 저장 경로
-CACHE_VERSION = "137.32"  # 고화질 썸네일 지원 버전
+CACHE_VERSION = "137.33"  # 제목 정제 강화 버전
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1043,6 +1043,9 @@ def get_series_detail_api():
         return gzip_response([])
     series = dict(row)
 
+    # [중요] 상세 페이지에서도 최적의 제목(TMDB > 정제된 제목 > 원본)을 name 필드에 넣어서 반환
+    series['name'] = series.get('tmdbTitle') or series.get('cleanedName') or series.get('name')
+
     for col in ['genreIds', 'genreNames', 'actors']:
         if series.get(col):
             try:
@@ -1051,7 +1054,6 @@ def get_series_detail_api():
                 series[col] = []
 
     # [핵심 수정] 폴더 경로가 아니라 '정제된 제목(cleanedName)'과 '카테고리'를 기준으로 모든 회차를 찾습니다.
-    # 이렇게 하면 폴더가 1기, 2기로 나뉘어 있어도 '장송의 프리렌'이라는 이름으로 모든 영상을 다 긁어옵니다.
     cursor = conn.execute("""
         SELECT e.* FROM episodes e
         JOIN series s ON e.series_path = s.path
@@ -1123,6 +1125,9 @@ def search_videos():
     rows = []
     for row in cursor.fetchall():
         item = dict(row)
+
+        # [중요] 검색 결과에서도 최적의 제목을 name 필드에 반영
+        item['name'] = item.get('tmdbTitle') or item.get('cleanedName') or item.get('name')
 
         # [핵심] 에피소드 목록을 비워서 보내야 앱에서 상세 회차 정보를 서버에 다시 요청합니다.
         item['movies'] = []
@@ -1985,7 +1990,8 @@ def get_subtitle_info_api():
                         if rel_path not in ACTIVE_EXTRACTIONS:
                             log("SUBTITLE", f"자동 추출 시작: {video_filename} (Stream #{sub_to_extract['index']})")
                             SUBTITLE_EXECUTOR.submit(run_subtitle_extraction, vp, rel_path, sub_to_extract)
-                            extraction_started = True
+                            # [수정] 자동-다음화 버그 방지를 위해 extraction_triggered는 False로 반환
+                            extraction_started = False
             except Exception as e:
                 log("SUBTITLE_ERROR", f"추출 트리거 중 에러: {e}")
 

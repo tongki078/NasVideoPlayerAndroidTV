@@ -38,10 +38,10 @@ class VideoRepositoryImpl : VideoRepository {
     }
 
     private fun Category.toSeries() = Series(
-        title = name ?: "",
+        title = if (!tmdbTitle.isNullOrBlank()) tmdbTitle else (name ?: ""),
         episodes = movies ?: emptyList(),
         fullPath = path,
-        category = category, // 추가
+        category = category,
         posterPath = posterPath,
         genreIds = genreIds ?: emptyList(),
         genreNames = genreNames ?: emptyList(),
@@ -49,7 +49,8 @@ class VideoRepositoryImpl : VideoRepository {
         actors = actors ?: emptyList(),
         overview = overview,
         year = year,
-        rating = rating
+        rating = rating,
+        tmdbTitle = tmdbTitle
     )
 
     private suspend fun getCategoryListAsSeries(path: String, keyword: String? = null, limit: Int = 150, offset: Int = 0): List<Series> = try {
@@ -115,7 +116,6 @@ class VideoRepositoryImpl : VideoRepository {
         response.map { it.fixUrls() }
     } catch (e: Exception) { emptyList() }
 
-    // --- [카테고리 매핑] ---
     override suspend fun getAnimationsAir(): List<Series> = getCategoryListAsSeries("방송중", "라프텔 애니메이션")
     override suspend fun getDramasAir(): List<Series> = getCategoryListAsSeries("방송중", "드라마")
     override suspend fun getAnimationsRaftel(limit: Int, offset: Int): List<Series> = getCategoryListAsSeries("일본 애니메이션", "라프텔", limit, offset)
@@ -156,9 +156,7 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getLatestKoreanTV(): List<Series> = getCategoryListAsSeries("국내TV", null)
     override suspend fun getPopularKoreanTV(): List<Series> = getLatestKoreanTV()
 
-    // 자막 정보 조회 구현
     override suspend fun getSubtitleInfo(videoUrl: String): SubtitleInfo = try {
-        // videoUrl: http://192.168.0.2:5000/video_serve?type=movie&path=...
         val url = Url(videoUrl)
         val type = url.parameters["type"]
         val path = url.parameters["path"]

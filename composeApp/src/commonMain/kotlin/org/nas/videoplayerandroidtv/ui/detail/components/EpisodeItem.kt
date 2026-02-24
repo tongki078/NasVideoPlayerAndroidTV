@@ -29,7 +29,6 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.03f else 1f, label = "EpisodeItemScale")
 
-    // TMDB Still 이미지 -> FFmpeg 썸네일 -> 시리즈 포스터 순으로 우선순위 결정
     val imageUrl = remember(movie.thumbnailUrl, seriesPosterPath) {
         movie.thumbnailUrl ?: seriesPosterPath ?: ""
     }
@@ -69,7 +68,6 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
                     model = imageUrl,
                     contentDescription = movie.title ?: "",
                     onState = { state -> isImageLoading = state is AsyncImagePainter.State.Loading },
-                    // 로딩 중이거나 실패 시 시리즈 포스터를 배경/대체 이미지로 활용
                     modifier = Modifier.fillMaxSize().background(shimmerBrush(showShimmer = isImageLoading)),
                     contentScale = ContentScale.Crop
                 )
@@ -78,14 +76,39 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
 
         Spacer(Modifier.width(18.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                text = (movie.title ?: "").prettyTitle(),
-                color = if (isFocused) Color.White else Color.White.copy(alpha = 0.9f), 
-                fontSize = 14.sp, 
-                fontWeight = FontWeight.Bold, 
-                maxLines = 1, 
-                overflow = TextOverflow.Ellipsis
-            )
+            val fullTitle = (movie.title ?: "")
+            val displayTitle = fullTitle.prettyTitle()
+            
+            // 더빙/자막 정보 추출
+            val typeTag = remember(fullTitle) {
+                when {
+                    fullTitle.contains("더빙") -> " [더빙]"
+                    fullTitle.contains("자막") -> " [자막]"
+                    else -> ""
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = displayTitle,
+                    color = if (isFocused) Color.White else Color.White.copy(alpha = 0.9f), 
+                    fontSize = 14.sp, 
+                    fontWeight = FontWeight.Bold, 
+                    maxLines = 1, 
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (typeTag.isNotEmpty()) {
+                    Text(
+                        text = typeTag,
+                        color = if (typeTag.contains("더빙")) Color.Red else Color(0xFF46D369), // 더빙은 빨강, 자막은 초록
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+                }
+            }
+
             Spacer(Modifier.height(5.dp))
             val episodeOverview = movie.overview ?: seriesOverview ?: "줄거리 정보가 없습니다."
             Text(

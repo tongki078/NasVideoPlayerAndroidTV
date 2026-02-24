@@ -182,11 +182,26 @@ private fun InfoBadge(text: String, color: Color = Color.White.copy(alpha = 0.15
 private fun PremiumTvButton(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector, isPrimary: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1.0f)
-    Surface(onClick = onClick, color = if (isFocused) Color.White else if (isPrimary) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.15f), shape = RoundedCornerShape(8.dp), modifier = modifier.onFocusChanged { isFocused = it.isFocused }.graphicsLayer { scaleX = scale; scaleY = scale }.height(44.dp).wrapContentWidth().shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(8.dp))) {
+    
+    // [가독성 개선] 밝은 배경에서는 항상 어두운 글자색(Black)을 사용하도록 수정
+    val backgroundColor = if (isFocused) Color.White else if (isPrimary) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.15f)
+    val contentColor = if (isFocused || isPrimary) Color.Black else Color.White
+
+    Surface(
+        onClick = onClick, 
+        color = backgroundColor, 
+        shape = RoundedCornerShape(8.dp), 
+        modifier = modifier
+            .onFocusChanged { isFocused = it.isFocused }
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .height(44.dp)
+            .wrapContentWidth()
+            .shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(8.dp))
+    ) {
         Row(modifier = Modifier.padding(horizontal = 24.dp).fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, tint = if (isFocused) Color.Black else Color.White, modifier = Modifier.size(20.dp))
+            Icon(icon, null, tint = contentColor, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(10.dp))
-            Text(text, color = if (isFocused) Color.Black else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text(text, color = contentColor, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -232,30 +247,20 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, series
 }
 
 private fun loadSeasons(series: Series): List<Season> {
-    // 1. URL 정규화 및 데이터 가공
     val processedMovies = series.episodes.map { movie ->
-        val fullVideoUrl = if (movie.videoUrl?.startsWith("http") == false) {
-            NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl
-        } else movie.videoUrl ?: ""
-        
+        val videoUrl = if (movie.videoUrl?.startsWith("http") == false) NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl else movie.videoUrl ?: ""
         val rawThumb = if (!movie.thumbnailUrl.isNullOrEmpty() && !movie.thumbnailUrl.contains("thumb_serve")) movie.thumbnailUrl else series.posterPath
-        val fullThumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
+        val thumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
             if (rawThumb.startsWith("/")) "https://image.tmdb.org/t/p/w500$rawThumb"
             else NasApiClient.BASE_URL + "/" + rawThumb
         } else rawThumb
-        
-        movie.copy(videoUrl = fullVideoUrl, thumbnailUrl = fullThumbUrl)
+        movie.copy(videoUrl = videoUrl, thumbnailUrl = thumbUrl)
     }
 
-    // 2. 완성된 URL을 기준으로 중복 제거 (매우 중요)
+    // 중복 제거 기준 완화: 더빙/자막 구분을 위해 videoUrl로만 중복 제거 (필요 시 더 정교한 로직 가능)
     val distinctMovies = processedMovies.distinctBy { it.videoUrl }
 
-    // 3. 시즌별 그룹화 및 정렬
     return distinctMovies.groupBy { it.title?.extractSeason() ?: 1 }.map { (num, eps) -> 
-        Season(
-            number = num, 
-            name = "시즌 $num", 
-            episodes = eps.sortedBy { it.title?.extractEpisode()?.filter { c -> c.isDigit() }?.toIntOrNull() ?: 0 }
-        )
+        Season(num, "시즌 $num", eps.sortedBy { it.title?.extractEpisode()?.filter { c -> c.isDigit() }?.toIntOrNull() ?: 0 })
     }.sortedBy { it.number }
 }
