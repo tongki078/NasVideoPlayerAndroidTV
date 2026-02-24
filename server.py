@@ -2247,31 +2247,63 @@ def pre_extract_subtitles_route():
 
 @app.route('/refresh_cleaned_names')
 def refresh_cleaned_names():
-    """DB의 모든 제목을 재정제하고 공백을 제거하여 강제로 하나로 합칩니다."""
-    try:
-        conn = sqlite3.connect(DB_FILE, timeout=60)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        rows = cursor.execute("SELECT path, name FROM series").fetchall()
+    if UPDATE_STATE.get("is_running", False):
+        return jsonify({"status": "error", "message": "다른 작업이 이미 실행 중입니다."}), 409
 
-        update_data = []
-        for row in rows:
-            path, name = row['path'], row['name']
-            # 1. '장', '기', 'Part', '쿨' 등을 포함한 강력한 정제 수행
-            ct, yr = clean_title_complex(name)
-            # 2. 공백을 완전히 제거하여 '불꽃 소방대'와 '불꽃소방대'를 동일하게 만듦
-            ct = ct.replace(" ", "")
-            update_data.append((ct, yr, path))
+    def run_refresh():
+        set_update_state(is_running=True, task_name="제목 재정제 및 정렬", total=0, current=0, success=0, fail=0, clear_logs=True)
+        emit_ui_log("DB에 저장된 작품들의 제목을 새로운 규칙으로 다시 정제합니다...", "info")
 
-        # 3. 제목과 연도를 업데이트하고, 꼬여있을 수 있는 TMDB ID를 초기화하여 재매칭을 준비합니다.
-        cursor.executemany("UPDATE series SET cleanedName = ?, yearVal = ?, tmdbId = NULL, failed = 0 WHERE path = ?", update_data)
+        try:
+            conn = get_db()
+            rows = conn.execute("SELECT path, name, cleanedName FROM series").fetchall()
 
-        conn.commit()
-        conn.close()
-        build_all_caches()
-        return jsonify({"status": "success", "updated": len(update_data)})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+            total = len(rows)
+            set_update_state(total=total)
+
+            updates = []
+            changed_count = 0
+
+            for idx, row in enumerate(rows):
+                path, name, old_clean = row['path'], row['name'], row['cleanedName']
+                new_clean, new_yr = clean_title_complex(name)
+
+                if new_clean != old_clean:
+                    updates.append((new_clean, new_yr, path))
+                    changed_count += 1
+                    if changed_count <= 200:
+                        emit_ui_log(f"✏️ 변경: [{old_clean}] ➔ [{new_clean}]", "warning")
+                    elif changed_count % 100 == 0:
+                        emit_ui_log(f"✏️ 진행 중... ({changed_count}개 수정됨)", "warning")
+
+                with UPDATE_LOCK:
+                    UPDATE_STATE["current"] = idx + 1
+                    UPDATE_STATE["current_item"] = name
+
+            if updates:
+                emit_ui_log(f"총 {changed_count}개의 타이틀이 수정되었습니다! DB 갱신 중...", "success")
+                cursor = conn.cursor()
+                cursor.executemany("UPDATE series SET cleanedName=?, yearVal=?, tmdbId=NULL, tmdbTitle=NULL, failed=0 WHERE path=?", updates)
+                conn.commit()
+            else:
+                emit_ui_log("새롭게 변경될 타이틀이 없습니다. 이미 최신 규칙이 적용되어 있습니다.", "success")
+
+            conn.close()
+            build_all_caches()
+
+            if updates:
+                emit_ui_log("변경이 발생했으므로 빈 메타데이터 채우기를 연이어 시작합니다.", "info")
+                fetch_metadata_async(force_all=False)
+            else:
+                set_update_state(is_running=False, current_item=f"작업 완료 (수정: {changed_count}개)")
+
+        except Exception as e:
+            log("REFRESH_ERROR", traceback.format_exc())
+            emit_ui_log(f"에러 발생: {str(e)}", "error")
+            set_update_state(is_running=False, current_item="에러 발생")
+
+    threading.Thread(target=run_refresh, daemon=True).start()
+    return jsonify({"status": "success", "message": "제목 재정제 작업을 시작합니다."})
 
 @app.route('/admin_stills')
 def admin_stills_page():
