@@ -7,15 +7,16 @@ data class Category(
     val name: String? = "",
     val movies: List<Movie>? = emptyList(),
     val path: String? = null,
-    val category: String? = null,                // 추가: 메인 카테고리 코드
+    val category: String? = null,
     val genreIds: List<Int>? = emptyList(),
-    val genreNames: List<String>? = emptyList(), // 추가: 한글 장르명
-    val director: String? = null,                // 추가: 감독
-    val actors: List<Cast>? = emptyList(),       // 추가: 출연진
+    val genreNames: List<String>? = emptyList(),
+    val director: String? = null,
+    val actors: List<Cast>? = emptyList(),
     val posterPath: String? = null,
     val overview: String? = null,
     val year: String? = null,
-    val rating: String? = null
+    val rating: String? = null,
+    val tmdbTitle: String? = null // 추가
 )
 
 @Serializable
@@ -25,9 +26,9 @@ data class Movie(
     val videoUrl: String? = "",
     val thumbnailUrl: String? = null,
     val overview: String? = null,
-    val air_date: String? = null,   // 추가: 방영일
-    val season_number: Int? = null,  // 추가: 시즌 번호
-    val episode_number: Int? = null, // 추가: 에피소드 번호
+    val air_date: String? = null,
+    val season_number: Int? = null,
+    val episode_number: Int? = null,
     val introStart: Long? = null,
     val introEnd: Long? = null
 )
@@ -50,16 +51,17 @@ data class Series(
     val episodes: List<Movie>,
     val thumbnailUrl: String? = null,
     val fullPath: String? = null,
-    val category: String? = null,              // 추가
+    val category: String? = null,
     val genreIds: List<Int> = emptyList(),
-    val genreNames: List<String> = emptyList(), // 추가
-    val director: String? = null,              // 추가
-    val actors: List<Cast> = emptyList(),      // 추가
+    val genreNames: List<String> = emptyList(),
+    val director: String? = null,
+    val actors: List<Cast> = emptyList(),
     val posterPath: String? = null,
     val year: String? = null,
     val overview: String? = null,
     val rating: String? = null,
-    val seasonCount: Int? = null
+    val seasonCount: Int? = null,
+    val tmdbTitle: String? = null // 추가
 )
 
 @Serializable

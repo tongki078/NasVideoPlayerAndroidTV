@@ -75,14 +75,15 @@ fun TmdbAsyncImage(
         }
     }
 
-    // [최적화] ImageRequest 설정: 교차 페이드 활성화 및 저사양 기기 메모리 최적화
+    // [최적화] 대형 TV(75인치)를 위해 이미지 요청 사이즈 상향 조정
     val context = LocalPlatformContext.current
     val painter = rememberAsyncImagePainter(
-        model = remember(finalImageUrl) {
+        model = remember(finalImageUrl, isLarge) {
             ImageRequest.Builder(context)
                 .data(finalImageUrl)
                 .crossfade(true)
-                .size(if (isLarge) Size(500, 750) else Size(342, 513)) // 화면 크기에 맞는 다운샘플링
+                // 기존 대비 2배 이상의 해상도 확보
+                .size(if (isLarge) Size(1000, 1500) else Size(780, 1170))
                 .build()
         }
     )

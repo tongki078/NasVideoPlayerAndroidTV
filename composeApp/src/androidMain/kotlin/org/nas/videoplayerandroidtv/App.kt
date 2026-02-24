@@ -187,7 +187,6 @@ fun App(driver: SqlDriver) {
                         selectedMovie != null -> {
                             VideoPlayerScreen(
                                 movie = selectedMovie!!, 
-                                repository = repository, 
                                 playlist = moviePlaylist, 
                                 initialPosition = lastPlaybackPosition, 
                                 onPositionUpdate = { pos: Long, dur: Long -> 

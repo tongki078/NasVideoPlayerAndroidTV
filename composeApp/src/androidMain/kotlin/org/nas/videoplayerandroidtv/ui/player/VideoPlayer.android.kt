@@ -1,9 +1,10 @@
 package org.nas.videoplayerandroidtv.ui.player
 
+import android.graphics.Color as AndroidColor
 import android.net.Uri
 import android.util.Log
+import android.util.TypedValue
 import android.view.LayoutInflater
-import android.view.View
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -21,12 +22,36 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.SubtitleView
+import io.ktor.client.call.*
+import io.ktor.client.request.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import org.nas.videoplayerandroidtv.R
-import org.nas.videoplayerandroidtv.domain.model.SubtitleTrack
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
+import org.nas.videoplayerandroidtv.domain.model.SubtitleTrack
 import java.net.URLEncoder
+
+@kotlinx.serialization.Serializable
+data class SubtitleInfoResponse(
+    val external: List<ExternalSub> = emptyList(),
+    val embedded: List<EmbeddedSub>? = null,
+    val extraction_triggered: Boolean = false
+)
+
+@kotlinx.serialization.Serializable
+data class ExternalSub(
+    val name: String? = null,
+    val path: String? = null
+)
+
+@kotlinx.serialization.Serializable
+data class EmbeddedSub(
+    val index: Int? = null
+)
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -55,6 +80,7 @@ actual fun VideoPlayer(
     val currentOnDurationDetermined by rememberUpdatedState(onDurationDetermined)
     val currentOnSeekFinished by rememberUpdatedState(onSeekFinished)
     val currentOnControllerVisibilityChanged by rememberUpdatedState(onControllerVisibilityChanged)
+    val currentOnSubtitleTracksAvailable by rememberUpdatedState(onSubtitleTracksAvailable)
 
     val subtitleTrackGroups = remember { mutableStateListOf<Tracks.Group>() }
 
@@ -67,13 +93,6 @@ actual fun VideoPlayer(
             .setMediaSourceFactory(DefaultMediaSourceFactory(context).setDataSourceFactory(httpDataSourceFactory))
             .build().apply {
                 playWhenReady = true
-                // [추가] 기본적으로 한국어 자막을 선호하도록 설정
-                val params = trackSelectionParameters.buildUpon()
-                    .setPreferredTextLanguage("ko")
-                    .setSelectUndeterminedTextLanguage(true)
-                    .build()
-                trackSelectionParameters = params
-
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         if (playbackState == Player.STATE_ENDED) currentOnVideoEnded?.invoke()
@@ -84,79 +103,110 @@ actual fun VideoPlayer(
                     }
                     override fun onTracksChanged(tracks: Tracks) {
                         val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+                        Log.d("VideoPlayer", "Tracks Changed: Found ${textGroups.size} subtitle tracks")
+                        
                         subtitleTrackGroups.clear()
                         subtitleTrackGroups.addAll(textGroups)
+                        
                         val names = textGroups.mapIndexed { index, group ->
                             val format = group.getTrackFormat(0)
                             format.label ?: format.language ?: "자막 ${index + 1}"
                         }
-                        onSubtitleTracksAvailable?.invoke(names)
-                        
-                        if (selectedSubtitleIndex == -1) {
-                            val builder = trackSelectionParameters.buildUpon()
-                            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                            trackSelectionParameters = builder.build()
+                        currentOnSubtitleTracksAvailable?.invoke(names)
+
+                        // [자동 선택 로직 강화] 사용자가 아직 선택하지 않은 상태라면 한국어 자막 자동 활성화
+                        if (selectedSubtitleIndex == -2 && textGroups.isNotEmpty()) {
+                            // ko, kor, kor-KR 등의 언어 코드가 포함된 트랙 우선 검색
+                            val koTrackIndex = textGroups.indexOfFirst { group ->
+                                val lang = group.getTrackFormat(0).language?.lowercase() ?: ""
+                                lang.contains("ko") || lang.contains("kor")
+                            }
+                            
+                            val targetIdx = if (koTrackIndex != -1) koTrackIndex else 0
+                            val parameters = trackSelectionParameters.buildUpon()
+                            parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                            parameters.setOverrideForType(TrackSelectionOverride(textGroups[targetIdx].mediaTrackGroup, 0))
+                            trackSelectionParameters = parameters.build()
+                            Log.d("VideoPlayer", "Auto-selected subtitle track: index $targetIdx")
                         }
                     }
                 })
             }
     }
 
-    // URL 및 외부 자막 로드 로직 (재생 위치 유지)
-    LaunchedEffect(url, externalSubtitles) {
-        if (url.isNotBlank()) {
-            // 현재 재생 중인 위치를 캡처 (자막이 중간에 추가되었을 때 끊김 방지)
-            val currentPos = if (exoPlayer.playbackState != Player.STATE_IDLE) {
-                exoPlayer.currentPosition
-            } else {
-                initialPosition
-            }
-
-            val mediaItemBuilder = MediaItem.Builder()
-                .setUri(Uri.parse(url))
-            
-            // 외부 자막 설정 (URL 인코딩 적용)
-            val subtitleConfigs = externalSubtitles.map { track ->
-                val encodedPath = URLEncoder.encode(track.path, "UTF-8")
-                val subUrl = if (track.path.startsWith("http")) track.path 
-                             else "${NasApiClient.BASE_URL}/api/subtitle_extract?sub_path=$encodedPath"
-                
-                MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
-                    .setMimeType(MimeTypes.APPLICATION_SUBRIP)
-                    .setLanguage("ko")
-                    .setLabel(track.name)
-                    .setSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED)
-                    .build()
-            }
-            mediaItemBuilder.setSubtitleConfigurations(subtitleConfigs)
-            
-            exoPlayer.setMediaItem(mediaItemBuilder.build(), currentPos)
-            exoPlayer.prepare()
+    // 자막 선택 반영
+    LaunchedEffect(selectedSubtitleIndex, subtitleTrackGroups.size) {
+        if (selectedSubtitleIndex == -2) return@LaunchedEffect
+        val parameters = exoPlayer.trackSelectionParameters.buildUpon()
+        if (selectedSubtitleIndex == -1) {
+            parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            Log.d("VideoPlayer", "Subtitles Disabled")
+        } else if (selectedSubtitleIndex >= 0 && selectedSubtitleIndex < subtitleTrackGroups.size) {
+            parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            parameters.setOverrideForType(TrackSelectionOverride(subtitleTrackGroups[selectedSubtitleIndex].mediaTrackGroup, 0))
+            Log.d("VideoPlayer", "Subtitle selected: $selectedSubtitleIndex")
         }
+        exoPlayer.trackSelectionParameters = parameters.build()
     }
 
-    LaunchedEffect(selectedSubtitleIndex, subtitleTrackGroups.size) {
-        val builder = exoPlayer.trackSelectionParameters.buildUpon()
-        when (selectedSubtitleIndex) {
-            -1 -> {
-                builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                builder.setIgnoredTextSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED)
+    LaunchedEffect(url) {
+        if (url.isBlank()) return@LaunchedEffect
+
+        val infoUrl = if (url.startsWith("http")) {
+            url.replace("video_serve", "api/subtitle_info")
+        } else {
+            "${NasApiClient.BASE_URL}${url.replace("video_serve", "api/subtitle_info")}"
+        }
+
+        Log.d("VideoPlayer", "Fetching subtitle info from: $infoUrl")
+        
+        val subInfo: SubtitleInfoResponse = withContext(Dispatchers.IO) {
+            try { 
+                NasApiClient.client.get(infoUrl).body() 
+            } catch (e: Exception) { 
+                Log.e("VideoPlayer", "Failed to fetch subtitle info", e)
+                SubtitleInfoResponse() 
             }
-            -2 -> {
-                builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                builder.clearOverridesOfType(C.TRACK_TYPE_TEXT)
-                builder.setPreferredTextLanguage("ko") // 자동 모드에서도 한국어 선호
-            }
-            else -> {
-                if (selectedSubtitleIndex in subtitleTrackGroups.indices) {
-                    builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                    builder.setOverrideForType(
-                        TrackSelectionOverride(subtitleTrackGroups[selectedSubtitleIndex].mediaTrackGroup, 0)
+        }
+
+        val mediaItemBuilder = MediaItem.Builder().setUri(Uri.parse(url))
+        val subtitleConfigs = mutableListOf<MediaItem.SubtitleConfiguration>()
+        val subApiBase = url.substringBefore("video_serve") + "api/subtitle_extract"
+        val videoType = url.substringAfter("type=").substringBefore("&")
+
+        // 외부 자막 등록
+        if (subInfo.external.isNotEmpty()) {
+            subInfo.external.forEach { sub ->
+                sub.path?.let { subPath ->
+                    val encodedSubPath = URLEncoder.encode(subPath, "UTF-8")
+                    val subUrl = if (subApiBase.startsWith("http")) {
+                        "$subApiBase?type=$videoType&sub_path=$encodedSubPath"
+                    } else {
+                        "${NasApiClient.BASE_URL}$subApiBase?type=$videoType&sub_path=$encodedSubPath"
+                    }
+                    
+                    val mimeType = when (subPath.substringAfterLast('.').lowercase()) {
+                        "srt" -> MimeTypes.APPLICATION_SUBRIP
+                        "vtt" -> MimeTypes.TEXT_VTT
+                        "ass", "ssa" -> MimeTypes.TEXT_SSA
+                        else -> MimeTypes.APPLICATION_SUBRIP
+                    }
+                    
+                    subtitleConfigs.add(
+                        MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
+                            .setMimeType(mimeType)
+                            .setLanguage(sub.name?.substringBeforeLast('.')?.substringAfterLast('.') ?: "ko")
+                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                            .build()
                     )
                 }
             }
+            mediaItemBuilder.setSubtitleConfigurations(subtitleConfigs)
         }
-        exoPlayer.trackSelectionParameters = builder.build()
+
+        exoPlayer.setMediaItem(mediaItemBuilder.build(), initialPosition)
+        exoPlayer.prepare()
+        Log.d("VideoPlayer", "Player prepared with ${subtitleConfigs.size} external subtitle configs")
     }
 
     LaunchedEffect(seekToPosition) {
@@ -201,16 +251,19 @@ actual fun VideoPlayer(
                     player = exoPlayer
                     useController = false
                     setOnClickListener { currentOnControllerVisibilityChanged?.invoke(true) }
-                }
-            },
-            update = { view ->
-                val subView = view.subtitleView
-                if (subView != null) {
-                    if (selectedSubtitleIndex == -1) {
-                        subView.visibility = View.GONE
-                        subView.setCues(null)
-                    } else {
-                        subView.visibility = View.VISIBLE
+                    
+                    // 넷플릭스 스타일 자막 뷰 설정
+                    subtitleView?.apply {
+                        setFixedTextSize(TypedValue.COMPLEX_UNIT_DIP, 32f)
+                        val netflixStyle = CaptionStyleCompat(
+                            AndroidColor.WHITE,              // 글자색
+                            AndroidColor.TRANSPARENT,        // 배경색
+                            AndroidColor.TRANSPARENT,        // 윈도우 배경색
+                            CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW, // 그림자 엣지
+                            AndroidColor.BLACK,              // 그림자 색상
+                            null                            // 서체
+                        )
+                        setStyle(netflixStyle)
                     }
                 }
             },

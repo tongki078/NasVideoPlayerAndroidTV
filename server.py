@@ -33,7 +33,7 @@ DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
 SUBTITLE_DIR = "/volume2/video/subtitles"  # 자막 저장 경로
-CACHE_VERSION = "137.31"  # 에피소드 실시간 로깅 강화 버전
+CACHE_VERSION = "137.32"  # 고화질 썸네일 지원 버전
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -217,6 +217,7 @@ def init_db():
         add_col_if_missing('episodes', 'air_date', 'TEXT')
         add_col_if_missing('episodes', 'season_number', 'INTEGER')
         add_col_if_missing('episodes', 'episode_number', 'INTEGER')
+        add_col_if_missing('series', 'tmdbTitle', 'TEXT')
 
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cleanedName ON series(cleanedName)')
 
@@ -581,6 +582,7 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False):  # category 
 
             info = {
                 "tmdbId": f"{m_type}:{t_id}",
+                "title": d_resp.get('title') or d_resp.get('name'),
                 "genreIds": [g['id'] for g in d_resp.get('genres', [])] if d_resp.get('genres') else [],
                 "genreNames": genre_names,
                 "director": director,
@@ -789,32 +791,28 @@ def fetch_metadata_async(force_all=False):
     log("METADATA", f"⚙️ 병렬 매칭 프로세스 시작 (force_all={force_all})")
 
     try:
-        # [수정] DB 통계 파악을 최상단으로 이동 (변수를 먼저 확보해야 UI에 보낼 수 있음)
         conn = get_db()
         cursor = conn.cursor()
         t_all = cursor.execute("SELECT COUNT(*) FROM series").fetchone()[0]
         t_ok = cursor.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NOT NULL").fetchone()[0]
         t_fail = cursor.execute("SELECT COUNT(*) FROM series WHERE failed = 1").fetchone()[0]
-        t_wait = cursor.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NULL AND failed = 0").fetchone()[0]
-        t_rate = (t_ok / t_all * 100) if t_all > 0 else 0
+        t_wait = cursor.execute("""
+            SELECT COUNT(*) FROM series
+            WHERE failed = 0
+            AND (tmdbId IS NULL OR tmdbTitle IS NULL)
+        """).fetchone()[0]
 
-        # [수정] 변수가 확보된 후 UI 상태 업데이트 호출
         set_update_state(is_running=True, task_name="메타데이터 매칭", total=t_all,
                          current=t_ok + t_fail, success=t_ok, fail=t_fail, clear_logs=True)
         emit_ui_log(f"메타데이터 매칭 작업을 시작합니다. (대상: {t_wait}개)", "info")
 
-        log("METADATA_STATS",
-            f"📊 [작업 전 통계] 전체: {t_all} | 성공: {t_ok} | 실패: {t_fail} | 대기: {t_wait} | 성공률: {round(t_rate, 2)}%")
-
         if force_all:
-            log("METADATA", "🧹 실패한 항목 초기화 및 재시도 준비 (성공 항목 보존)...")
             conn.execute('UPDATE series SET failed=0 WHERE tmdbId IS NULL')
             conn.commit()
 
         uncleaned_names_rows = conn.execute(
             'SELECT name FROM series WHERE cleanedName IS NULL AND tmdbId IS NULL AND failed = 0 GROUP BY name').fetchall()
         if uncleaned_names_rows:
-            log("METADATA", f"🧪 누락된 항목 제목 정제 중 ({len(uncleaned_names_rows)}개 고유 제목)...")
             for idx, r in enumerate(uncleaned_names_rows):
                 name = r['name']
                 ct, yr = clean_title_complex(name)
@@ -823,25 +821,11 @@ def fetch_metadata_async(force_all=False):
                 if (idx + 1) % 2000 == 0: conn.commit()
             conn.commit()
 
-        all_names_rows = conn.execute('''
-            SELECT name, category FROM series
-            WHERE failed = 0
-            AND (tmdbId IS NULL OR path IN (SELECT series_path FROM episodes WHERE season_number IS NULL))
-        ''').fetchall()
-
-        if not all_names_rows:
-            conn.close()
-            log("METADATA", "✅ 매칭 대상 없음 (모든 작품이 이미 매칭되었거나 실패 처리됨)")
-            IS_METADATA_RUNNING = False
-            build_all_caches()
-            set_update_state(is_running=False, current_item="작업 대상 없음")
-            return
-
         group_rows = conn.execute('''
             SELECT cleanedName, yearVal, category, MIN(name) as sample_name, GROUP_CONCAT(name, '|') as orig_names
             FROM series
             WHERE failed = 0
-            AND (tmdbId IS NULL OR path IN (SELECT series_path FROM episodes WHERE season_number IS NULL))
+            AND (tmdbId IS NULL OR tmdbTitle IS NULL OR path IN (SELECT series_path FROM episodes WHERE season_number IS NULL))
             AND cleanedName IS NOT NULL
             GROUP BY cleanedName, yearVal, category
         ''').fetchall()
@@ -858,7 +842,6 @@ def fetch_metadata_async(force_all=False):
             })
 
         total = len(tasks)
-        log("METADATA", f"📊 그룹화 완료: {total}개의 고유 작품 식별됨")
 
         def process_one(task):
             info = get_tmdb_info_server(task['sample_name'], category=task['category'], ignore_cache=force_all)
@@ -869,14 +852,12 @@ def fetch_metadata_async(force_all=False):
         total_fail = 0
         for i in range(0, total, batch_size):
             batch = tasks[i:i + batch_size]
-            log("METADATA", f"📦 배치 처리 중 ({i + 1}~{min(i + batch_size, total)} / {total})")
             results = []
             with ThreadPoolExecutor(max_workers=10) as executor:
                 future_to_task = {executor.submit(process_one, t): t for t in batch}
                 for future in as_completed(future_to_task):
                     results.append(future.result())
 
-            log("METADATA", f"💾 배치 {i // batch_size + 1} 결과 DB 반영 중...")
             conn = get_db()
             cursor = conn.cursor()
             batch_success = 0
@@ -895,10 +876,12 @@ def fetch_metadata_async(force_all=False):
                         json.dumps(info.get('genreNames', []), ensure_ascii=False),
                         info.get('director'),
                         json.dumps(info.get('actors', []), ensure_ascii=False),
-                        info.get('tmdbId')
+                        info.get('tmdbId'),
+                        info.get('title') or info.get('name')
                     )
+
                     cursor.executemany(
-                        'UPDATE series SET posterPath=?, year=?, overview=?, rating=?, seasonCount=?, genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0 WHERE name=?',
+                        'UPDATE series SET posterPath=?, year=?, overview=?, rating=?, seasonCount=?, genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, tmdbTitle=?, failed=0 WHERE name=?',
                         [(*up, name) for name in orig_names])
 
                     if 'seasons_data' in info:
@@ -915,7 +898,8 @@ def fetch_metadata_async(force_all=False):
                             if EN:
                                 ei = info['seasons_data'].get(f"{sn}_{EN}")
                                 if ei:
-                                    still_url = f"https://image.tmdb.org/t/p/w500{ei.get('still_path')}" if ei.get(
+                                    # 고화질 스틸컷 주소 (original) 적용
+                                    still_url = f"https://image.tmdb.org/t/p/original{ei.get('still_path')}" if ei.get(
                                         'still_path') else None
                                     ep_batch.append(
                                         (ei.get('overview'), ei.get('air_date'), sn, EN, still_url, ep_row['id']))
@@ -923,41 +907,25 @@ def fetch_metadata_async(force_all=False):
                             cursor.executemany(
                                 'UPDATE episodes SET overview=?, air_date=?, season_number=?, episode_number=?, thumbnailUrl=COALESCE(?, thumbnailUrl) WHERE id=?',
                                 ep_batch)
-                            log("METADATA", f"📺 '{task['sample_name']}' 에피소드 {len(ep_batch)}개 정보 업데이트 완료")
 
             conn.commit()
             conn.close()
             total_success += batch_success
             total_fail += batch_fail
 
-            # [UI 업데이트 부분]
             with UPDATE_LOCK:
                 UPDATE_STATE["current"] = (t_ok + t_fail + total_success + total_fail)
                 UPDATE_STATE["success"] = (t_ok + total_success)
                 UPDATE_STATE["fail"] = (t_fail + total_fail)
-                if batch: UPDATE_STATE["current_item"] = batch[-1]['sample_name']
 
-            emit_ui_log(f"배치 처리 완료: 성공 {batch_success}, 실패 {batch_fail} (누적 성공: {total_success})",
-                        "success" if batch_success > 0 else "info")
-
-            if (i // batch_size) % 10 == 0:
-                build_all_caches()
+            if (i // batch_size) % 10 == 0: build_all_caches()
 
         build_all_caches()
-
-        conn = get_db()
-        f_ok = conn.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NOT NULL").fetchone()[0]
-        f_rate = (f_ok / t_all * 100) if t_all > 0 else 0
-        conn.close()
-
-        log("METADATA_STATS", f"🎊 작업 종료! 성공: {t_ok} -> {f_ok} | 최종 성공률: {round(f_rate, 2)}%")
         set_update_state(is_running=False, current_item=f"매칭 완료 (+{total_success}건)")
     except:
-        log("METADATA", f"⚠️ 치명적 에러 발생: {traceback.format_exc()}")
-        emit_ui_log(f"작업 중 치명적 에러 발생: {traceback.format_exc()}", "error")
+        log("METADATA", f"⚠️ 에러 발생: {traceback.format_exc()}")
     finally:
         IS_METADATA_RUNNING = False
-        log("METADATA", "🏁 병렬 매칭 프로세스 종료")
 
 
 def get_sections_for_category(cat, kw=None):
@@ -1275,42 +1243,25 @@ def apply_tmdb_thumbnails():
 
 
 def run_apply_thumbnails():
-    log("THUMB_SYNC", "🔄 TMDB 썸네일 일괄 적용 시작 (미처리 항목만 스마트 필터링)")
+    log("THUMB_SYNC", "🔄 TMDB 고화질 스틸컷/배경(original) 일괄 적용 시작")
 
-    # 1. 처음부터 모든 데이터를 가져오지 않고, 아직 http 썸네일이 아닌 에피소드를 가진 시리즈만 뽑아냅니다.
     conn = get_db()
+    # 전체 매칭된 작품 목록 가져오기
     query = """
         SELECT DISTINCT s.path, s.name, s.category, s.tmdbId
         FROM series s
         JOIN episodes e ON s.path = e.series_path
         WHERE s.tmdbId IS NOT NULL
-        AND (e.thumbnailUrl IS NULL OR e.thumbnailUrl NOT LIKE 'http%')
     """
-    # 딕셔너리 형태로 리스트에 완전히 적재
     series_rows = [dict(r) for r in conn.execute(query).fetchall()]
-    conn.close()  # 메인 커넥션 즉시 종료 (DB Lock 완전 차단)
+    conn.close()
 
     total = len(series_rows)
-    log("THUMB_SYNC", f"🎯 업데이트가 필요한 실제 작품 수: {total}개 (이미 처리된 항목은 완전히 스킵됨)")
-
-    # [수정] UI 상태 초기화 (대시보드 시작)
-    set_update_state(is_running=True, task_name="TMDB 썸네일 일괄 교체", total=total, current=0, success=0, fail=0,
-                     clear_logs=True)
-
-    if total == 0:
-        log("THUMB_SYNC", "✅ 모든 에피소드 썸네일이 이미 TMDB 이미지로 적용되어 있습니다.")
-        emit_ui_log("모든 에피소드 썸네일이 이미 최신 상태입니다.", "success")
-        set_update_state(is_running=False, current_item="작업 완료")
-        return
+    set_update_state(is_running=True, task_name="TMDB 썸네일 고화질 교체", total=total, current=0, success=0, fail=0, clear_logs=True)
 
     updated_count = 0
-
-    # 2. 필터링된 진짜 대상들만 반복 처리
     for idx, s_row in enumerate(series_rows):
-        path = s_row['path']
-        name = s_row['name']
-
-        # [수정] 현재 처리 중인 항목 UI 전송
+        path, name = s_row['path'], s_row['name']
         with UPDATE_LOCK:
             UPDATE_STATE["current"] += 1
             UPDATE_STATE["current_item"] = name
@@ -1318,65 +1269,57 @@ def run_apply_thumbnails():
         try:
             tmdb_id_full = s_row['tmdbId']
             if tmdb_id_full and ':' in tmdb_id_full:
-                t_id = tmdb_id_full.split(':')[1]
+                m_type, t_id = tmdb_id_full.split(':')
                 hint_name = f"{{tmdb-{t_id}}} {name}"
-
-                # 메모리/DB 캐시에서 정보 가져오기 (DB를 잠깐 읽고 닫으므로 안전)
+                # TMDB 상세 정보 가져오기
                 info = get_tmdb_info_server(hint_name, category=s_row['category'], ignore_cache=False)
 
-                if info and 'seasons_data' in info:
-                    # 쓰기/읽기용 커넥션을 필요할 때만 짧게 엽니다.
+                if info and not info.get('failed'):
                     u_conn = get_db()
-                    eps = u_conn.execute(
-                        "SELECT id, title, thumbnailUrl FROM episodes WHERE series_path = ? AND (thumbnailUrl IS NULL OR thumbnailUrl NOT LIKE 'http%')",
-                        (path,)).fetchall()
-
+                    eps = u_conn.execute("SELECT id, title FROM episodes WHERE series_path = ?", (path,)).fetchall()
                     ep_batch = []
-                    for ep in eps:
-                        sn, en = extract_episode_numbers(ep['title'])
-                        if en:
-                            key = f"{sn}_{en}"
-                            if key in info['seasons_data']:
-                                still = info['seasons_data'][key].get('still_path')
-                                if still:
-                                    new_url = f"https://image.tmdb.org/t/p/w500{still}"
-                                    ep_batch.append((new_url, ep['id']))
+
+                    # --- [CASE 1: TV 시리즈] 시즌/에피소드별 스틸컷 적용 ---
+                    if m_type == 'tv' and 'seasons_data' in info:
+                        for ep in eps:
+                            sn, en = extract_episode_numbers(ep['title'])
+                            if en:
+                                key = f"{sn}_{en}"
+                                if key in info['seasons_data']:
+                                    still = info['seasons_data'][key].get('still_path')
+                                    if still:
+                                        # 최상의 화질을 위해 original 사용
+                                        new_url = f"https://image.tmdb.org/t/p/original{still}"
+                                        ep_batch.append((new_url, ep['id']))
+
+                    # --- [CASE 2: 영화] 영화 배경(Backdrop) 이미지 적용 ---
+                    elif m_type == 'movie':
+                        # 영화는 에피소드(파일)가 하나이거나 폴더 내 여러개일 수 있음
+                        # 영화의 대표 배경 이미지를 가져옴
+                        backdrop = info.get('posterPath') # 혹은 info 내 backdrop_path
+                        if backdrop:
+                            # 최상의 화질을 위해 original 사용
+                            new_url = f"https://image.tmdb.org/t/p/original{backdrop}"
+                            for ep in eps:
+                                ep_batch.append((new_url, ep['id']))
 
                     if ep_batch:
                         u_conn.executemany("UPDATE episodes SET thumbnailUrl = ? WHERE id = ?", ep_batch)
                         u_conn.commit()
                         updated_count += len(ep_batch)
-                        with UPDATE_LOCK:
-                            UPDATE_STATE["success"] += len(ep_batch)
-                        emit_ui_log(f"'{name}' 에피소드 {len(ep_batch)}개 썸네일 업데이트 완료", "success")
+                        with UPDATE_LOCK: UPDATE_STATE["success"] += len(ep_batch)
+                        emit_ui_log(f"'{name}' 고화질 교체 완료 ({len(ep_batch)}개)", "success")
                     else:
-                        # [추가] 변경 사항이 없을 때 스킵 로그 출력
-                        emit_ui_log(f"'{name}' 건너뜀 (TMDB에 스틸컷 없음 또는 이미 적용됨)", "info")
-
-                    u_conn.close()  # 볼일이 끝나면 즉시 닫음
+                        emit_ui_log(f"'{name}' 건너뜀 (이미지 정보 없음)", "info")
+                    u_conn.close()
                 else:
-                    # [추가] TMDB에서 상세 정보를 못 가져왔을 때
-                    emit_ui_log(f"'{name}' 건너뜀 (TMDB에서 시즌/에피소드 정보를 찾을 수 없음)", "warning")
-            else:
-                emit_ui_log(f"'{name}' 건너뜀 (유효한 TMDB ID 없음)", "info")
-
-                with UPDATE_LOCK:
-                    UPDATE_STATE["current"] = UPDATE_STATE["success"] + UPDATE_STATE["fail"]
-                    UPDATE_STATE["current_item"] = name
-
+                    emit_ui_log(f"'{name}' TMDB 정보 조회 실패", "warning")
         except Exception as e:
-            log("THUMB_SYNC", f"Error processing {name}: {e}")
-            with UPDATE_LOCK:
-                UPDATE_STATE["fail"] += 1
-            emit_ui_log(f"'{name}' 처리 중 에러 발생: {str(e)}", "error")
+            log("THUMB_SYNC_ERROR", f"Error: {e}")
 
-        if (idx + 1) % 50 == 0:
-            log("THUMB_SYNC", f"진행 중... ({idx + 1}/{total}) - 이번 작업으로 업데이트된 썸네일: {updated_count}개")
-
-    log("THUMB_SYNC", f"✅ 완료. 총 {updated_count}개 에피소드 썸네일 신규 업데이트 됨.")
-    # [수정] 작업 종료 처리
-    set_update_state(is_running=False, current_item=f"작업 완료 (총 {updated_count}개 교체됨)")
-    emit_ui_log(f"작업이 성공적으로 완료되었습니다. (총 {updated_count}개 교체됨)", "success")
+    set_update_state(is_running=False, current_item=f"고화질 교체 완료 (총 {updated_count}개)")
+    build_all_caches()
+    emit_ui_log(f"모든 작업이 완료되었습니다. 총 {updated_count}개의 썸네일이 고화질로 교체되었습니다.", "success")
 
 
 FFMPEG_PROCS = {}
@@ -1484,6 +1427,62 @@ def preview_serve():
     except:
         return "Error", 500
 
+
+@app.route('/api/fast_korean_titles')
+def fast_korean_titles():
+    """TMDB ID를 사용하여 중복 없이 광속으로 한글 제목을 가져옵니다."""
+
+    def run_sync():
+        set_update_state(is_running=True, task_name="ID 기반 고속 한글화", total=0, current=0, success=0, fail=0,
+                         clear_logs=True)
+        emit_ui_log("DB에 저장된 ID를 기반으로 한글화를 시작합니다...", "info")
+
+        conn = get_db()
+        # 1. 한글 제목이 없는 고유한 TMDB ID 목록을 가져옵니다.
+        id_rows = conn.execute(
+            "SELECT tmdbId, category FROM series WHERE tmdbId IS NOT NULL AND tmdbTitle IS NULL GROUP BY tmdbId").fetchall()
+        total_ids = len(id_rows)
+        set_update_state(total=total_ids)
+
+        emit_ui_log(f"분석 완료: 총 {total_ids}개의 작품을 업데이트해야 합니다.", "info")
+
+        headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
+        success_count = 0
+
+        for idx, row in enumerate(id_rows):
+            try:
+                full_id = row['tmdbId']  # 예: "movie:123"
+                if ':' not in full_id: continue
+                m_type, t_id = full_id.split(':')
+
+                # 2. TMDB에 ID로 직접 물어봅니다 (검색보다 100배 정확하고 빠름)
+                r = requests.get(f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR", headers=headers, timeout=10)
+                if r.status_code == 200:
+                    data = r.json()
+                    ko_title = data.get('title') or data.get('name')
+
+                    if ko_title:
+                        # 3. 해당 ID를 가진 모든 에피소드를 한꺼번에 업데이트!
+                        conn.execute("UPDATE series SET tmdbTitle = ? WHERE tmdbId = ?", (ko_title, full_id))
+                        success_count += 1
+
+                if (idx + 1) % 10 == 0:  # 10개마다 저장
+                    conn.commit()
+                    set_update_state(current=idx + 1, success=success_count)
+
+                time.sleep(0.1)  # TMDB 차단 방지용 미세 지연
+            except Exception as e:
+                log("SYNC_ERROR", f"ID {full_id} 처리 중 에러: {e}")
+                continue
+
+        conn.commit()
+        conn.close()
+        build_all_caches()
+        set_update_state(is_running=False, current_item="모든 작업 완료!")
+        emit_ui_log(f"축하합니다! 총 {success_count}개 작품(수십만 에피소드)의 한글화가 완료되었습니다.", "success")
+
+    threading.Thread(target=run_sync, daemon=True).start()
+    return jsonify({"status": "success", "message": "High-speed ID sync started."})
 
 # --- [관리자 및 진단 로직 추가] ---
 @app.route('/admin')
@@ -1669,7 +1668,9 @@ def manual_match():
 
 
 def _generate_thumb_file(path_raw, prefix, tid, t, w):
-    tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{w}.jpg")
+    # 대형 TV를 위해 기본 생성 해상도를 1920px(Full HD급)로 고정
+    target_w = "1920"
+    tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{target_w}.jpg")
     if os.path.exists(tp): return tp
 
     try:
@@ -1681,29 +1682,26 @@ def _generate_thumb_file(path_raw, prefix, tid, t, w):
 
         with THUMB_SEMAPHORE:
             if os.path.exists(tp): return tp
-            log("THUMB", f"Generating thumb: {os.path.basename(vp)} at {t}s")
+            log("THUMB", f"고화질 썸네일 생성 중: {os.path.basename(vp)} (1920px)")
 
             try:
-                # [수정] 타임아웃을 30초로 늘리고 예외 처리를 추가하여 서버 안정성 확보
+                # 최상의 화질을 위해 lanczos 필터와 고품질(q:v 2) 설정 적용
                 result = subprocess.run([
                     FFMPEG_PATH, "-y",
-                    "-lowres", "1",  # 1/2 해상도 디코딩 (속도 획기적 향상)
                     "-ss", str(t),
-                    "-noaccurate_seek",
                     "-i", vp,
                     "-frames:v", "1",
                     "-map", "0:v:0",
                     "-an", "-sn",
-                    "-q:v", "8",  # 품질보다 속도 우선
-                    "-vf", f"scale={w}:-1:flags=fast_bilinear",
-                    "-threads", "1",
+                    "-q:v", "2",
+                    "-vf", f"scale={target_w}:-1:flags=lanczos",
                     tp
                 ], timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
                 if result.returncode != 0:
                     log("THUMB_ERROR", f"FFmpeg failed: {result.stderr.decode()}")
             except subprocess.TimeoutExpired:
-                log("THUMB_TIMEOUT", f"FFmpeg timed out for: {os.path.basename(vp)} (GDRIVE 지연 의심)")
+                log("THUMB_TIMEOUT", f"FFmpeg timed out for: {os.path.basename(vp)}")
             except Exception as e:
                 log("THUMB_ERROR", f"Unexpected error: {str(e)}")
 
@@ -1712,12 +1710,11 @@ def _generate_thumb_file(path_raw, prefix, tid, t, w):
         log("THUMB_ERROR", f"Exception: {traceback.format_exc()}")
         return None
 
-
 @app.route('/thumb_serve')
 def thumb_serve():
     path, prefix, tid = request.args.get('path'), request.args.get('type'), request.args.get('id')
     t = request.args.get('t', default="300")
-    w = request.args.get('w', default="480")
+    w = request.args.get('w', default="1920") # 기본 요청 해상도를 1920으로 상향
 
     tp = _generate_thumb_file(path, prefix, tid, t, w)
     if tp and os.path.exists(tp):
@@ -2408,10 +2405,10 @@ def _rebuild_fast_memory_cache():
     for cat in ["movies", "foreigntv", "koreantv", "animations_all", "air"]:
         rows_dict = {}
         all_rows = conn.execute(
-            'SELECT path, name, posterPath, year, rating, genreIds, genreNames, director, actors, tmdbId, cleanedName, yearVal, overview FROM series WHERE category = ? ORDER BY name ASC',
+            'SELECT path, name, posterPath, year, rating, genreIds, genreNames, director, actors, tmdbId, cleanedName, yearVal, overview, tmdbTitle FROM series WHERE category = ? ORDER BY yearVal DESC, name ASC',
             (cat,)).fetchall()
         for row in all_rows:
-            path, name, poster, year, rating, g_ids, g_names, director, actors, t_id, c_name, y_val, overview = row
+            path, name, poster, year, rating, g_ids, g_names, director, actors, t_id, c_name, y_val, overview, tmdb_title = row
             if not poster and cat != 'air': continue
             if c_name is not None:
                 ct, yr = c_name, y_val
@@ -2431,8 +2428,11 @@ def _rebuild_fast_memory_cache():
                     actors_list = json.loads(actors) if actors else []
                 except:
                     actors_list = []
+
+                display_name = tmdb_title if tmdb_title else (c_name if c_name else name)
+
                 rows_dict[group_key] = {
-                    "path": path, "name": name, "posterPath": poster,
+                    "path": path, "name": display_name, "posterPath": poster,
                     "year": year, "rating": rating, "genreIds": genre_ids, "genreNames": genre_list,
                     "director": director, "actors": actors_list, "tmdbId": t_id, "overview": overview, "movies": []
                 }

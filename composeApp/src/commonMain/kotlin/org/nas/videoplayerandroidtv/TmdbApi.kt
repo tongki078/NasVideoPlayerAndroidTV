@@ -26,10 +26,10 @@ import org.nas.videoplayerandroidtv.util.TitleUtils.extractTmdbId
 const val TMDB_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3OGNiYWQ0ZjQ3NzcwYjYyYmZkMTcwNTA2NDIwZDQyYyIsIm5iZiI6MTY1MzY3NTU4MC45MTUsInN1YiI6IjYyOTExNjNjMTI0MjVjMDA1MjI0ZGQzNCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.3YU0WuIx_WDo6nTRKehRtn4N5I4uCgjI1tlpkqfsUhk"
 const val TMDB_BASE_URL = "https://api.themoviedb.org/3"
 const val TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/"
-const val TMDB_POSTER_SIZE_SMALL = "w185"
-const val TMDB_POSTER_SIZE_MEDIUM = "w342"
-const val TMDB_POSTER_SIZE_LARGE = "w500"
-const val TMDB_BACKDROP_SIZE = "w780"
+const val TMDB_POSTER_SIZE_SMALL = "w342"
+const val TMDB_POSTER_SIZE_MEDIUM = "w780"
+const val TMDB_POSTER_SIZE_LARGE = "original"
+const val TMDB_BACKDROP_SIZE = "original"
 
 private val tmdbClient = HttpClient {
     install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
