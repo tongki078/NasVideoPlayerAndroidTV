@@ -10,7 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -25,6 +25,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -34,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import kotlinx.coroutines.delay
 import org.nas.videoplayerandroidtv.data.SearchHistory
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
@@ -47,6 +50,8 @@ fun SearchScreen(
     recentQueries: List<SearchHistory>,
     searchResults: List<Series>,
     isLoading: Boolean,
+    lastFocusedPath: String? = null,
+    onFocusRestored: () -> Unit = {},
     onSaveQuery: (String) -> Unit,
     onDeleteQuery: (String) -> Unit,
     onSeriesClick: (Series) -> Unit
@@ -117,7 +122,7 @@ fun SearchScreen(
                     SearchSkeletonGrid()
                 }
                 searchResults.isNotEmpty() -> {
-                    SearchResultsGrid(searchResults, onSeriesClick)
+                    SearchResultsGrid(searchResults, lastFocusedPath, onFocusRestored, onSeriesClick)
                 }
                 !isLoading && searchResults.isEmpty() -> {
                     Box(Modifier.fillMaxSize(), Alignment.Center) {
@@ -205,27 +210,49 @@ private fun RecentSearchItem(history: SearchHistory, onQueryClick: () -> Unit, o
 }
 
 @Composable
-private fun SearchResultsGrid(results: List<Series>, onSeriesClick: (Series) -> Unit) {
+private fun SearchResultsGrid(
+    results: List<Series>,
+    lastFocusedPath: String? = null,
+    onFocusRestored: () -> Unit = {},
+    onSeriesClick: (Series) -> Unit
+) {
+    // 포커스 복구를 위한 FocusRequester 리스트 관리
+    val focusRequesters = remember(results.size) { List(results.size) { FocusRequester() } }
+
+    LaunchedEffect(lastFocusedPath, results) {
+        if (lastFocusedPath != null && results.isNotEmpty()) {
+            val index = results.indexOfFirst { it.fullPath == lastFocusedPath }
+            if (index != -1) {
+                delay(200)
+                try {
+                    focusRequesters[index].requestFocus()
+                    onFocusRestored()
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     LazyVerticalGrid(
-        columns = GridCells.Fixed(4), // TV 화면에 맞게 4열로 큼직하게 배치
+        columns = GridCells.Fixed(4),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(24.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        items(results) { series ->
-            SearchGridItem(series, onSeriesClick)
+        itemsIndexed(results, key = { _, item -> item.fullPath ?: item.title }) { index, series ->
+            SearchGridItem(series, focusRequesters.getOrElse(index) { FocusRequester() }, onSeriesClick)
         }
     }
 }
 
 @Composable
-private fun SearchGridItem(series: Series, onSeriesClick: (Series) -> Unit) {
+private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSeriesClick: (Series) -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
     
     Column(
         modifier = Modifier
+            .focusRequester(focusRequester)
             .onFocusChanged { isFocused = it.isFocused }
             .zIndex(if (isFocused) 10f else 1f)
             .scale(scale)

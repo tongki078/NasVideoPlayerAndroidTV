@@ -6,6 +6,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
@@ -45,6 +46,7 @@ import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.detail.components.EpisodeItem
+import org.nas.videoplayerandroidtv.util.TitleUtils
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractEpisode
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractSeason
 
@@ -147,10 +149,13 @@ fun SeriesDetailScreen(
                     if (!state.isLoading && resumeInfo != null) {
                         if (!resumeInfo.isNew) {
                             val epTitle = resumeInfo.episode.title ?: ""
+                            val seasonNum = epTitle.extractSeason()
+                            val episodeStr = epTitle.extractEpisode() ?: "회차"
+
                             val btnLabel = when {
-                                resumeInfo.isNext -> "시즌 ${epTitle.extractSeason()} : ${epTitle.extractEpisode()} 재생"
+                                resumeInfo.isNext -> "시즌 $seasonNum : $episodeStr 재생"
                                 resumeInfo.isFinished -> "다시 보기"
-                                else -> "시즌 ${epTitle.extractSeason()} : ${epTitle.extractEpisode()} 이어보기"
+                                else -> "시즌 $seasonNum : $episodeStr 이어보기"
                             }
                             PremiumTvButton(text = btnLabel, icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(resumeButtonFocusRequester), onClick = { onPlay(resumeInfo.episode, allEpisodes, resumeInfo.position) })
                         }
@@ -183,25 +188,15 @@ private fun PremiumTvButton(text: String, icon: androidx.compose.ui.graphics.vec
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1.0f)
     
-    // [가독성 개선] 밝은 배경에서는 항상 어두운 글자색(Black)을 사용하도록 수정
+    // [가독성 해결] 밝은 배경에는 항상 어두운 글자색(Black)을 사용하여 선명하게 보이도록 함
     val backgroundColor = if (isFocused) Color.White else if (isPrimary) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.15f)
     val contentColor = if (isFocused || isPrimary) Color.Black else Color.White
 
-    Surface(
-        onClick = onClick, 
-        color = backgroundColor, 
-        shape = RoundedCornerShape(8.dp), 
-        modifier = modifier
-            .onFocusChanged { isFocused = it.isFocused }
-            .graphicsLayer { scaleX = scale; scaleY = scale }
-            .height(44.dp)
-            .wrapContentWidth()
-            .shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(8.dp))
-    ) {
+    Surface(onClick = onClick, color = backgroundColor, shape = RoundedCornerShape(8.dp), modifier = modifier.onFocusChanged { isFocused = it.isFocused }.graphicsLayer { scaleX = scale; scaleY = scale }.height(44.dp).wrapContentWidth().shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(8.dp))) {
         Row(modifier = Modifier.padding(horizontal = 24.dp).fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, tint = contentColor, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(10.dp))
-            Text(text, color = contentColor, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text(text = text, color = contentColor, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -213,6 +208,13 @@ private data class ResumeInfo(val episode: Movie, val position: Long, val isNew:
 
 @Composable
 private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, seriesOverview: String?, seriesPosterPath: String?, focusRequester: FocusRequester, onSeasonChange: (Int) -> Unit, onEpisodeClick: (Movie) -> Unit, onClose: () -> Unit) {
+    val episodeListState = rememberLazyListState()
+    
+    // 시즌 변경 시 스크롤 초기화
+    LaunchedEffect(state.selectedSeasonIndex) {
+        episodeListState.scrollToItem(0)
+    }
+
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             Row(modifier = Modifier.fillMaxSize().padding(48.dp)) {
@@ -234,8 +236,8 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, series
                 Column(modifier = Modifier.weight(0.65f)) {
                     val currentSeason = state.seasons.getOrNull(state.selectedSeasonIndex)
                     Text(text = currentSeason?.name ?: "회차 정보", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(20.dp))
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    LazyColumn(state = episodeListState, verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
                         items(currentSeason?.episodes ?: emptyList()) { movie -> 
                             EpisodeItem(movie = movie, seriesOverview = seriesOverview, seriesPosterPath = seriesPosterPath, onPlay = { onEpisodeClick(movie) }) 
                         }
@@ -257,10 +259,25 @@ private fun loadSeasons(series: Series): List<Season> {
         movie.copy(videoUrl = videoUrl, thumbnailUrl = thumbUrl)
     }
 
-    // 중복 제거 기준 완화: 더빙/자막 구분을 위해 videoUrl로만 중복 제거 (필요 시 더 정교한 로직 가능)
     val distinctMovies = processedMovies.distinctBy { it.videoUrl }
 
-    return distinctMovies.groupBy { it.title?.extractSeason() ?: 1 }.map { (num, eps) -> 
-        Season(num, "시즌 $num", eps.sortedBy { it.title?.extractEpisode()?.filter { c -> c.isDigit() }?.toIntOrNull() ?: 0 })
+    // [버그 수정] 서버 메타데이터(season_number)를 최우선으로 활용하여 그룹화
+    val seasonsMap = distinctMovies.groupBy { movie ->
+        movie.season_number ?: movie.videoUrl?.extractSeason() ?: movie.title?.extractSeason() ?: 1
+    }
+
+    return seasonsMap.entries.map { entry -> 
+        val num = entry.key
+        val eps = entry.value
+        Season(
+            number = num, 
+            name = "시즌 $num", 
+            episodes = eps.sortedBy { movie ->
+                // 회차 번호도 서버 데이터를 우선 사용
+                movie.episode_number ?: movie.title?.let { t ->
+                    t.extractEpisode()?.filter { c: Char -> c.isDigit() }?.toIntOrNull()
+                } ?: 0 
+            }
+        )
     }.sortedBy { it.number }
 }

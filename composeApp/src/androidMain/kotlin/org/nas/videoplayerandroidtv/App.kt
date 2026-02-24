@@ -69,6 +69,9 @@ fun App(driver: SqlDriver) {
     var selectedMovie by remember { mutableStateOf<Movie?>(null) }
     var moviePlaylist by remember { mutableStateOf<List<Movie>>(emptyList()) }
     var lastPlaybackPosition by rememberSaveable { mutableLongStateOf(0L) }
+    
+    // [추가] 마지막으로 선택했던 시리즈의 경로를 저장하여 포커스 복구에 사용
+    var lastSelectedSeriesPath by rememberSaveable { mutableStateOf<String?>(null) }
 
     // 검색 실행 로직
     LaunchedEffect(searchQuery) {
@@ -209,7 +212,21 @@ fun App(driver: SqlDriver) {
                             )
                         }
                         currentScreen == Screen.SEARCH -> {
-                            SearchScreen(searchQuery, { searchQuery = it }, recentQueries, searchResultSeries, isSearchLoading, { q: String -> scope.launch { searchHistoryDataSource.insertQuery(q, currentTimeMillis()) } }, { q: String -> scope.launch { searchHistoryDataSource.deleteQuery(q) } }, { selectedSeries = it })
+                            SearchScreen(
+                                query = searchQuery, 
+                                onQueryChange = { searchQuery = it }, 
+                                recentQueries = recentQueries, 
+                                searchResults = searchResultSeries, 
+                                isLoading = isSearchLoading, 
+                                onSaveQuery = { q: String -> scope.launch { searchHistoryDataSource.insertQuery(q, currentTimeMillis()) } }, 
+                                onDeleteQuery = { q: String -> scope.launch { searchHistoryDataSource.deleteQuery(q) } }, 
+                                onSeriesClick = { 
+                                    lastSelectedSeriesPath = it.fullPath
+                                    selectedSeries = it 
+                                },
+                                lastFocusedPath = if (selectedSeries == null) lastSelectedSeriesPath else null,
+                                onFocusRestored = { lastSelectedSeriesPath = null }
+                            )
                         }
                         else -> {
                             HomeScreen(
@@ -220,7 +237,10 @@ fun App(driver: SqlDriver) {
                                 lazyListState = lazyListStates.getOrPut(currentCacheKey) { LazyListState() },
                                 rowStates = allRowStates.getOrPut(currentCacheKey) { mutableMapOf() },
                                 rowFocusIndices = allRowFocusIndices.getOrPut(currentCacheKey) { mutableStateMapOf() },
-                                onSeriesClick = { selectedSeries = it }, 
+                                onSeriesClick = { 
+                                    lastSelectedSeriesPath = it.fullPath
+                                    selectedSeries = it 
+                                }, 
                                 onPlayClick = { m: Movie -> 
                                     selectedMovie = m; moviePlaylist = listOf(m); lastPlaybackPosition = 0L 
                                 },
@@ -229,7 +249,9 @@ fun App(driver: SqlDriver) {
                                     selectedMovie = movie
                                     moviePlaylist = listOf(movie)
                                     lastPlaybackPosition = h.lastPosition
-                                }
+                                },
+                                lastFocusedPath = if (selectedSeries == null) lastSelectedSeriesPath else null,
+                                onFocusRestored = { lastSelectedSeriesPath = null }
                             )
                         }
                     }

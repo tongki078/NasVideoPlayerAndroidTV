@@ -37,6 +37,8 @@ fun HomeScreen(
     rowStates: MutableMap<String, LazyListState>,
     rowFocusIndices: SnapshotStateMap<String, Int>,
     currentScreen: Screen = Screen.HOME,
+    lastFocusedPath: String? = null,
+    onFocusRestored: () -> Unit = {},
     onSeriesClick: (Series) -> Unit,
     onPlayClick: (Movie) -> Unit,
     onHistoryClick: (WatchHistory) -> Unit = {}
@@ -94,6 +96,44 @@ fun HomeScreen(
     }
 
     val heroItem = heroPool.getOrNull(currentHeroIndex)
+
+    // [포커스 복구 로직]
+    LaunchedEffect(lastFocusedPath, combinedSections, isLoading) {
+        if (lastFocusedPath != null && combinedSections.isNotEmpty() && !isLoading) {
+            var foundRowIndex = -1
+            var foundItemIndex = -1
+            var foundRowKey = ""
+
+            if (currentScreen == Screen.HOME && watchHistory.isNotEmpty()) {
+                val idx = watchHistory.indexOfFirst { it.seriesPath == lastFocusedPath }
+                if (idx != -1) {
+                    foundRowIndex = 1 
+                    foundItemIndex = idx
+                    foundRowKey = "watch_history"
+                }
+            }
+
+            if (foundRowIndex == -1) {
+                combinedSections.forEachIndexed { sIdx, section ->
+                    val iIdx = section.items.indexOfFirst { it.path == lastFocusedPath }
+                    if (iIdx != -1) {
+                        foundRowIndex = sIdx + (if (currentScreen == Screen.HOME && watchHistory.isNotEmpty()) 2 else 1)
+                        foundItemIndex = iIdx
+                        foundRowKey = "row_${section.title}"
+                    }
+                }
+            }
+
+            if (foundRowIndex != -1) {
+                delay(200)
+                try {
+                    lazyListState.scrollToItem(foundRowIndex)
+                    rowFocusIndices[foundRowKey] = foundItemIndex
+                    onFocusRestored()
+                } catch (_: Exception) {}
+            }
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         LazyColumn(

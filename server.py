@@ -372,14 +372,15 @@ def clean_title_complex(title):
 def extract_episode_numbers(filename):
     match = REGEX_EP_MARKER_STRICT.search(filename)
     if match:
-        if match.group(1) and match.group(2): return int(match.group(1)), int(match.group(2))
-        if match.group(3): return int(match.group(3)), 1
-        if match.group(4): return 1, int(match.group(4))
-        if match.group(5): return 1, int(match.group(5))
-        if match.group(6): return int(match.group(6)), 1
-        if match.group(7): return 1, int(match.group(7))
-        if match.group(8): return int(match.group(8)), 1
-        if match.group(9): return int(match.group(9)), 1 # Part 번호를 시즌으로 간주
+        groups = match.groups()
+        if groups[0] and groups[1]: return int(groups[0]), int(groups[1]) # S1E1
+        if groups[2]: return int(groups[2]), 1 # S1
+        if groups[3]: return 1, int(groups[3]) # E1
+        if groups[4]: return 1, int(groups[4]) # 1화
+        if groups[5]: return int(groups[5]), 1 # Season 1
+        if groups[6]: return 1, int(groups[6]) # Episode 1
+        if groups[7]: return 1, int(groups[7]) # 시즌 1
+        if len(groups) >= 9 and groups[8]: return int(groups[8]), 1 # Part 1
     return 1, None
 
 
@@ -1041,9 +1042,8 @@ def get_series_detail_api():
     if not row:
         conn.close()
         return gzip_response([])
-    series = dict(row)
 
-    # [중요] 상세 페이지에서도 최적의 제목(TMDB > 정제된 제목 > 원본)을 name 필드에 넣어서 반환
+    series = dict(row)
     series['name'] = series.get('tmdbTitle') or series.get('cleanedName') or series.get('name')
 
     for col in ['genreIds', 'genreNames', 'actors']:
@@ -1053,12 +1053,13 @@ def get_series_detail_api():
             except:
                 series[col] = []
 
-    # [핵심 수정] 폴더 경로가 아니라 '정제된 제목(cleanedName)'과 '카테고리'를 기준으로 모든 회차를 찾습니다.
+    # 정제된 제목이 없으면 원본 이름을 기준으로 검색
+    target_name = series.get('cleanedName') or series.get('name')
     cursor = conn.execute("""
         SELECT e.* FROM episodes e
         JOIN series s ON e.series_path = s.path
-        WHERE s.cleanedName = ? AND s.category = ?
-    """, (series['cleanedName'], series['category']))
+        WHERE (s.cleanedName = ? OR s.name = ?) AND s.category = ?
+    """, (target_name, target_name, series['category']))
 
     eps = []
     seen = set()
@@ -1617,7 +1618,7 @@ def manual_match():
             headers=headers, timeout=10).json()
 
         if 'id' not in d_resp:
-            return jsonify({"status": "error", "message": "TMDB ID not found"})
+            return jsonify({"status": "error", "message": f"TMDB ID {t_id} not found"})
 
         yv = (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0]
         rating = None
@@ -1655,10 +1656,11 @@ def manual_match():
             json.dumps(info['genreNames'], ensure_ascii=False),
             info['director'],
             json.dumps(info['actors'], ensure_ascii=False),
-            info['tmdbId']
+            info['tmdbId'],
+            d_resp.get('title') or d_resp.get('name')
         )
         cursor.execute(
-            'UPDATE series SET posterPath=?, year=?, overview=?, rating=?, seasonCount=?, genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0 WHERE name=?',
+            'UPDATE series SET posterPath=?, year=?, overview=?, rating=?, seasonCount=?, genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, tmdbTitle=?, failed=0 WHERE name=?',
             (*up, orig_name))
         conn.commit()
         conn.close()
@@ -1669,7 +1671,8 @@ def manual_match():
         build_all_caches()
         return jsonify({"status": "success"})
     except Exception as e:
-        return jsonify({"status": "error", "message": "Missing data"})
+        log("MANUAL_MATCH_ERROR", str(e))
+        return jsonify({"status": "error", "message": str(e)})
 
 
 def _generate_thumb_file(path_raw, prefix, tid, t, w):
@@ -2416,11 +2419,13 @@ def _rebuild_fast_memory_cache():
         for row in all_rows:
             path, name, poster, year, rating, g_ids, g_names, director, actors, t_id, c_name, y_val, overview, tmdb_title = row
             if not poster and cat != 'air': continue
-            if c_name is not None:
-                ct, yr = c_name, y_val
-            else:
-                ct, yr = clean_title_complex(name)
-            group_key = f"tmdb:{t_id}" if t_id else f"name:{ct}_{yr}"
+
+            ct, yr = (c_name, y_val) if c_name is not None else clean_title_complex(name)
+
+            # 공백을 제거한 제목으로 그룹 키 생성 (중복 방지 강화)
+            cleaned_name_for_key = ct.replace(" ", "") if ct else ""
+            group_key = f"tmdb:{t_id}" if t_id else f"name:{cleaned_name_for_key}_{yr}"
+
             if group_key not in rows_dict:
                 try:
                     genre_list = json.loads(g_names) if g_names else []
