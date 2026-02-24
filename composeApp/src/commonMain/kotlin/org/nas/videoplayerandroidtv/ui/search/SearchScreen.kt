@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -250,6 +251,17 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
     
+    // 추가 태그 추출 (서버에서 넘겨준 title 기준)
+    val tags = remember(series.title) {
+        val list = mutableListOf<String>()
+        if (series.title.contains("[스페셜]")) list.add("스페셜")
+        if (series.title.contains("[극장판]")) list.add("극장판")
+        if (series.title.contains("[OVA]")) list.add("OVA")
+        if (series.title.contains("[더빙]")) list.add("더빙")
+        if (series.title.contains("[자막]")) list.add("자막")
+        list
+    }
+
     Column(
         modifier = Modifier
             .focusRequester(focusRequester)
@@ -279,28 +291,49 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
 
             // 카테고리 뱃지 추가
             val categoryLabel = remember(series.category, series.fullPath) {
-                when(series.category) {
+                val mainCat = when(series.category) {
                     "movies" -> "영화"
                     "koreantv" -> "국내TV"
                     "foreigntv" -> "외국TV"
                     "animations_all" -> "애니메이션"
-                    "air" -> {
-                        if (series.fullPath?.contains("라프텔 애니메이션") == true) "방송중 > 애니"
-                        else if (series.fullPath?.contains("드라마") == true) "방송중 > 드라마"
-                        else "방송중"
-                    }
+                    "air" -> "방송중"
                     else -> ""
+                }
+
+                if (mainCat.isEmpty()) ""
+                else {
+                    val parts = series.fullPath?.split("/") ?: emptyList()
+                    val subCat = if (parts.size >= 3) parts[1] else ""
+                    
+                    val excludeSubCats = listOf("영화", "제목", "기타", "새 폴더")
+                    
+                    if (subCat.isNotEmpty() && !excludeSubCats.contains(subCat)) {
+                        val displaySubCat = if (subCat == "라프텔 애니메이션") "애니" else subCat
+                        "$mainCat > $displaySubCat"
+                    } else {
+                        mainCat
+                    }
                 }
             }
 
-            if (categoryLabel.isNotEmpty()) {
+            // 카테고리와 태그 조합
+            val badgeText = remember(categoryLabel, tags) {
+                if (tags.isNotEmpty()) {
+                    if (categoryLabel.isNotEmpty()) "$categoryLabel | ${tags.joinToString(", ")}"
+                    else tags.joinToString(", ")
+                } else {
+                    categoryLabel
+                }
+            }
+
+            if (badgeText.isNotEmpty()) {
                 Surface(
                     color = Color.Black.copy(alpha = 0.7f),
                     shape = RoundedCornerShape(bottomEnd = 8.dp),
                     modifier = Modifier.align(Alignment.TopStart)
                 ) {
                     Text(
-                        text = categoryLabel,
+                        text = badgeText,
                         color = Color.White,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -310,15 +343,43 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
             }
         }
         
-        // 포커스 시 제목 표시 - 정제된 제목 사용
+        // 포커스 시 제목 표시 (원본 제목 또는 상세 정보 표시)
         if (isFocused) {
+            // fullPath를 이용해 마지막 폴더 이름 또는 파일 이름을 가져옵니다.
+            val displayTitle = remember(series.fullPath, series.title) {
+                val path = series.fullPath
+                if (!path.isNullOrEmpty()) {
+                    val parts = path.split("/")
+                    // path의 마지막 부분이 파일명/폴더명이므로 이를 사용
+                    var rawName = parts.last()
+                    // 확장자가 있다면 제거 (예: .mp4, .mkv 등)
+                    if (rawName.contains(".")) {
+                        rawName = rawName.substringBeforeLast(".")
+                    }
+                    
+                    // 불필요한 해상도, 코덱, 날짜 및 회차(E01 등) 릴리즈 태그 정제
+                    val cleanupRegex = Regex("""(?i)[._\-\s]*([sS]\d+[eE]\d+|[eE][pP]?\d{1,4}(?=[.\s_-]|$)|1080p|720p|2160p|4k|fhd|uhd|bluray|web-dl|webrip|hdrip|x264|x265|hevc|aac|ac3|dts|korean|eng|smi|srt|\d{6}|\d{8}).*$""")
+                    rawName = cleanupRegex.replace(rawName, "").trim()
+                    // 남은 특수문자나 괄호 정리
+                    rawName = rawName.trimEnd('-', '_', '.', ' ', '[', '(', '{')
+
+                    rawName
+                } else {
+                    // fullPath가 없는 경우 기존 cleanTitle 활용하되 태그를 명시적으로 붙임
+                    val tagString = if (tags.isNotEmpty()) " [${tags.joinToString("][")}]" else ""
+                    "${series.title.cleanTitle()}$tagString"
+                }
+            }
+            
             Text(
-                text = series.title.cleanTitle(),
+                text = displayTitle,
                 color = Color.White,
-                fontSize = 14.sp,
+                fontSize = 12.sp, // 글자 크기를 14.sp 에서 12.sp 로 줄임
                 fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                modifier = Modifier.padding(top = 8.dp),
+                maxLines = 2,
+                textAlign = TextAlign.Center,
+                lineHeight = 16.sp, // 줄 간격도 폰트 크기에 맞춰 줄임
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 overflow = TextOverflow.Ellipsis
             )
         }

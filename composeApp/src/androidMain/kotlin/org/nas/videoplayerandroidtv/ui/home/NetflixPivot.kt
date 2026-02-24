@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.SnapshotStateMap
@@ -166,6 +167,17 @@ fun NetflixPivotItem(
     val posterMaxHeight = 185.dp
     val infoAreaHeight = 85.dp
     val totalItemHeight = posterMaxHeight + infoAreaHeight
+    
+    // 추가 태그 추출
+    val tags = remember(title) {
+        val list = mutableListOf<String>()
+        if (title.contains("[스페셜]")) list.add("스페셜")
+        if (title.contains("[극장판]")) list.add("극장판")
+        if (title.contains("[OVA]")) list.add("OVA")
+        if (title.contains("[더빙]")) list.add("더빙")
+        if (title.contains("[자막]")) list.add("자막")
+        list
+    }
 
     Box(
         modifier = Modifier
@@ -209,6 +221,23 @@ fun NetflixPivotItem(
                             contentScale = ContentScale.Crop
                         )
                     }
+                    
+                    // 뱃지 추가
+                    if (tags.isNotEmpty()) {
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.7f),
+                            shape = RoundedCornerShape(bottomEnd = 6.dp),
+                            modifier = Modifier.align(Alignment.TopStart)
+                        ) {
+                            Text(
+                                text = tags.joinToString(", "),
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -220,8 +249,9 @@ fun NetflixPivotItem(
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        val tagString = if (tags.isNotEmpty()) " [${tags.joinToString("][")}]" else ""
                         Text(
-                            text = title.cleanTitle(),
+                            text = "${title.cleanTitle()}$tagString",
                             color = Color.White,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
