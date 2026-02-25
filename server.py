@@ -33,7 +33,7 @@ DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
 SUBTITLE_DIR = "/volume2/video/subtitles"  # 자막 저장 경로
-CACHE_VERSION = "137.35"  # 경로 기반 태그 인식 강화 버전
+CACHE_VERSION = "137.36"  # 중복 합치기 방지 및 스페셜 보존 버전
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -288,9 +288,9 @@ REGEX_FORBIDDEN_TITLE = re.compile(
 REGEX_BRACKETS = re.compile(
     r'\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\)|$)|\【.*?(?:\】|$)|\『.*?(?:\』|$)|\「.*?(?:\」|$)|\（.*?(?:\）|$)')
 REGEX_TMDB_HINT = re.compile(r'\{tmdb[\s-]*(\d+)\}')
-# [수정] 불필요한 키워드 제거 목록 보강
+# [수정] 중요 구분 키워드는 지우지 않도록 보완 (극장판, 스페셜, OVA 등 보존)
 REGEX_JUNK_KEYWORDS = re.compile(
-    r'(?i)\s*(?:더빙|자막|한국어|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|익스텐디드|등급고지|예고편|(?<!\S)[상하](?!\S)|극장판\s*\d+[기장쿨]|특집\s*다큐|\d+부작|큐레이션|단편|드라마)\s*')
+    r'(?i)\s*(?:더빙|자막|한국어|BD|TV|Web|OAD|ONA|Full|무삭제|감독판|확장판|익스텐디드|등급고지|예고편|(?<!\S)[상하](?!\S)|\d+부작|큐레이션|단편|드라마)\s*')
 # [수정] 특수문자 제거 시 하이픈(-)과 콜론(:)은 제외하여 부제 분리에 사용 (별표 추가)
 REGEX_SPECIAL_CHARS = re.compile(r'[\[\]()_\.!#@*※×,~;【】『』「」"\'（）☆★]')
 REGEX_LEADING_INDEX = re.compile(r'^\s*(\d{1,5}(?:\s+|[.\s_-]+|(?=[가-힣a-zA-Z])))|^\s*(\d{1,5}\. )')
@@ -1100,6 +1100,9 @@ def get_series_detail_api():
     eps = []
     seen_urls = set()
     for r in cursor.fetchall():
+        # [디버그 로그] 중복 원인 파악을 위해 터미널에 파일 경로 출력
+        log("DEBUG_DETAIL", f"Found ep for {target_name}: {r['videoUrl']}")
+
         ep_tag = ""
         fsp_lower = r['full_s_path'].lower()
         if '스페셜' in fsp_lower: ep_tag += "[스페셜]"
@@ -2502,13 +2505,13 @@ def get_updater_status():
     with UPDATE_LOCK:
         logs = list(UPDATE_STATE['logs'])
         return jsonify({
-            "is_running": UPDATE_STATE["is_running"],
-            "task_name": UPDATE_STATE["task_name"],
-            "total": UPDATE_STATE["total"],
-            "current": UPDATE_STATE["current"],
-            "success": UPDATE_STATE["success"],
-            "fail": UPDATE_STATE["fail"],
-            "current_item": UPDATE_STATE["current_item"],
+            "is_running": UPDATE_STATE['is_running'],
+            "task_name": UPDATE_STATE['task_name'],
+            "total": UPDATE_STATE['total'],
+            "current": UPDATE_STATE['current'],
+            "success": UPDATE_STATE['success'],
+            "fail": UPDATE_STATE['fail'],
+            "current_item": UPDATE_STATE['current_item'],
             "logs": logs
         })
 
@@ -2626,12 +2629,12 @@ def _rebuild_fast_memory_cache():
 
             ct, yr = (c_name, y_val) if c_name is not None else clean_title_complex(name)
 
-            # --- [수정: 초강력 태그 추출 (전체 경로 기반)] ---
+            # --- [수정: 초강력 태그 추출 (전체 경로 활용)] ---
             tag_str = ""
             full_path_lower = path.lower()
             if '스페셜' in full_path_lower: tag_str += "[스페셜]"
             elif '극장판' in full_path_lower: tag_str += "[극장판]"
-            elif 'ova' in full_path_lower: tag_str += "[OVA]"
+            elif 'ova' in full_path_lower: tag_str += "[ova]"
 
             if '더빙' in full_path_lower: tag_str += "[더빙]"
             elif '자막' in full_path_lower: tag_str += "[자막]"
