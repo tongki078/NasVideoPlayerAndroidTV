@@ -33,7 +33,7 @@ DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
 SUBTITLE_DIR = "/volume2/video/subtitles"  # 자막 저장 경로
-CACHE_VERSION = "137.34"  # 제목 정제 강화 버전 (시즌, 기수 등 더욱 완벽히 제거)
+CACHE_VERSION = "137.35"  # 경로 기반 태그 인식 강화 버전
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -372,8 +372,8 @@ def clean_title_complex(title):
     return nfc(cleaned), year
 
 
-def extract_episode_numbers(filename):
-    n = nfc(filename)
+def extract_episode_numbers(full_path):
+    n = nfc(full_path)
 
     # 1. 붙어있는 표준 패턴 먼저 확인 (예: S01E05)
     m1 = re.search(r'(?i)S(\d+)\s*E(\d+)', n)
@@ -383,33 +383,26 @@ def extract_episode_numbers(filename):
     m2 = re.search(r'(\d+)\s*기\s*(\d+)\s*(?:화|회)', n)
     if m2: return int(m2.group(1)), int(m2.group(2))
 
-    # 3. 시즌/기수 찾기 (독립적)
+    # 3. 시즌/기수 찾기 (독립적) - 전체 경로에서 찾음
     season = 1  # 기본값 1
     m_season = re.search(r'(?i)(?:시즌|Season|S)\s*(\d+)|(\d+)\s*기', n)
     if m_season:
         season = int(m_season.group(1) or m_season.group(2))
 
-    # 4. 에피소드/회차 찾기 (독립적)
+    # 4. 에피소드/회차 찾기 (독립적) - 파일명에서만 찾음
+    filename = os.path.basename(n)
     episode = None
-    # .E01, -E01, EP01, 01화, 01회 등 다양한 형태 지원
-    m_episode = re.search(r'(?i)(?:[.\s_-]E|EP)\s*(\d+)|(\d+)\s*(?:화|회)', n)
+    m_episode = re.search(r'(?i)(?:[.\s_-]E|EP)\s*(\d+)|(\d+)\s*(?:화|회)', filename)
 
     if m_episode:
         episode = int(m_episode.group(1) or m_episode.group(2))
     else:
         # '화/회/E' 마커가 없는 경우 (예: 코난 5기 001.mp4)
-        # 이미 시즌(기수)을 찾았으므로, 그 뒤에 나오는 연속된 숫자(보통 2~3자리)를 에피소드로 간주
-        if m_season:
-            # 기수(시즌) 매칭 부분 이후의 문자열에서 첫 번째 연속된 숫자를 찾음
-            post_season_str = n[m_season.end():]
-            m_num = re.search(r'(\d+)', post_season_str)
-            if m_num:
-                episode = int(m_num.group(1))
+        m_num = re.search(r'(\d+)', filename)
+        if m_num:
+            episode = int(m_num.group(1))
 
-    # 만약 에피소드를 끝내 못 찾았다면 1로 반환
-    if episode is None:
-        episode = 1
-
+    if episode is None: episode = 1
     return season, episode
 
 
@@ -1075,14 +1068,15 @@ def get_series_detail_api():
 
     series = dict(row)
 
-    # --- [추가: 클릭한 작품의 전체 태그 판별] ---
+    # --- [추가: 클릭한 작품의 전체 태그 판별 (전체 경로 활용)] ---
     tag_str = ""
-    if '스페셜' in series['name']: tag_str += "[스페셜]"
-    elif '극장판' in series['name']: tag_str += "[극장판]"
-    elif 'OVA' in series['name']: tag_str += "[OVA]"
+    full_p_lower = series['path'].lower()
+    if '스페셜' in full_p_lower: tag_str += "[스페셜]"
+    elif '극장판' in full_p_lower: tag_str += "[극장판]"
+    elif 'ova' in full_p_lower: tag_str += "[ova]"
 
-    if '더빙' in series['name']: tag_str += "[더빙]"
-    elif '자막' in series['name']: tag_str += "[자막]"
+    if '더빙' in full_p_lower: tag_str += "[더빙]"
+    elif '자막' in full_p_lower: tag_str += "[자막]"
 
     base_name = series.get('tmdbTitle') or series.get('cleanedName') or series.get('name')
     series['name'] = f"{base_name} {tag_str}".strip()
@@ -1096,49 +1090,48 @@ def get_series_detail_api():
 
     target_name = series.get('cleanedName') or series.get('name')
 
-    # s.name(원본 파일명)도 가져와서 에피소드별 태그를 판별할 수 있게 함
+    # 해당 작품명과 카테고리가 같은 모든 에피소드 가져오기
     cursor = conn.execute("""
-        SELECT e.*, s.name as s_name FROM episodes e
+        SELECT e.*, s.path as full_s_path FROM episodes e
         JOIN series s ON e.series_path = s.path
         WHERE (s.cleanedName = ? OR s.name = ?) AND s.category = ?
     """, (target_name, target_name, series['category']))
 
     eps = []
-    seen = set()
+    seen_urls = set()
     for r in cursor.fetchall():
         ep_tag = ""
-        if '스페셜' in r['s_name']: ep_tag += "[스페셜]"
-        elif '극장판' in r['s_name']: ep_tag += "[극장판]"
-        elif 'OVA' in r['s_name']: ep_tag += "[OVA]"
+        fsp_lower = r['full_s_path'].lower()
+        if '스페셜' in fsp_lower: ep_tag += "[스페셜]"
+        elif '극장판' in fsp_lower: ep_tag += "[극장판]"
+        elif 'ova' in fsp_lower: ep_tag += "[ova]"
 
-        if '더빙' in r['s_name']: ep_tag += "[더빙]"
-        elif '자막' in r['s_name']: ep_tag += "[자막]"
+        if '더빙' in fsp_lower: ep_tag += "[더빙]"
+        elif '자막' in fsp_lower: ep_tag += "[자막]"
 
         # [핵심] 클릭한 버전(태그 조합)과 완전히 일치하는 회차만 리스트에 추가!
         if ep_tag == tag_str:
-            if r['videoUrl'] not in seen:
+            if r['videoUrl'] not in seen_urls:
                 ep_dict = dict(r)
-                ep_dict.pop('s_name', None)  # 클라이언트에 보내기 전 불필요한 값 제거
+                ep_dict.pop('full_s_path', None)
                 eps.append(ep_dict)
-                seen.add(r['videoUrl'])
+                seen_urls.add(r['videoUrl'])
 
-    # --- [지능형 시즌 분류 로직 추가] ---
+    # --- [지능형 시즌 분류 로직 개선 (전체 경로 활용)] ---
     eps_sorted = sorted(eps, key=lambda x: natural_sort_key(x['title']))
     seasons_map = {}
 
     for ep in eps_sorted:
         sn = ep.get('season_number')
         if sn is None:
-            # DB에 시즌 정보가 없으면 제목에서 직접 파싱 시도
-            sn, _ = extract_episode_numbers(ep['title'])
+            # DB에 시즌 정보가 없으면 전체 경로에서 파싱 시도
+            sn, _ = extract_episode_numbers(ep['series_path'])
 
         season_key = f"{sn}시즌" if sn and sn > 0 else "기본"
         if season_key not in seasons_map:
             seasons_map[season_key] = []
         seasons_map[season_key].append(ep)
 
-    # 앱 호환성을 위해 movies 필드는 전체 리스트를 유지하고,
-    # 새로 만든 seasons 필드를 추가해서 보냄
     series['movies'] = eps_sorted
     series['seasons'] = seasons_map
     conn.close()
@@ -1178,14 +1171,14 @@ def search_videos():
             s.category,
             TRIM(s.cleanedName),
             CASE
-                WHEN s.name LIKE '%더빙%' THEN '더빙'
-                WHEN s.name LIKE '%자막%' THEN '자막'
+                WHEN s.path LIKE '%더빙%' THEN '더빙'
+                WHEN s.path LIKE '%자막%' THEN '자막'
                 ELSE ''
             END,
             CASE
-                WHEN s.name LIKE '%스페셜%' THEN '스페셜'
-                WHEN s.name LIKE '%극장판%' THEN '극장판'
-                WHEN s.name LIKE '%OVA%' THEN 'OVA'
+                WHEN s.path LIKE '%스페셜%' THEN '스페셜'
+                WHEN s.path LIKE '%극장판%' THEN '극장판'
+                WHEN s.path LIKE '%OVA%' THEN 'OVA'
                 ELSE ''
             END
         ORDER BY
@@ -1203,24 +1196,19 @@ def search_videos():
     for row in cursor.fetchall():
         item = dict(row)
 
-        # 3. 화면에 보여줄 이름 결정 (태그 조합)
-        orig_name = item.get('name', '')
-        base_name = item.get('tmdbTitle') or item.get('cleanedName') or orig_name
+        # 3. 화면에 보여줄 이름 결정 (태그 조합 - 전체 경로 기반)
+        orig_path = item.get('path', '').lower()
+        base_name = item.get('tmdbTitle') or item.get('cleanedName') or item.get('name')
 
         tag_str = ""
-        # 부가 영상 태그
-        if '스페셜' in orig_name: tag_str += "[스페셜]"
-        elif '극장판' in orig_name: tag_str += "[극장판]"
-        elif 'OVA' in orig_name: tag_str += "[OVA]"
+        if '스페셜' in orig_path: tag_str += "[스페셜]"
+        elif '극장판' in orig_path: tag_str += "[극장판]"
+        elif 'ova' in orig_path: tag_str += "[OVA]"
 
-        # 더빙/자막 태그
-        if '더빙' in orig_name: tag_str += "[더빙]"
-        elif '자막' in orig_name: tag_str += "[자막]"
+        if '더빙' in orig_path: tag_str += "[더빙]"
+        elif '자막' in orig_path: tag_str += "[자막]"
 
-        # 최종 이름 조합 (예: "원피스 [스페셜][자막]")
         item['name'] = f"{base_name} {tag_str}".strip()
-
-        # 에피소드 목록을 비워서 보냄 (상세 페이지에서 요청하도록)
         item['movies'] = []
 
         for col in ['genreIds', 'genreNames', 'actors']:
@@ -2638,14 +2626,22 @@ def _rebuild_fast_memory_cache():
 
             ct, yr = (c_name, y_val) if c_name is not None else clean_title_complex(name)
 
-            # --- [수정: 초강력 그룹화 키 생성] ---
-            # 태그가 달라도 같은 작품이면 하나로 묶기 위해 tag_str을 키에서 제외합니다.
-            # tmdbId가 있으면 최우선으로 묶고, 없으면 정제된 이름으로 묶습니다.
+            # --- [수정: 초강력 태그 추출 (전체 경로 기반)] ---
+            tag_str = ""
+            full_path_lower = path.lower()
+            if '스페셜' in full_path_lower: tag_str += "[스페셜]"
+            elif '극장판' in full_path_lower: tag_str += "[극장판]"
+            elif 'ova' in full_path_lower: tag_str += "[OVA]"
+
+            if '더빙' in full_path_lower: tag_str += "[더빙]"
+            elif '자막' in full_path_lower: tag_str += "[자막]"
+
+            # 태그가 다르면 아예 다른 '시리즈'로 취급하여 그룹화 (명탐정 코난 [더빙] vs 명탐정 코난 [자막])
             if t_id:
-                group_key = f"tmdb:{t_id}"
+                group_key = f"tmdb:{t_id}_{tag_str}"
             else:
                 cleaned_name_for_key = nfc(ct).replace(" ", "").lower() if ct else nfc(name).replace(" ", "").lower()
-                group_key = f"name:{cleaned_name_for_key}_{yr}"
+                group_key = f"name:{cleaned_name_for_key}_{yr}_{tag_str}"
 
             if group_key not in rows_dict:
                 try: genre_list = json.loads(g_names) if g_names else []
@@ -2655,8 +2651,9 @@ def _rebuild_fast_memory_cache():
                 try: actors_list = json.loads(actors) if actors else []
                 except: actors_list = []
 
-                # 리스트에 보일 최종 제목 (캐시에서는 태그 없이 깔끔하게)
-                display_name = tmdb_title if tmdb_title else (c_name if c_name else name)
+                # 리스트에 보일 제목에 태그 추가
+                base_display = tmdb_title if tmdb_title else (c_name if c_name else name)
+                display_name = f"{base_display} {tag_str}".strip()
 
                 rows_dict[group_key] = {
                     "path": path, "name": display_name, "posterPath": poster,
@@ -2674,7 +2671,6 @@ def build_home_recommend():
     log("HOME", "🏠 홈 추천 데이터 빌드 시작...")
 
     try:
-        # [서버 측 중복 완전 해결] 이미 그룹화된 캐시를 사용하여 중복을 원천 차단합니다.
         new_sections = []
 
         def get_unique_picks(cat_name, limit=15):
@@ -2685,7 +2681,6 @@ def build_home_recommend():
             picks = []
             seen_titles = set()
             for item in items:
-                # 제목에서 공백/대소문자 제거 후 비교 (NFC 정규화 포함)
                 pure_name = nfc(item['name']).lower().replace(" ", "").strip()
                 if pure_name not in seen_titles:
                     picks.append(item)
@@ -2711,7 +2706,6 @@ def build_home_recommend():
             random.shuffle(air)
             new_sections.append({"title": "실시간 방영 중", "items": air[:15]})
 
-        # 전역 변수 교체
         HOME_RECOMMEND = new_sections
         log("HOME", "✨ 홈 추천 빌드 최종 완료")
 
