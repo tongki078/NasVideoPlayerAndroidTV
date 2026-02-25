@@ -33,7 +33,7 @@ DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
 HLS_ROOT = "/dev/shm/videoplayer_hls"
 SUBTITLE_DIR = "/volume2/video/subtitles"  # 자막 저장 경로
-CACHE_VERSION = "137.36"  # 중복 합치기 방지 및 스페셜 보존 버전
+CACHE_VERSION = "137.36"  # 시스템 전체 중복 해결 및 대규모 데이터 엔진 강화
 
 # [수정] 절대 경로를 사용하여 파일 생성 보장
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -304,72 +304,48 @@ def clean_title_complex(title):
     if REGEX_FORBIDDEN_CONTENT.search(orig_title):
         return "", None
 
+    # [수정 포인트] 중요 부제 태그 미리 추출
+    version_keywords = ['디지털 리마스터', '리마스터', '특집', '에피소드 원', '스페셜', '극장판', 'OVA', 'Remastered', 'Special']
+    detected_tag = ""
+    for kw in version_keywords:
+        if kw in orig_title:
+            detected_tag = f"[{kw}]"
+            break
+
     cleaned = REGEX_EXT.sub('', orig_title)
     cleaned = REGEX_CH_PREFIX.sub('', cleaned)
     cleaned = REGEX_TMDB_HINT.sub('', cleaned)
 
-    # [수정] 연도 정보 미리 추출 (브래킷 제거 전)
     year_match = REGEX_YEAR.search(cleaned)
     year = year_match.group().replace('(', '').replace(')', '') if year_match else None
 
-    # [수정] 마커 확인 시 제목이 너무 많이 잘려나가는 것을 방지
     ep_match = REGEX_EP_MARKER_STRICT.search(cleaned)
     if ep_match:
-        # [개선] EP 마커 앞부분이 2자 미만이거나 한글이 포함되지 않은 경우만 뒷부분을 취함
         pre = cleaned[:ep_match.start()].strip()
         if len(pre) >= 2 and not REGEX_FORBIDDEN_TITLE.match(pre):
             cleaned = pre
         elif len(pre) >= 1 and any('\uac00' <= c <= '\ud7af' for c in pre):
             cleaned = pre
         else:
-            # 앞부분이 의미 없으면 마커 이후를 보되, 이후도 너무 짧으면 원본 제목 활용 고려
             post = cleaned[ep_match.end():].strip()
-            if len(post) >= 2:
-                cleaned = post
-            else:
-                cleaned = pre if pre else post
+            if len(post) >= 2: cleaned = post
+            else: cleaned = pre if pre else post
 
-    tech_match = REGEX_TECHNICAL_TAGS.search(cleaned)
-    if tech_match:
-        # [개선] 기술 태그에 의해 제목이 너무 짧아지면(1자 이하) 자르지 않음
-        pre_tech = cleaned[:tech_match.start()].strip()
-        if len(pre_tech) >= 2:
-            cleaned = pre_tech
-
-    # [개선] 숫자 분리 로직: 날짜나 연도가 깨지지 않도록 한글/영어 경계만 처리
-    cleaned = re.sub(r'([가-힣\u3040-\u30ff\u4e00-\u9fff])([a-zA-Z])', r'\1 \2', cleaned)
-    cleaned = re.sub(r'([a-zA-Z])([가-힣\u3040-\u30ff\u4e00-\u9fff])', r'\1 \2', cleaned)
-
+    # [수정 포인트] 한글이 들어있는 괄호는 보존하고 기술적 괄호만 삭제
+    cleaned = re.sub(r'[\[\(] *(?![가-힣]) *[A-Za-z0-9._-]+ *[\]\)]', ' ', cleaned)
     cleaned = REGEX_DATE_YYMMDD.sub(' ', cleaned)
     cleaned = REGEX_YEAR.sub(' ', cleaned)
-
-    # 정제 후 너무 짧아진 경우 브래킷 내부에서 대체 제목 찾기
-    if len(cleaned.strip()) < 2:
-        brackets = re.findall(r'\[(.*?)\]|\((.*?)\)|（(.*?)）', orig_title)
-        for b in brackets:
-            inner = (b[0] or b[1] or b[2] or "").strip()
-            if len(inner) >= 2 and not REGEX_TECHNICAL_TAGS.search(inner) and not REGEX_FORBIDDEN_TITLE.match(inner):
-                cleaned = inner
-                break
-
-    cleaned = REGEX_BRACKETS.sub(' ', cleaned)
-    cleaned = cleaned.replace("(자막)", "").replace("(더빙)", "").replace("[자막]", "").replace("[더빙]", "").replace("（자막）",
-                                                                                                              "").replace(
-        "（더빙）", "")
     cleaned = REGEX_JUNK_KEYWORDS.sub(' ', cleaned)
-
-    # [수정] 점(.)을 무조건 제거하기 전에 공백으로 변환 (숫자 보호 위해 특수문자 처리에서 다룸)
     cleaned = REGEX_SPECIAL_CHARS.sub(' ', cleaned)
     cleaned = REGEX_LEADING_INDEX.sub('', cleaned)
     cleaned = REGEX_SPACES.sub(' ', cleaned).strip()
 
-    # 만약 정규식으로 잡히지 않은 찌꺼기 시즌/기수가 맨 뒤에 남았다면 완벽히 날리기 (예: 원피스 9기 -> 원피스)
-    cleaned = re.sub(r'(?i)\s*(?:S\d+E\d+|S\d+|Season\s*\d+|시즌\s*\d+|\d+\s*[기화회부장쿨편]|Part\s*\d+)(?:\s*완)?\s*$', '', cleaned).strip()
+    # [수정 포인트] 최종 제목에 태그 결합
+    final_title = f"{cleaned} {detected_tag}".strip()
 
     if len(cleaned) < 1:
-        # 최종 정제 실패 시 원본 제목에서 확장자만 떼고 반환 (최후의 수단)
         return nfc(os.path.splitext(orig_title)[0]), year
-    return nfc(cleaned), year
+    return nfc(final_title), year
 
 
 def extract_episode_numbers(full_path):
@@ -1057,8 +1033,6 @@ def get_list():
 def get_series_detail_api():
     path = request.args.get('path')
     if not path: return gzip_response([])
-    for c_path, data in _DETAIL_CACHE:
-        if c_path == path: return gzip_response(data)
 
     conn = get_db()
     row = conn.execute('SELECT * FROM series WHERE path = ?', (path,)).fetchone()
@@ -1068,78 +1042,35 @@ def get_series_detail_api():
 
     series = dict(row)
 
-    # --- [추가: 클릭한 작품의 전체 태그 판별 (전체 경로 활용)] ---
-    tag_str = ""
-    full_p_lower = series['path'].lower()
-    if '스페셜' in full_p_lower: tag_str += "[스페셜]"
-    elif '극장판' in full_p_lower: tag_str += "[극장판]"
-    elif 'ova' in full_p_lower: tag_str += "[ova]"
-
-    if '더빙' in full_p_lower: tag_str += "[더빙]"
-    elif '자막' in full_p_lower: tag_str += "[자막]"
-
-    base_name = series.get('tmdbTitle') or series.get('cleanedName') or series.get('name')
-    series['name'] = f"{base_name} {tag_str}".strip()
-
-    for col in ['genreIds', 'genreNames', 'actors']:
-        if series.get(col):
-            try:
-                series[col] = json.loads(series[col])
-            except:
-                series[col] = []
-
-    target_name = series.get('cleanedName') or series.get('name')
-
-    # 해당 작품명과 카테고리가 같은 모든 에피소드 가져오기
+    # [수정] 이미 cleanedName에 버전 정보가 포함되어 있으므로 제목이 같은 것들만 가져오면 됨
     cursor = conn.execute("""
-        SELECT e.*, s.path as full_s_path FROM episodes e
+        SELECT e.* FROM episodes e
         JOIN series s ON e.series_path = s.path
-        WHERE (s.cleanedName = ? OR s.name = ?) AND s.category = ?
-    """, (target_name, target_name, series['category']))
+        WHERE s.cleanedName = ?
+    """, (series['cleanedName'],))
 
-    eps = []
-    seen_urls = set()
-    for r in cursor.fetchall():
-        # [디버그 로그] 중복 원인 파악을 위해 터미널에 파일 경로 출력
-        log("DEBUG_DETAIL", f"Found ep for {target_name}: {r['videoUrl']}")
+    eps = [dict(r) for r in cursor.fetchall()]
+    conn.close()
 
-        ep_tag = ""
-        fsp_lower = r['full_s_path'].lower()
-        if '스페셜' in fsp_lower: ep_tag += "[스페셜]"
-        elif '극장판' in fsp_lower: ep_tag += "[극장판]"
-        elif 'ova' in fsp_lower: ep_tag += "[ova]"
+    # 중복 제거 (파일 경로 기준)
+    unique_eps = []
+    seen_paths = set()
+    for ep in eps:
+        if ep['videoUrl'] not in seen_paths:
+            unique_eps.append(ep)
+            seen_paths.add(ep['videoUrl'])
 
-        if '더빙' in fsp_lower: ep_tag += "[더빙]"
-        elif '자막' in fsp_lower: ep_tag += "[자막]"
+    eps_sorted = sorted(unique_eps, key=lambda x: natural_sort_key(x['title']))
 
-        # [핵심] 클릭한 버전(태그 조합)과 완전히 일치하는 회차만 리스트에 추가!
-        if ep_tag == tag_str:
-            if r['videoUrl'] not in seen_urls:
-                ep_dict = dict(r)
-                ep_dict.pop('full_s_path', None)
-                eps.append(ep_dict)
-                seen_urls.add(r['videoUrl'])
-
-    # --- [지능형 시즌 분류 로직 개선 (전체 경로 활용)] ---
-    eps_sorted = sorted(eps, key=lambda x: natural_sort_key(x['title']))
+    # 시즌 분류
     seasons_map = {}
-
     for ep in eps_sorted:
-        sn = ep.get('season_number')
-        if sn is None:
-            # DB에 시즌 정보가 없으면 전체 경로에서 파싱 시도
-            sn, _ = extract_episode_numbers(ep['series_path'])
-
-        season_key = f"{sn}시즌" if sn and sn > 0 else "기본"
-        if season_key not in seasons_map:
-            seasons_map[season_key] = []
-        seasons_map[season_key].append(ep)
+        sn, _ = extract_episode_numbers(ep['series_path'])
+        sk = f"{sn}시즌"
+        seasons_map.setdefault(sk, []).append(ep)
 
     series['movies'] = eps_sorted
     series['seasons'] = seasons_map
-    conn.close()
-
-    _DETAIL_CACHE.append((path, series))
     return gzip_response(series)
 
 
@@ -2327,7 +2258,7 @@ def admin_stills_page():
             table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 0.9em; }
             th, td { padding: 10px; text-align: left; border-bottom: 1px solid #333; }
             th { background: #222; position: sticky; top: 0; }
-            .tag { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.85em; font-weight: bold; background: #333; color: #ccc; border: 1px solid #555;}
+            .tag { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.85em; fontWeight: bold; background: #333; color: #ccc; border: 1px solid #555;}
         </style>
     </head>
     <body>
@@ -2612,12 +2543,10 @@ def build_all_caches():
     _rebuild_fast_memory_cache()
     build_home_recommend()
 
-
 def _rebuild_fast_memory_cache():
     global _FAST_CATEGORY_CACHE
     temp = {}
     conn = get_db()
-    log("CACHE", "⚙️ 경량 메모리 캐시 빌드 시작")
     for cat in ["movies", "foreigntv", "koreantv", "animations_all", "air"]:
         rows_dict = {}
         all_rows = conn.execute(
@@ -2627,41 +2556,30 @@ def _rebuild_fast_memory_cache():
             path, name, poster, year, rating, g_ids, g_names, director, actors, t_id, c_name, y_val, overview, tmdb_title = row
             if not poster and cat != 'air': continue
 
-            ct, yr = (c_name, y_val) if c_name is not None else clean_title_complex(name)
-
-            # --- [수정: 초강력 태그 추출 (전체 경로 활용)] ---
             tag_str = ""
-            full_path_lower = path.lower()
-            if '스페셜' in full_path_lower: tag_str += "[스페셜]"
-            elif '극장판' in full_path_lower: tag_str += "[극장판]"
-            elif 'ova' in full_path_lower: tag_str += "[ova]"
+            p_lower = path.lower()
+            # 경로에서 정보 추출
+            if '더빙' in p_lower: tag_str = "[더빙]"
+            elif '자막' in p_lower: tag_str = "[자막]"
 
-            if '더빙' in full_path_lower: tag_str += "[더빙]"
-            elif '자막' in full_path_lower: tag_str += "[자막]"
+            # 제목에 이미 버전 정보([스페셜] 등)가 포함되어 있는지 확인
+            base_display = tmdb_title if tmdb_title else c_name
+            display_name = f"{base_display} {tag_str}".strip()
 
-            # 태그가 다르면 아예 다른 '시리즈'로 취급하여 그룹화 (명탐정 코난 [더빙] vs 명탐정 코난 [자막])
-            if t_id:
-                group_key = f"tmdb:{t_id}_{tag_str}"
-            else:
-                cleaned_name_for_key = nfc(ct).replace(" ", "").lower() if ct else nfc(name).replace(" ", "").lower()
-                group_key = f"name:{cleaned_name_for_key}_{yr}_{tag_str}"
+            # [핵심] 태그가 포함된 cleanedName 자체가 이미 유니크하므로, 이를 그룹 키로 활용
+            group_key = f"tmdb:{t_id}_{display_name}" if t_id else f"name:{display_name}_{y_val}"
 
             if group_key not in rows_dict:
                 try: genre_list = json.loads(g_names) if g_names else []
                 except: genre_list = []
-                try: genre_ids = json.loads(g_ids) if g_ids else []
-                except: genre_ids = []
                 try: actors_list = json.loads(actors) if actors else []
                 except: actors_list = []
 
-                # 리스트에 보일 제목에 태그 추가
-                base_display = tmdb_title if tmdb_title else (c_name if c_name else name)
-                display_name = f"{base_display} {tag_str}".strip()
-
                 rows_dict[group_key] = {
                     "path": path, "name": display_name, "posterPath": poster,
-                    "year": year, "rating": rating, "genreIds": genre_ids, "genreNames": genre_list,
-                    "director": director, "actors": actors_list, "tmdbId": t_id, "overview": overview, "movies": []
+                    "year": year, "rating": rating, "genreNames": genre_list,
+                    "director": director, "actors": actors_list, "tmdbId": t_id, "overview": overview,
+                    "movies": [] # 앱 호환성을 위해 빈 리스트 추가
                 }
         temp[cat] = list(rows_dict.values())
     conn.close()
