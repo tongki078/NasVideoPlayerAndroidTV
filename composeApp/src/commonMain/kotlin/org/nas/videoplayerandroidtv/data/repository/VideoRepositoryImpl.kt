@@ -34,12 +34,15 @@ class VideoRepositoryImpl : VideoRepository {
     }
 
     private fun Category.fixUrls(): Category {
-        return this.copy(movies = movies?.map { it.fixUrls() })
+        val updatedMovies = movies?.map { it.fixUrls() }
+        val updatedSeasons = seasons?.mapValues { entry -> entry.value.map { it.fixUrls() } }
+        return this.copy(movies = updatedMovies, seasons = updatedSeasons)
     }
 
     private fun Category.toSeries() = Series(
         title = if (!tmdbTitle.isNullOrBlank()) tmdbTitle else (name ?: ""),
         episodes = movies ?: emptyList(),
+        seasons = seasons ?: emptyMap(), // [추가] 서버에서 온 시즌 데이터를 매핑
         fullPath = path,
         category = category,
         posterPath = posterPath,

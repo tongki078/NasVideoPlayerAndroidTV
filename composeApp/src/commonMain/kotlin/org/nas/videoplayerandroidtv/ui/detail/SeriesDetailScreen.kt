@@ -67,10 +67,10 @@ fun SeriesDetailScreen(
     val overlayFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(series.fullPath) {
-        if (series.episodes.isNotEmpty()) {
+        if (series.episodes.isNotEmpty() || series.seasons.isNotEmpty()) {
             val seasons = withContext(Dispatchers.Default) { loadSeasons(series) }
             state = state.copy(seasons = seasons, isLoading = false)
-            return@LaunchedEffect
+            // 에피소드 정보가 이미 있는 경우라도 최신 정보를 위해 백그라운드에서 한 번 더 갱신할 수 있음
         }
 
         state = state.copy(isLoading = true)
@@ -188,7 +188,6 @@ private fun PremiumTvButton(text: String, icon: androidx.compose.ui.graphics.vec
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1.0f)
     
-    // [가독성 해결] 밝은 배경에는 항상 어두운 글자색(Black)을 사용하여 선명하게 보이도록 함
     val backgroundColor = if (isFocused) Color.White else if (isPrimary) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.15f)
     val contentColor = if (isFocused || isPrimary) Color.Black else Color.White
 
@@ -210,7 +209,6 @@ private data class ResumeInfo(val episode: Movie, val position: Long, val isNew:
 private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, seriesOverview: String?, seriesPosterPath: String?, focusRequester: FocusRequester, onSeasonChange: (Int) -> Unit, onEpisodeClick: (Movie) -> Unit, onClose: () -> Unit) {
     val episodeListState = rememberLazyListState()
     
-    // 시즌 변경 시 스크롤 초기화
     LaunchedEffect(state.selectedSeasonIndex) {
         episodeListState.scrollToItem(0)
     }
@@ -249,6 +247,27 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, series
 }
 
 private fun loadSeasons(series: Series): List<Season> {
+    // 1. 서버에서 이미 분류해서 보내준 시즌 데이터가 있는지 확인 (가장 정확함)
+    if (series.seasons.isNotEmpty()) {
+        return series.seasons.entries.map { entry ->
+            val seasonName = entry.key // 예: "1시즌", "2시즌"
+            val seasonNum = seasonName.filter { it.isDigit() }.toIntOrNull() ?: 1
+            
+            val processedEpisodes = entry.value.map { movie ->
+                val videoUrl = if (movie.videoUrl?.startsWith("http") == false) NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl else movie.videoUrl ?: ""
+                val rawThumb = if (!movie.thumbnailUrl.isNullOrEmpty() && !movie.thumbnailUrl.contains("thumb_serve")) movie.thumbnailUrl else series.posterPath
+                val thumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
+                    if (rawThumb.startsWith("/")) "https://image.tmdb.org/t/p/w500$rawThumb"
+                    else NasApiClient.BASE_URL + "/" + rawThumb
+                } else rawThumb
+                movie.copy(videoUrl = videoUrl, thumbnailUrl = thumbUrl)
+            }.sortedBy { it.episode_number ?: it.title?.let { t -> t.extractEpisode()?.filter { c -> c.isDigit() }?.toIntOrNull() } ?: 0 }
+            
+            Season(number = seasonNum, name = seasonName, episodes = processedEpisodes)
+        }.sortedBy { it.number }
+    }
+
+    // 2. 서버 데이터가 없는 경우 (구 버전 호환성): 기존 방식대로 제목 파싱하여 분류
     val processedMovies = series.episodes.map { movie ->
         val videoUrl = if (movie.videoUrl?.startsWith("http") == false) NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl else movie.videoUrl ?: ""
         val rawThumb = if (!movie.thumbnailUrl.isNullOrEmpty() && !movie.thumbnailUrl.contains("thumb_serve")) movie.thumbnailUrl else series.posterPath
@@ -260,24 +279,16 @@ private fun loadSeasons(series: Series): List<Season> {
     }
 
     val distinctMovies = processedMovies.distinctBy { it.videoUrl }
-
-    // [버그 수정] 서버 메타데이터(season_number)를 최우선으로 활용하여 그룹화
     val seasonsMap = distinctMovies.groupBy { movie ->
         movie.season_number ?: movie.videoUrl?.extractSeason() ?: movie.title?.extractSeason() ?: 1
     }
 
     return seasonsMap.entries.map { entry -> 
         val num = entry.key
-        val eps = entry.value
         Season(
             number = num, 
-            name = "시즌 $num", 
-            episodes = eps.sortedBy { movie ->
-                // 회차 번호도 서버 데이터를 우선 사용
-                movie.episode_number ?: movie.title?.let { t ->
-                    t.extractEpisode()?.filter { c: Char -> c.isDigit() }?.toIntOrNull()
-                } ?: 0 
-            }
+            name = "${num}시즌", 
+            episodes = entry.value.sortedBy { it.episode_number ?: it.title?.let { t -> t.extractEpisode()?.filter { c -> c.isDigit() }?.toIntOrNull() } ?: 0 }
         )
     }.sortedBy { it.number }
 }

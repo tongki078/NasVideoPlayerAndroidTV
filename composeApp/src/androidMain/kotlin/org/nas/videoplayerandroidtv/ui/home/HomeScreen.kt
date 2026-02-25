@@ -47,29 +47,10 @@ fun HomeScreen(
     val standardMargin = 20.dp 
     val coroutineScope = rememberCoroutineScope()
 
-    var extraSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
-
-    LaunchedEffect(currentScreen) {
-        if (currentScreen == Screen.HOME) {
-            coroutineScope {
-                val foreignTvDeferred = async { repository.getLatestForeignTV() }
-                val koreanDramaDeferred = async { repository.getKtvDrama(20, 0) }
-                
-                val foreignTv = try { foreignTvDeferred.await().take(20) } catch(_: Exception) { emptyList() }
-                val koreanDrama = try { koreanDramaDeferred.await().take(20) } catch(_: Exception) { emptyList() }
-                
-                val newSections = mutableListOf<HomeSection>()
-                if (foreignTv.isNotEmpty()) newSections.add(HomeSection("인기 외국 TV 시리즈", foreignTv.toCategories()))
-                if (koreanDrama.isNotEmpty()) newSections.add(HomeSection("화제의 국내 드라마", koreanDrama.toCategories()))
-                extraSections = newSections
-            }
-        } else {
-            extraSections = emptyList()
-        }
-    }
-
-    val combinedSections = remember(homeSections, extraSections) {
-        (homeSections + extraSections).map { section: HomeSection ->
+    // [중복 제거 핵심] 서버(/home)에서 이미 섹션을 구성해서 보내주므로, 
+    // 앱에서 수동으로 다시 가져오던 로직을 제거합니다. (Theme 중복 호출 방지)
+    val combinedSections = remember(homeSections) {
+        homeSections.map { section: HomeSection ->
             section.copy(
                 items = section.items.filter { item: Category ->
                     val name = (item.name ?: "").trim()

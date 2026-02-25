@@ -1122,7 +1122,25 @@ def get_series_detail_api():
                 eps.append(ep_dict)
                 seen.add(r['videoUrl'])
 
-    series['movies'] = sorted(eps, key=lambda x: natural_sort_key(x['title']))
+    # --- [지능형 시즌 분류 로직 추가] ---
+    eps_sorted = sorted(eps, key=lambda x: natural_sort_key(x['title']))
+    seasons_map = {}
+
+    for ep in eps_sorted:
+        sn = ep.get('season_number')
+        if sn is None:
+            # DB에 시즌 정보가 없으면 제목에서 직접 파싱 시도
+            sn, _ = extract_episode_numbers(ep['title'])
+
+        season_key = f"{sn}시즌" if sn and sn > 0 else "기본"
+        if season_key not in seasons_map:
+            seasons_map[season_key] = []
+        seasons_map[season_key].append(ep)
+
+    # 앱 호환성을 위해 movies 필드는 전체 리스트를 유지하고,
+    # 새로 만든 seasons 필드를 추가해서 보냄
+    series['movies'] = eps_sorted
+    series['seasons'] = seasons_map
     conn.close()
 
     _DETAIL_CACHE.append((path, series))
@@ -2496,13 +2514,13 @@ def get_updater_status():
     with UPDATE_LOCK:
         logs = list(UPDATE_STATE['logs'])
         return jsonify({
-            "is_running": UPDATE_STATE['is_running'],
-            "task_name": UPDATE_STATE['task_name'],
-            "total": UPDATE_STATE['total'],
-            "current": UPDATE_STATE['current'],
-            "success": UPDATE_STATE['success'],
-            "fail": UPDATE_STATE['fail'],
-            "current_item": UPDATE_STATE['current_item'],
+            "is_running": UPDATE_STATE["is_running"],
+            "task_name": UPDATE_STATE["task_name"],
+            "total": UPDATE_STATE["total"],
+            "current": UPDATE_STATE["current"],
+            "success": UPDATE_STATE["success"],
+            "fail": UPDATE_STATE["fail"],
+            "current_item": UPDATE_STATE["current_item"],
             "logs": logs
         })
 
@@ -2620,18 +2638,14 @@ def _rebuild_fast_memory_cache():
 
             ct, yr = (c_name, y_val) if c_name is not None else clean_title_complex(name)
 
-            # --- [수정: 파일명에서 부가영상 및 더빙/자막 태그 추출 강화] ---
-            tag_str = ""
-            if '스페셜' in name: tag_str += "[스페셜]"
-            elif '극장판' in name: tag_str += "[극장판]"
-            elif 'OVA' in name: tag_str += "[OVA]"
-
-            if '더빙' in name: tag_str += "[더빙]"
-            elif '자막' in name: tag_str += "[자막]"
-
-            # [수정] 태그를 그룹 키에 포함시켜 스페셜/본편/더빙/자막이 완벽히 분리되게 함
-            cleaned_name_for_key = ct.replace(" ", "") if ct else ""
-            group_key = f"tmdb:{t_id}_{tag_str}" if t_id else f"name:{cleaned_name_for_key}_{yr}_{tag_str}"
+            # --- [수정: 초강력 그룹화 키 생성] ---
+            # 태그가 달라도 같은 작품이면 하나로 묶기 위해 tag_str을 키에서 제외합니다.
+            # tmdbId가 있으면 최우선으로 묶고, 없으면 정제된 이름으로 묶습니다.
+            if t_id:
+                group_key = f"tmdb:{t_id}"
+            else:
+                cleaned_name_for_key = nfc(ct).replace(" ", "").lower() if ct else nfc(name).replace(" ", "").lower()
+                group_key = f"name:{cleaned_name_for_key}_{yr}"
 
             if group_key not in rows_dict:
                 try: genre_list = json.loads(g_names) if g_names else []
@@ -2641,9 +2655,8 @@ def _rebuild_fast_memory_cache():
                 try: actors_list = json.loads(actors) if actors else []
                 except: actors_list = []
 
-                # [추가] 리스트에 보일 최종 제목에 추출한 태그들을 조합
-                base_display = tmdb_title if tmdb_title else (c_name if c_name else name)
-                display_name = f"{base_display} {tag_str}".strip()
+                # 리스트에 보일 최종 제목 (캐시에서는 태그 없이 깔끔하게)
+                display_name = tmdb_title if tmdb_title else (c_name if c_name else name)
 
                 rows_dict[group_key] = {
                     "path": path, "name": display_name, "posterPath": poster,
@@ -2658,31 +2671,52 @@ def _rebuild_fast_memory_cache():
 
 def build_home_recommend():
     global HOME_RECOMMEND
+    log("HOME", "🏠 홈 추천 데이터 빌드 시작...")
+
     try:
-        m = _FAST_CATEGORY_CACHE.get('movies', [])
-        k = _FAST_CATEGORY_CACHE.get('koreantv', [])
-        a = _FAST_CATEGORY_CACHE.get('air', [])
-        combined = m + k
-        unique_map = {}
-        for item in combined:
-            uid = item.get('tmdbId') or item.get('path')
-            if uid not in unique_map: unique_map[uid] = item
-        unique_hot_list = list(unique_map.values())
-        hot_picks = random.sample(unique_hot_list, min(100, len(unique_hot_list))) if unique_hot_list else []
-        seen_ids = {(p.get('tmdbId') or p.get('path')) for p in hot_picks}
-        airing_picks = []
-        for item in a:
-            uid = item.get('tmdbId') or item.get('path')
-            if uid not in seen_ids:
-                airing_picks.append(item)
-                if len(airing_picks) >= 100: break
-        HOME_RECOMMEND = [
-            {"title": "지금 가장 핫한 인기작", "items": hot_picks},
-            {"title": "실시간 방영 중", "items": airing_picks}
-        ]
-        log("CACHE", f"🏠 홈 추천 빌드 완료 ({len(hot_picks)} / {len(airing_picks)})")
-    except:
-        traceback.print_exc()
+        # [서버 측 중복 완전 해결] 이미 그룹화된 캐시를 사용하여 중복을 원천 차단합니다.
+        new_sections = []
+
+        def get_unique_picks(cat_name, limit=15):
+            items = list(_FAST_CATEGORY_CACHE.get(cat_name, []))
+            if not items: return []
+            random.shuffle(items)
+
+            picks = []
+            seen_titles = set()
+            for item in items:
+                # 제목에서 공백/대소문자 제거 후 비교 (NFC 정규화 포함)
+                pure_name = nfc(item['name']).lower().replace(" ", "").strip()
+                if pure_name not in seen_titles:
+                    picks.append(item)
+                    seen_titles.add(pure_name)
+                if len(picks) >= limit: break
+            return picks
+
+        # 1. 인기 외국 TV 시리즈
+        ftv = get_unique_picks('foreigntv')
+        if ftv:
+            new_sections.append({"title": "인기 외국 TV 시리즈", "items": ftv})
+            log("HOME", f"✅ 외국 TV 빌드 완료: {len(ftv)}개")
+
+        # 2. 화제의 국내 드라마
+        ktv = get_unique_picks('koreantv')
+        if ktv:
+            new_sections.append({"title": "화제의 국내 드라마", "items": ktv})
+            log("HOME", f"✅ 국내 TV 빌드 완료: {len(ktv)}개")
+
+        # 3. 실시간 방영중
+        air = list(_FAST_CATEGORY_CACHE.get('air', []))
+        if air:
+            random.shuffle(air)
+            new_sections.append({"title": "실시간 방영 중", "items": air[:15]})
+
+        # 전역 변수 교체
+        HOME_RECOMMEND = new_sections
+        log("HOME", "✨ 홈 추천 빌드 최종 완료")
+
+    except Exception as e:
+        log("HOME_ERROR", f"Error: {e}")
 
 
 def background_init_tasks():
