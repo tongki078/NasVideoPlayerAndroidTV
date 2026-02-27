@@ -4,8 +4,11 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -17,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -30,6 +34,7 @@ import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 import org.nas.videoplayerandroidtv.data.WatchHistory
+import org.nas.videoplayerandroidtv.util.TitleUtils.getInitialSound
 
 @Composable
 fun HeroSection(
@@ -193,9 +198,79 @@ private fun HeroButton(
     }
 }
 
+// 🔴 [수정] 초성 리스트를 항상 고정으로 표시하고, 해당 초성이 없으면 비활성화
 @Composable
-fun SectionTitle(title: String, horizontalPadding: androidx.compose.ui.unit.Dp) {
-    Text(text = title, modifier = Modifier.padding(start = horizontalPadding, top = 28.dp, bottom = 14.dp), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp, letterSpacing = (-0.5).sp)
+fun SectionTitle(
+    title: String, 
+    horizontalPadding: androidx.compose.ui.unit.Dp,
+    items: List<org.nas.videoplayerandroidtv.domain.model.Category> = emptyList(),
+    onIndexClick: (Int) -> Unit = {}
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = horizontalPadding, top = 28.dp, bottom = 14.dp, end = horizontalPadding),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title, 
+            color = Color.White, 
+            fontWeight = FontWeight.Bold, 
+            fontSize = 20.sp, 
+            letterSpacing = (-0.5).sp,
+            modifier = Modifier.padding(end = 16.dp)
+        )
+
+        // "전체 목록"일 경우에만 초성 인덱스 칩 렌더링
+        if (title.contains("전체 목록") && items.isNotEmpty()) {
+            val standardOrder = listOf(
+                "ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ", "ㅂ", "ㅅ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ", "A-Z"
+            )
+
+            // 작품 리스트에서 첫 등장하는 초성의 인덱스를 맵핑
+            val itemInitialSounds = remember(items) {
+                items.mapIndexedNotNull { index, item ->
+                    val sound = getInitialSound(item.name)
+                    if (sound != "#") sound to index else null
+                }.distinctBy { it.first }.toMap()
+            }
+
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                itemsIndexed(standardOrder) { _, sound ->
+                    val targetIndex = itemInitialSounds[sound] ?: 0 
+                    val hasItems = itemInitialSounds.containsKey(sound)
+                    
+                    var isFocused by remember { mutableStateOf(false) }
+                    val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
+                    
+                    Surface(
+                        color = if (isFocused) Color.White else Color.Transparent,
+                        shape = RoundedCornerShape(4.dp),
+                        modifier = Modifier
+                            .scale(scale)
+                            .onFocusChanged { isFocused = it.isFocused }
+                            .focusable(hasItems) // 작품이 없으면 포커스 안 가도록 설정
+                            .clickable(enabled = hasItems) { onIndexClick(targetIndex) }
+                    ) {
+                        Text(
+                            text = sound,
+                            color = when {
+                                isFocused -> Color.Black
+                                hasItems -> Color.Gray
+                                else -> Color.DarkGray.copy(alpha = 0.5f) // 비활성화된 느낌
+                            },
+                            fontSize = 14.sp,
+                            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

@@ -110,8 +110,6 @@ fun HomeScreen(
                 try {
                     lazyListState.scrollToItem(foundRowIndex)
                     rowFocusIndices[foundRowKey] = foundItemIndex
-                    // onFocusRestored는 개별 아이템에서 포커스를 받은 후 호출하도록 변경하거나 
-                    // 여기서 호출하되 아이템이 준비될 때까지 기다려야 함.
                 } catch (_: Exception) {}
             }
         }
@@ -204,7 +202,19 @@ fun HomeScreen(
                     val rowKey = "row_${section.title}"
                     val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
                     Column(modifier = Modifier.fillMaxWidth()) { 
-                        SectionTitle(section.title, standardMargin)
+                        // 🔴 [수정] 초성 리스트 지원 SectionTitle 호출
+                        SectionTitle(
+                            title = section.title, 
+                            horizontalPadding = standardMargin,
+                            items = section.items,
+                            onIndexClick = { targetIndex ->
+                                coroutineScope.launch {
+                                    sectionRowState.animateScrollToItem(targetIndex)
+                                    rowFocusIndices[rowKey] = targetIndex
+                                }
+                            }
+                        )
+
                         NetflixTvPivotRow(
                             state = sectionRowState,
                             items = section.items, 

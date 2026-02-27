@@ -1030,8 +1030,7 @@ def get_sections_for_category(cat, kw=None):
         if cat == 'animations_all':
             all_list_items.sort(key=lambda x: x['name'])
 
-        sections.append({"title": "전체 목록", "items": target_list[:800]})
-
+        sections.append({"title": "전체 목록", "items": all_list_items})
     _SECTION_CACHE[cache_key] = sections
     return sections
 
@@ -2535,51 +2534,47 @@ def get_updater_status():
 @app.route('/api/admin/fast_db_repair')
 def fast_db_repair():
     def run_repair():
-        set_update_state(is_running=True, task_name="DB 광속 복구 및 청소", clear_logs=True)
-        conn = get_db();
+        set_update_state(is_running=True, task_name="카테고리 핀셋 교정", clear_logs=True)
+        emit_ui_log("🔍 1단계: 유령 데이터 삭제 및 카테고리 재분류 시작...")
+
+        conn = get_db()
         cursor = conn.cursor()
 
-        emit_ui_log("🧹 1단계: 유령 데이터 및 휴지통 삭제 중...")
-        # @eaDir이나 휴지통 데이터가 시리즈 연결을 방해하는 것을 차단
+        # 1. 휴지통 등 쓸데없는 데이터 먼저 제거
         cursor.execute("DELETE FROM episodes WHERE videoUrl LIKE '%@eaDir%' OR videoUrl LIKE '%#recycle%'")
 
-        emit_ui_log("🧠 2단계: 54만 건 시리즈 지도 연결 중...")
-        # 모든 시리즈의 실제 경로를 가져옵니다.
-        all_series = conn.execute("SELECT path, cleanedName, category FROM series").fetchall()
-        # 정제된 제목과 카테고리를 기준으로 부모 경로 매핑 생성
-        series_map = {(s['cleanedName'], s['category']): s['path'] for s in all_series if s['cleanedName']}
+        # 2. 🔴 [핵심 수술] 잘못된 카테고리에 있는 작품들을 원래 카테고리로 돌려보냅니다.
+        # 기존 메타데이터(포스터, 이름 등)는 100% 보존됩니다.
+        updates = [
+            ("movies", "movies/%"),
+            ("koreantv", "koreantv/%"),
+            ("foreigntv", "foreigntv/%"),
+            ("animations_all", "animations_all/%"),
+            ("air", "air/%")
+        ]
 
-        all_episodes = conn.execute("SELECT id, title, videoUrl FROM episodes").fetchall()
-        updates = []
+        for correct_cat, path_pattern in updates:
+            # 예: 카테고리는 animations_all인데 경로는 koreantv/... 인 애들을 찾아서 수정
+            cursor.execute(
+                "UPDATE series SET category = ? WHERE path LIKE ? AND category != ?",
+                (correct_cat, path_pattern, correct_cat)
+            )
+            updated_count = cursor.rowcount
+            if updated_count > 0:
+                log("REPAIR", f"✅ {correct_cat} 카테고리로 {updated_count}개 작품 원대복귀 완료.")
+                emit_ui_log(f"{correct_cat} 카테고리로 {updated_count}개 작품 원대복귀 완료.", "success")
 
-        for ep in all_episodes:
-            # 파일명에서 순수 제목만 추출 (예: '코난 1화' -> '코난')
-            ep_title, _ = clean_title_complex(ep['title'])
-            if not ep_title: continue
+        conn.commit()
+        conn.close()
 
-            # 이 파일이 속한 카테고리 판별
-            url_params = urllib.parse.parse_qs(urllib.parse.urlparse(ep['videoUrl']).query)
-            type_prefix = url_params.get('type', [''])[0]
-            cat_code = {"ftv": "foreigntv", "ktv": "koreantv", "movie": "movies", "anim_all": "animations_all",
-                        "air": "air"}.get(type_prefix)
-
-            # [핵심 수술] 파일 제목과 카테고리가 일치하는 부모 시리즈를 찾아 연결!
-            found_path = series_map.get((ep_title, cat_code))
-
-            if found_path:
-                updates.append((found_path, ep['id']))
-
-        # 변경 사항 일괄 반영 (매우 빠름)
-        cursor.executemany("UPDATE episodes SET series_path = ? WHERE id = ?", updates)
-        conn.commit();
-        conn.close();
+        emit_ui_log("♻️ 2단계: 메모리 캐시 갱신 중...", "info")
         build_all_caches()
 
-        emit_ui_log(f"✨ 수술 완료! {len(updates)}개의 파일이 부모를 찾았습니다.", "success")
-        set_update_state(is_running=False, current_item="모든 작업 완료")
+        emit_ui_log("✨ 수술 완료! 이제 앱을 껐다 켜보세요.", "success")
+        set_update_state(is_running=False, current_item="핀셋 교정 완료")
 
     threading.Thread(target=run_repair, daemon=True).start()
-    return "DB 고속 수술이 백그라운드에서 시작되었습니다!"
+    return "카테고리 핀셋 교정이 백그라운드에서 시작되었습니다. /updater 창을 확인하세요."
 
 
 @app.route('/reset_episodes_metadata')
@@ -2705,9 +2700,20 @@ def _rebuild_fast_memory_cache():
             if not r['posterPath'] and cat != 'air':
                 continue
 
+            # 4. 🔴 [핵심 방어벽 복원] 엉뚱한 작품(드라마 등)이 애니 등에 끼어드는 현상 차단
+            path_lower = r['path'].lower()
+            if cat == 'animations_all' and '애니메이션' not in path_lower and '라프텔' not in path_lower:
+                continue
+            elif cat == 'koreantv' and '국내tv' not in path_lower:
+                continue
+            elif cat == 'foreigntv' and '외국tv' not in path_lower:
+                continue
+            elif cat == 'movies' and '영화' not in path_lower and 'movie' not in path_lower:
+                continue
+
             seen_keys.add(group_key)
 
-            # 4. 앱 노출용 데이터 구성
+            # 5. 앱 노출용 데이터 구성
             display_name = r['tmdbTitle'] or r['cleanedName'] or r['name']
             items.append({
                 "path": r['path'],

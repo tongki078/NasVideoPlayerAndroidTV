@@ -98,4 +98,33 @@ object TitleUtils {
         if (cleaned.contains(ep) || cleaned.contains(ep.replace("화", "회"))) return cleaned
         return "$ep $cleaned".trim()
     }
+    
+    // 🔴 [초성 추출 기능 추가]
+    fun getInitialSound(text: String?): String {
+        if (text.isNullOrBlank()) return "#"
+        
+        // 영어, 숫자 등 기타 문자 필터링 후 맨 앞 글자 하나 추출
+        val firstChar = text.trimStart { !it.isLetterOrDigit() }.firstOrNull() ?: return "#"
+
+        // 한글인지 확인
+        if (firstChar in '가'..'힣') {
+            // 한글 유니코드 기반 초성 추출 공식
+            val chosungIndex = (firstChar.code - 0xAC00) / 28 / 21
+            val chosungArray = arrayOf(
+                "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", 
+                "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"
+            )
+            return if (chosungIndex in chosungArray.indices) chosungArray[chosungIndex] else "#"
+        }
+        
+        // 영문일 경우 대문자로
+        if (firstChar in 'a'..'z' || firstChar in 'A'..'Z') {
+            return "A-Z" // 영문은 A-Z 탭 하나로 묶는 것이 TV에서 탐색하기 편함
+        }
+        
+        // 숫자나 기타 기호
+        if (firstChar.isDigit()) return "#"
+        
+        return "#"
+    }
 }
