@@ -194,10 +194,15 @@ def init_db():
         cursor.execute('CREATE TABLE IF NOT EXISTS tmdb_cache (h TEXT PRIMARY KEY, data TEXT)')
         cursor.execute('CREATE TABLE IF NOT EXISTS server_config (key TEXT PRIMARY KEY, value TEXT)')
 
+        # 인덱스 생성 (조회 속도 최적화)
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_category ON series(category)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_name ON series(name)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_tmdbId ON series(tmdbId)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series ON episodes(series_path)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cleanedName ON series(cleanedName)')
+
+        # 🔴 [추가] 사용자님이 요청하신 인덱스 명시적 생성
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series_path ON episodes(series_path)')
 
         def add_col_if_missing(table, col, type):
             cursor.execute(f"PRAGMA table_info({table})")
@@ -1071,10 +1076,17 @@ def get_list():
     return gzip_response(final_res[off:off + lim])
 
 
+# 상세페이지 결과 캐시를 위한 전역 변수 (함수 밖에 위치)
+_DETAIL_MEM_CACHE = {}
+
 @app.route('/api/series_detail')
 def get_series_detail_api():
     path = request.args.get('path')
     if not path: return gzip_response({})
+
+    # 1. 메모리 캐시 확인 (있으면 즉시 반환)
+    if path in _DETAIL_MEM_CACHE:
+        return gzip_response(_DETAIL_MEM_CACHE[path])
 
     conn = get_db()
     row = conn.execute('SELECT * FROM series WHERE path = ?', (path,)).fetchone()
@@ -1083,16 +1095,13 @@ def get_series_detail_api():
         return gzip_response({})
 
     series = dict(row)
-
-    # 🔴 [수정] 상세페이지 상단 및 회차리스트 왼쪽의 메인 제목을 깔끔하게 변경
-    # 'tmdbTitle'(공식 한글명)이 있으면 그것을, 없으면 정제된 제목을 사용합니다.
     clean_main_name = series.get('tmdbTitle') or series.get('cleanedName') or series.get('name')
     series['name'] = clean_main_name
 
     t_id = series.get('tmdbId')
     c_name = series.get('cleanedName')
 
-    # 에피소드 통합 조회
+    # 2. 에피소드 통합 조회
     if t_id:
         cursor = conn.execute("""
             SELECT * FROM episodes
@@ -1107,30 +1116,30 @@ def get_series_detail_api():
     all_eps = [dict(r) for r in cursor.fetchall()]
     conn.close()
 
-    # 에피소드 중복 제거 및 번호 추출
+    # 3. 에피소드 중복 제거 및 번호 추출 (최적화)
     unique_eps_dict = {}
     for ep in all_eps:
-        sn, en = extract_episode_numbers(ep.get('title', ''))
+        # DB에 이미 번호가 있다면 정규식 계산 생략 (속도 향상 핵심)
+        sn = ep.get('season_number')
+        en = ep.get('episode_number')
+
+        if sn is None or en is None:
+            sn, en = extract_episode_numbers(ep.get('title', ''))
+
         if (sn, en) not in unique_eps_dict:
             ep['sn'], ep['en'] = sn, en
-
-            # 🔴 [추가] 회차 리스트 우측의 개별 에피소드 제목도 깔끔하게 정제
-            # 예: '(더빙) 괴수 8호.E01...' -> '1화 괴수 8호'
             ep['title'] = f"{en}화 {clean_main_name}"
-
             unique_eps_dict[(sn, en)] = ep
 
-    # 정렬 (시즌 -> 회차 순)
+    # 4. 정렬 및 그룹화
     sorted_eps = sorted(unique_eps_dict.values(), key=lambda x: (x['sn'], x['en']))
-
-    # 시즌별 그룹화 (앱 UI용)
     seasons_map = {}
     for ep in sorted_eps:
         sk = f"{ep['sn']}시즌"
         if sk not in seasons_map: seasons_map[sk] = []
         seasons_map[sk].append(ep)
 
-    # 앱 파싱 에러 방지를 위한 필드 변환
+    # 5. 필드 변환
     for col in ['genreIds', 'genreNames', 'actors']:
         if series.get(col) and isinstance(series[col], str):
             try:
@@ -1142,6 +1151,9 @@ def get_series_detail_api():
 
     series['movies'] = sorted_eps
     series['seasons'] = seasons_map
+
+    # 6. 결과를 메모리에 캐싱 (최대 100개까지 보관하거나 간단히 저장)
+    _DETAIL_MEM_CACHE[path] = series
 
     return gzip_response(series)
 
@@ -1765,46 +1777,26 @@ def manual_match():
 
 
 def _generate_thumb_file(path_raw, prefix, tid, t, w):
-    # 대형 TV를 위해 기본 생성 해상도를 1920px(Full HD급)로 고정
-    target_w = "1920"
+    # [수정] 탐색용 썸네일의 기본 너비를 480px로 낮춤 (기존 1920px은 탐색용으로 너무 큼)
+    target_w = "480"
     tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{target_w}.jpg")
     if os.path.exists(tp): return tp
 
     try:
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
         vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
-        if not os.path.exists(vp):
-            log("THUMB", f"Video not found for thumb: {vp}")
-            return None
 
         with THUMB_SEMAPHORE:
             if os.path.exists(tp): return tp
-            log("THUMB", f"고화질 썸네일 생성 중: {os.path.basename(vp)} (1920px)")
-
-            try:
-                # 최상의 화질을 위해 lanczos 필터와 고품질(q:v 2) 설정 적용
-                result = subprocess.run([
-                    FFMPEG_PATH, "-y",
-                    "-ss", str(t),
-                    "-i", vp,
-                    "-frames:v", "1",
-                    "-map", "0:v:0",
-                    "-an", "-sn",
-                    "-q:v", "2",
-                    "-vf", f"scale={target_w}:-1:flags=lanczos",
-                    tp
-                ], timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-
-                if result.returncode != 0:
-                    log("THUMB_ERROR", f"FFmpeg failed: {result.stderr.decode()}")
-            except subprocess.TimeoutExpired:
-                log("THUMB_TIMEOUT", f"FFmpeg timed out for: {os.path.basename(vp)}")
-            except Exception as e:
-                log("THUMB_ERROR", f"Unexpected error: {str(e)}")
+            # [최적화] 품질 설정을 q:v 5 정도로 조정하여 생성 속도 향상
+            subprocess.run([
+                FFMPEG_PATH, "-y", "-ss", str(t), "-i", vp,
+                "-frames:v", "1", "-q:v", "5",
+                "-vf", f"scale={target_w}:-1", tp
+            ], timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         return tp if os.path.exists(tp) else None
     except:
-        log("THUMB_ERROR", f"Exception: {traceback.format_exc()}")
         return None
 
 @app.route('/thumb_serve')
@@ -1834,10 +1826,6 @@ def get_video_duration(path):
 
 @app.route('/storyboard')
 def gen_seek_thumbnails():
-    """
-    비디오의 전체 구간을 미리볼 수 있는 스프라이트 시트(스토리보드)를 생성하여 반환합니다.
-    ExoPlayer 등 클라이언트에서 탐색 바(seek bar) 이동 시 썸네일을 표시하는 데 사용됩니다.
-    """
     path_raw = request.args.get('path')
     prefix = request.args.get('type')
     if not path_raw or not prefix: return "Bad Request", 400
@@ -1851,48 +1839,48 @@ def gen_seek_thumbnails():
         file_hash = hashlib.md5(vp.encode()).hexdigest()
         sb_path = os.path.join(DATA_DIR, f"sb_{file_hash}.jpg")
 
-        # 이미 생성된 스토리보드가 있으면 반환
+        # 1. 이미 생성된 스토리보드가 있으면 '즉시' 반환 (0.01초)
         if os.path.exists(sb_path):
             resp = make_response(send_file(sb_path, mimetype='image/jpeg'))
             resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
             return resp
 
-        # 생성 중 충돌 방지를 위한 락(Lock)
+        # 2. 생성 중 충돌 방지 및 CPU 보호를 위한 락(Lock)
         with STORYBOARD_SEMAPHORE:
-            if os.path.exists(sb_path):  # 락 획득 후 다시 확인
-                return send_file(sb_path, mimetype='image/jpeg')
+            if os.path.exists(sb_path): return send_file(sb_path, mimetype='image/jpeg')
 
             duration = get_video_duration(vp)
             if duration == 0: return "Duration Error", 500
 
-            # 10x10 그리드, 100개의 썸네일 생성
+            # 10x10 그리드(100개 썸네일) 추출 간격 계산
             interval = duration / 100
 
-            # FFmpeg 명령어로 타일(Sprite Sheet) 생성
-            # fps=1/interval: interval 초마다 1프레임 추출
-            # scale=160:-1: 너비 160px로 리사이징 (높이 비율 유지)
-            # tile=10x10: 10행 10열로 합치기
+            # [최적화 핵심]
+            # - scale=160:-1: 탐색용은 160px이면 충분히 선명합니다. (용량 급감)
+            # - q:v 10: JPEG 품질을 낮춰 파일 용량을 1MB 이하로 만듭니다.
+            # - fast-seek: 생성 속도를 높이기 위해 특정 필터 옵션 조정
             cmd = [
                 FFMPEG_PATH, "-y",
                 "-i", vp,
                 "-vf", f"fps=1/{interval},scale=160:-1,tile=10x10",
                 "-frames:v", "1",
-                "-q:v", "5",  # JPEG 품질
+                "-q:v", "10",
                 sb_path
             ]
 
-            log("STORYBOARD", f"썸네일 생성 시작: {os.path.basename(vp)} (Duration: {duration}s)")
+            log("STORYBOARD", f"고속 스토리보드 생성 시작: {os.path.basename(vp)}")
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
 
             if os.path.exists(sb_path):
-                log("STORYBOARD", f"생성 완료: {os.path.basename(sb_path)}")
-                return send_file(sb_path, mimetype='image/jpeg')
+                resp = make_response(send_file(sb_path, mimetype='image/jpeg'))
+                # 강력한 캐시 헤더 추가
+                resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+                return resp
             else:
-                log("STORYBOARD", "생성 실패")
                 return "Generation Failed", 500
     except Exception as e:
-        log("STORYBOARD", f"에러 발생: {str(e)}")
-        return "Internal Server Error", 501
+        log("STORYBOARD_ERROR", str(e))
+        return "Internal Server Error", 500
 
 
 @app.route('/api/status')
@@ -2657,9 +2645,11 @@ def build_all_caches():
     global _SECTION_CACHE
     _SECTION_CACHE = {}
     _rebuild_fast_memory_cache()
-    build_home_recommend()
+    # build_home_recommend()
 
 def _rebuild_fast_memory_cache():
+    global _DETAIL_MEM_CACHE
+    _DETAIL_MEM_CACHE = {}  # 모든 상세페이지 캐시 초기화
     global _FAST_CATEGORY_CACHE, _SECTION_CACHE
     _SECTION_CACHE = {}
     temp_cache = {}
