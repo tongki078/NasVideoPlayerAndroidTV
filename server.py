@@ -1083,10 +1083,16 @@ def get_series_detail_api():
         return gzip_response({})
 
     series = dict(row)
+
+    # 🔴 [수정] 상세페이지 상단 및 회차리스트 왼쪽의 메인 제목을 깔끔하게 변경
+    # 'tmdbTitle'(공식 한글명)이 있으면 그것을, 없으면 정제된 제목을 사용합니다.
+    clean_main_name = series.get('tmdbTitle') or series.get('cleanedName') or series.get('name')
+    series['name'] = clean_main_name
+
     t_id = series.get('tmdbId')
     c_name = series.get('cleanedName')
 
-    # 1. 에피소드 통합 조회 (ID 우선, 없으면 정제된 제목으로)
+    # 에피소드 통합 조회
     if t_id:
         cursor = conn.execute("""
             SELECT * FROM episodes
@@ -1101,27 +1107,30 @@ def get_series_detail_api():
     all_eps = [dict(r) for r in cursor.fetchall()]
     conn.close()
 
-    # 2. 에피소드 중복 제거 및 번호 추출
+    # 에피소드 중복 제거 및 번호 추출
     unique_eps_dict = {}
     for ep in all_eps:
         sn, en = extract_episode_numbers(ep.get('title', ''))
-        # 동일 시즌/회차는 하나만 남김
         if (sn, en) not in unique_eps_dict:
             ep['sn'], ep['en'] = sn, en
+
+            # 🔴 [추가] 회차 리스트 우측의 개별 에피소드 제목도 깔끔하게 정제
+            # 예: '(더빙) 괴수 8호.E01...' -> '1화 괴수 8호'
+            ep['title'] = f"{en}화 {clean_main_name}"
+
             unique_eps_dict[(sn, en)] = ep
 
-    # 3. 정렬 (시즌 -> 회차 순)
+    # 정렬 (시즌 -> 회차 순)
     sorted_eps = sorted(unique_eps_dict.values(), key=lambda x: (x['sn'], x['en']))
 
-    # 4. 시즌별 그룹화 (앱 UI용)
+    # 시즌별 그룹화 (앱 UI용)
     seasons_map = {}
     for ep in sorted_eps:
         sk = f"{ep['sn']}시즌"
         if sk not in seasons_map: seasons_map[sk] = []
         seasons_map[sk].append(ep)
 
-    # 5. [중요] 앱 파싱 에러 방지를 위한 필드 변환
-    # JSON 문자열로 저장된 필드들을 실제 리스트로 변환해줘야 앱에서 정상 인식합니다.
+    # 앱 파싱 에러 방지를 위한 필드 변환
     for col in ['genreIds', 'genreNames', 'actors']:
         if series.get(col) and isinstance(series[col], str):
             try:
