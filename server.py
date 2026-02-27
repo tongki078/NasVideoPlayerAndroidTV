@@ -2700,15 +2700,15 @@ def _rebuild_fast_memory_cache():
             if not r['posterPath'] and cat != 'air':
                 continue
 
-            # 4. 🔴 [핵심 방어벽 복원] 엉뚱한 작품(드라마 등)이 애니 등에 끼어드는 현상 차단
+            # 4. 🔴 [핵심 방어벽 수정] 너무 빡빡한 한글 폴더 검사 제거
             path_lower = r['path'].lower()
             if cat == 'animations_all' and '애니메이션' not in path_lower and '라프텔' not in path_lower:
                 continue
-            elif cat == 'koreantv' and '국내tv' not in path_lower:
-                continue
-            elif cat == 'foreigntv' and '외국tv' not in path_lower:
-                continue
             elif cat == 'movies' and '영화' not in path_lower and 'movie' not in path_lower:
+                continue
+            elif cat == 'koreantv' and not path_lower.startswith('koreantv'):
+                continue
+            elif cat == 'foreigntv' and not path_lower.startswith('foreigntv'):
                 continue
 
             seen_keys.add(group_key)

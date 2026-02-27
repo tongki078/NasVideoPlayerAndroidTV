@@ -153,7 +153,8 @@ fun HomeScreen(
                                 }
                             },
                             onDetailClick = { onSeriesClick(heroSeries) },
-                            horizontalPadding = standardMargin
+                            horizontalPadding = standardMargin,
+                            isFirstLoad = lastFocusedPath == null // 🔴 앱 시작 시에만 포커스 허용하도록 플래그 전달
                         )
                     }
                 } else if (isLoading) {
@@ -202,7 +203,7 @@ fun HomeScreen(
                     val rowKey = "row_${section.title}"
                     val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
                     Column(modifier = Modifier.fillMaxWidth()) { 
-                        // 🔴 [수정] 초성 리스트 지원 SectionTitle 호출
+                        // 초성 리스트 지원 SectionTitle 호출
                         SectionTitle(
                             title = section.title, 
                             horizontalPadding = standardMargin,

@@ -21,6 +21,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -35,6 +37,7 @@ import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 import org.nas.videoplayerandroidtv.data.WatchHistory
 import org.nas.videoplayerandroidtv.util.TitleUtils.getInitialSound
+import kotlinx.coroutines.delay
 
 @Composable
 fun HeroSection(
@@ -42,7 +45,8 @@ fun HeroSection(
     watchHistory: WatchHistory? = null, 
     onPlayClick: () -> Unit,
     onDetailClick: () -> Unit,
-    horizontalPadding: androidx.compose.ui.unit.Dp
+    horizontalPadding: androidx.compose.ui.unit.Dp,
+    isFirstLoad: Boolean = false // 🔴 파라미터 추가
 ) {
     val title = series.title
     Box(modifier = Modifier.fillMaxWidth().height(460.dp).background(Color.Black)) {
@@ -105,7 +109,17 @@ fun HeroSection(
                     watchHistory.lastPosition.toFloat() / watchHistory.duration
                 } else null
 
+                // 🔴 [수정] 앱 시작 시 재생 버튼이 최초 포커스를 갖도록 설정 (isFirstLoad일 때만)
+                val playButtonFocusRequester = remember { FocusRequester() }
+                LaunchedEffect(isFirstLoad) {
+                    if (isFirstLoad) {
+                        delay(300) // UI가 그려진 후 포커스 요청
+                        try { playButtonFocusRequester.requestFocus() } catch (_: Exception) {}
+                    }
+                }
+
                 HeroButton(
+                    modifier = Modifier.focusRequester(playButtonFocusRequester),
                     text = if (isContinuing) "계속 시청" else "재생",
                     icon = Icons.Default.PlayArrow,
                     isPrimary = true,
@@ -140,6 +154,7 @@ private fun HeroBadge(text: String, color: Color = Color.White.copy(alpha = 0.15
 
 @Composable
 private fun HeroButton(
+    modifier: Modifier = Modifier,
     text: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     isPrimary: Boolean,
@@ -164,7 +179,7 @@ private fun HeroButton(
         onClick = onClick,
         shape = RoundedCornerShape(4.dp), // 심플한 사각형 모서리
         color = backgroundColor,
-        modifier = Modifier
+        modifier = modifier
             .graphicsLayer { 
                 scaleX = scale
                 scaleY = scale
@@ -198,7 +213,7 @@ private fun HeroButton(
     }
 }
 
-// 🔴 [수정] 초성 리스트를 항상 고정으로 표시하고, 해당 초성이 없으면 비활성화
+// 초성 리스트를 항상 고정으로 표시하고, 해당 초성이 없으면 비활성화
 @Composable
 fun SectionTitle(
     title: String, 
