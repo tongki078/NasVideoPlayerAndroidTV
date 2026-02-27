@@ -110,7 +110,8 @@ fun HomeScreen(
                 try {
                     lazyListState.scrollToItem(foundRowIndex)
                     rowFocusIndices[foundRowKey] = foundItemIndex
-                    onFocusRestored()
+                    // onFocusRestored는 개별 아이템에서 포커스를 받은 후 호출하도록 변경하거나 
+                    // 여기서 호출하되 아이템이 준비될 때까지 기다려야 함.
                 } catch (_: Exception) {}
             }
         }
@@ -190,6 +191,8 @@ fun HomeScreen(
                                     state = rowState,
                                     marginPx = marginPx,
                                     focusRequester = focusRequester,
+                                    shouldRequestFocus = history.seriesPath == lastFocusedPath,
+                                    onFocusRestored = onFocusRestored,
                                     onClick = { onHistoryClick(history) }
                                 )
                             }
@@ -224,6 +227,8 @@ fun HomeScreen(
                                 overview = item.overview,
                                 year = item.year,
                                 rating = item.rating,
+                                shouldRequestFocus = item.path == lastFocusedPath,
+                                onFocusRestored = onFocusRestored,
                                 onClick = { onSeriesClick(item.toSeries()) }
                             )
                         }

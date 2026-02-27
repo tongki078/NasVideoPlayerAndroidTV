@@ -999,10 +999,12 @@ def get_sections_for_category(cat, kw=None):
         sections = [{"title": "실시간 방영 중", "items": target_list}]
     else:
         sections = []
+        # 1. 오늘의 추천 (랜덤)
         if len(target_list) > 20:
             random_picks = random.sample(target_list, min(40, len(target_list)))
             sections.append({"title": f"{kw if is_search else ''} 오늘의 추천".strip(), "items": random_picks})
 
+        # 2. 최신 공개작
         recent_items = [i for i in target_list if i.get('year') and i['year'] >= '2024']
         if len(recent_items) >= 5:
             sections.append({"title": f"{kw if is_search else ''} 최신 공개작".strip(), "items": recent_items[:100]})
@@ -1021,6 +1023,12 @@ def get_sections_for_category(cat, kw=None):
             if len(g_items) >= 5:
                 title = f"{kw if is_search else ''} 인기 {g}".strip()
                 sections.append({"title": title, "items": random.sample(g_items, min(60, len(g_items)))})
+
+        # 🔴 [수정] 전체 목록 정렬 로직
+        # 애니메이션 카테고리이거나 검색 중이 아닐 때 가나다순으로 정렬
+        all_list_items = list(target_list)
+        if cat == 'animations_all':
+            all_list_items.sort(key=lambda x: x['name'])
 
         sections.append({"title": "전체 목록", "items": target_list[:800]})
 
@@ -1174,6 +1182,7 @@ def search_videos():
     q = nfc(request.args.get('q', '')).lower().strip()
     if not q: return jsonify([])
 
+    log("SEARCH", f"🔍 검색 요청 수신: '{q}'")
     conn = get_db()
 
     # 2. 검색 및 그룹화 쿼리 (스페셜, 더빙, 자막 분리 로직 완벽 복원)
@@ -1214,9 +1223,6 @@ def search_videos():
     for row in cursor.fetchall():
         item = dict(row)
 
-        # [원칙 유지] 포스터가 있는 고화질 영상만 노출
-        if not item.get('posterPath'): continue
-
         # 3. 화면에 보여줄 이름 결정 (태그 조합 로직 완벽 복원)
         # 사용자가 더빙인지 자막인지, 극장판인지 검색 결과에서 바로 알 수 있습니다.
         orig_path = item.get('path', '').lower()
@@ -1243,6 +1249,7 @@ def search_videos():
         rows.append(item)
 
     conn.close()
+    log("SEARCH", f"✅ 검색 완료: '{q}' -> {len(rows)}건 발견")
     return gzip_response(rows)
 
 @app.route('/rescan_broken')

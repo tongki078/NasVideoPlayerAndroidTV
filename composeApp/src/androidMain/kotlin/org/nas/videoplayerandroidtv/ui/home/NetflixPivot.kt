@@ -107,6 +107,8 @@ fun NetflixPivotItem(
     rating: String? = null,
     year: String? = null,
     overview: String? = null,
+    shouldRequestFocus: Boolean = false, // 추가
+    onFocusRestored: () -> Unit = {},    // 추가
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -121,6 +123,14 @@ fun NetflixPivotItem(
     val coroutineScope = rememberCoroutineScope()
     var dataLoadingJob by remember { mutableStateOf<Job?>(null) }
     var previewJob by remember { mutableStateOf<Job?>(null) }
+
+    // [추가] 포커스 강제 요청 로직
+    LaunchedEffect(shouldRequestFocus) {
+        if (shouldRequestFocus) {
+            focusRequester.requestFocus()
+            onFocusRestored()
+        }
+    }
 
     LaunchedEffect(isFocused) {
         if (isFocused) {
