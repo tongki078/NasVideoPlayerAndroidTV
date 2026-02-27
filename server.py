@@ -1777,39 +1777,60 @@ def manual_match():
 
 
 def _generate_thumb_file(path_raw, prefix, tid, t, w):
-    # [수정] 탐색용 썸네일의 기본 너비를 480px로 낮춤 (기존 1920px은 탐색용으로 너무 큼)
-    target_w = "480"
+    # 기본 너비를 1280 정도로 조정 (너무 크면 NAS가 힘들어하고, 작으면 화질이 깨짐)
+    target_w = "1280"
     tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{target_w}.jpg")
-    if os.path.exists(tp): return tp
+    if os.path.exists(tp) and os.path.getsize(tp) > 0: return tp
 
     try:
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
-        vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
+        # 🔴 경로 디코딩 로그 추가
+        decoded_path = urllib.parse.unquote_plus(path_raw)
+        vp = get_real_path(os.path.join(base, nfc(decoded_path)))
+
+        if not os.path.exists(vp):
+            log("THUMB_DIAG", f"❌ 파일을 찾을 수 없음: {vp}")
+            return None
 
         with THUMB_SEMAPHORE:
             if os.path.exists(tp): return tp
-            # [최적화] 품질 설정을 q:v 5 정도로 조정하여 생성 속도 향상
+            log("THUMB_DIAG", f"📸 썸네일 생성 중: {os.path.basename(vp)} ({t}초 지점)")
+
+            # 생성 속도를 위해 고속 추출 옵션(-ss를 -i 앞에) 사용
             subprocess.run([
-                FFMPEG_PATH, "-y", "-ss", str(t), "-i", vp,
-                "-frames:v", "1", "-q:v", "5",
-                "-vf", f"scale={target_w}:-1", tp
-            ], timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                FFMPEG_PATH, "-y",
+                "-ss", str(t),
+                "-i", vp,
+                "-frames:v", "1",
+                "-q:v", "5",
+                "-vf", f"scale={target_w}:-1",
+                tp
+            ], timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         return tp if os.path.exists(tp) else None
-    except:
+    except Exception as e:
+        log("THUMB_DIAG", f"⚠️ 에러 발생: {str(e)}")
         return None
+
 
 @app.route('/thumb_serve')
 def thumb_serve():
-    path, prefix, tid = request.args.get('path'), request.args.get('type'), request.args.get('id')
+    path = request.args.get('path')
+    prefix = request.args.get('type')
+    tid = request.args.get('id')
     t = request.args.get('t', default="300")
-    w = request.args.get('w', default="1920") # 기본 요청 해상도를 1920으로 상향
+    w = request.args.get('w', default="1280")
+
+    # 🔴 요청이 들어오는지 확인하는 로그
+    log("THUMB_DIAG", f"🔗 썸네일 요청 수신: {path[:30]}... (type={prefix}, t={t})")
 
     tp = _generate_thumb_file(path, prefix, tid, t, w)
     if tp and os.path.exists(tp):
         resp = make_response(send_file(tp, mimetype='image/jpeg'))
         resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
         return resp
+
+    log("THUMB_DIAG", "❌ 썸네일 반환 실패 (파일 없음)")
     return "Not Found", 404
 
 
@@ -1828,58 +1849,61 @@ def get_video_duration(path):
 def gen_seek_thumbnails():
     path_raw = request.args.get('path')
     prefix = request.args.get('type')
-    if not path_raw or not prefix: return "Bad Request", 400
+    log("DIAG", "=== 스토리보드 생성 진단 시작 ===")
+    log("DIAG", f"1. 앱에서 전달된 경로: {path_raw}")
 
     try:
+        # 1. 경로 복원 및 검증
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
-        vp = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
-        if not os.path.exists(vp): return "Not Found", 404
+        decoded_path = urllib.parse.unquote_plus(path_raw)
+        vp = get_real_path(os.path.join(base, nfc(decoded_path)))
+        log("DIAG", f"2. 서버에서 찾은 실제 경로: {vp}")
 
-        # 파일명 기반 해시 생성 (캐시용)
+        if not os.path.exists(vp):
+            log("DIAG", "❌ 에러: 파일을 찾을 수 없습니다. 경로를 다시 확인하세요.")
+            return "Not Found", 404
+
+        # 2. 영상 길이 확인
+        duration = get_video_duration(vp)
+        log("DIAG", f"3. 영상 재생 시간: {duration}초")
+
+        if duration == 0:
+            log("DIAG", "❌ 에러: ffprobe가 영상 길이를 읽지 못했습니다.")
+            return "Duration Error", 500
+
+        # 3. 캐시 확인
         file_hash = hashlib.md5(vp.encode()).hexdigest()
         sb_path = os.path.join(DATA_DIR, f"sb_{file_hash}.jpg")
 
-        # 1. 이미 생성된 스토리보드가 있으면 '즉시' 반환 (0.01초)
-        if os.path.exists(sb_path):
-            resp = make_response(send_file(sb_path, mimetype='image/jpeg'))
-            resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
-            return resp
+        if os.path.exists(sb_path) and os.path.getsize(sb_path) > 0:
+            log("DIAG", "4. 기존 캐시 파일 발견. 즉시 반환합니다.")
+            return send_file(sb_path, mimetype='image/jpeg')
 
-        # 2. 생성 중 충돌 방지 및 CPU 보호를 위한 락(Lock)
+        # 4. 스토리보드 생성 시도
         with STORYBOARD_SEMAPHORE:
-            if os.path.exists(sb_path): return send_file(sb_path, mimetype='image/jpeg')
-
-            duration = get_video_duration(vp)
-            if duration == 0: return "Duration Error", 500
-
-            # 10x10 그리드(100개 썸네일) 추출 간격 계산
-            interval = duration / 100
-
-            # [최적화 핵심]
-            # - scale=160:-1: 탐색용은 160px이면 충분히 선명합니다. (용량 급감)
-            # - q:v 10: JPEG 품질을 낮춰 파일 용량을 1MB 이하로 만듭니다.
-            # - fast-seek: 생성 속도를 높이기 위해 특정 필터 옵션 조정
+            log("DIAG", "5. FFmpeg 생성 명령을 실행합니다...")
             cmd = [
                 FFMPEG_PATH, "-y",
                 "-i", vp,
-                "-vf", f"fps=1/{interval},scale=160:-1,tile=10x10",
-                "-frames:v", "1",
-                "-q:v", "10",
+                "-vf", f"fps=101/{duration},scale=160:90,tile=10x10",
+                "-frames:v", "1", "-an", "-sn", "-dn", "-q:v", "5",
                 sb_path
             ]
+            log("DIAG", f"6. 실행 명령어: {' '.join(cmd)}")
 
-            log("STORYBOARD", f"고속 스토리보드 생성 시작: {os.path.basename(vp)}")
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
 
             if os.path.exists(sb_path):
+                log("DIAG", f"✅ 생성 성공: {sb_path}")
                 resp = make_response(send_file(sb_path, mimetype='image/jpeg'))
-                # 강력한 캐시 헤더 추가
                 resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
                 return resp
             else:
+                log("DIAG", f"❌ 생성 실패. FFmpeg 메시지: {proc.stderr}")
                 return "Generation Failed", 500
+
     except Exception as e:
-        log("STORYBOARD_ERROR", str(e))
+        log("DIAG", f"❌ 서버 내부 예외 발생: {str(e)}")
         return "Internal Server Error", 500
 
 
@@ -2642,45 +2666,42 @@ def fix_wrong_match():
         return f"에러 발생: {str(e)}"
 
 def build_all_caches():
-    global _SECTION_CACHE
-    _SECTION_CACHE = {}
+    # 이 함수는 외부(업데이터 등)에서 캐시 갱신을 요청할 때만 사용합니다.
     _rebuild_fast_memory_cache()
-    # build_home_recommend()
 
 def _rebuild_fast_memory_cache():
-    global _DETAIL_MEM_CACHE
-    _DETAIL_MEM_CACHE = {}  # 모든 상세페이지 캐시 초기화
-    global _FAST_CATEGORY_CACHE, _SECTION_CACHE
+    global _FAST_CATEGORY_CACHE, _SECTION_CACHE, _DETAIL_MEM_CACHE
+    log("SYSTEM", "⚡ 메모리 캐시 최적화 빌드 시작...")
     _SECTION_CACHE = {}
+    _DETAIL_MEM_CACHE = {}
     temp_cache = {}
     conn = get_db()
+
     for cat in ["movies", "foreigntv", "koreantv", "animations_all", "air"]:
-        query = """
-            SELECT
-                MAX(tmdbTitle) as tmdbTitle,
-                MAX(cleanedName) as cleanedName,
-                MAX(posterPath) as posterPath,
-                MAX(yearVal) as yearVal,
-                MAX(year) as year,
-                MAX(genreNames) as genreNames,
-                MAX(overview) as overview,
-                MAX(tmdbId) as tmdbId,
-                MIN(path) as path,
-                MIN(name) as name,
-                COALESCE(NULLIF(tmdbId, ''), cleanedName) as group_key
-            FROM series
-            WHERE category = ?
-            GROUP BY group_key
-            ORDER BY MAX(yearVal) DESC, name ASC
-        """
+        # SQL에서는 복잡한 계산 없이 인덱스(category, yearVal)를 탈 수 있는 단순 조회만 수행
+        query = "SELECT * FROM series WHERE category = ? ORDER BY yearVal DESC"
         rows = conn.execute(query, (cat,)).fetchall()
+
         items = []
+        seen_keys = set()  # 중복 체크용 고속 Set
+
         for r in rows:
-            if not r['posterPath'] and cat != 'air': continue
+            # 1. 중복 판단 키 생성 (ID가 있으면 ID, 없으면 정제된 이름)
+            group_key = r['tmdbId'] if r['tmdbId'] else r['cleanedName']
+            if not group_key: continue
 
-            # [수정] 폴더 태그를 붙이지 않고 순수 이름만 사용
+            # 2. 이미 처리한 작품이면 건너뜀 (메모리에서 즉시 처리되므로 SQL보다 수백 배 빠름)
+            if group_key in seen_keys:
+                continue
+
+            # 3. 포스터가 없는 항목 필터링 (방송중 제외)
+            if not r['posterPath'] and cat != 'air':
+                continue
+
+            seen_keys.add(group_key)
+
+            # 4. 앱 노출용 데이터 구성
             display_name = r['tmdbTitle'] or r['cleanedName'] or r['name']
-
             items.append({
                 "path": r['path'],
                 "name": display_name.strip(),
@@ -2691,9 +2712,13 @@ def _rebuild_fast_memory_cache():
                 "tmdbId": r['tmdbId'],
                 "movies": []
             })
+
         temp_cache[cat] = items
+        log("SYSTEM", f"✅ {cat} 캐시 완료 ({len(items)}개)")
+
     conn.close()
     _FAST_CATEGORY_CACHE = temp_cache
+    # 홈 추천 데이터 빌드 호출
     build_home_recommend()
 
 def clean_title_generic(full_path, category_base_path):

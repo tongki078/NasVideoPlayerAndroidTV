@@ -332,7 +332,7 @@ fun VideoPlayerScreen(
                             LazyRow(state = thumbListState, contentPadding = PaddingValues(horizontal = horizontalPadding), horizontalArrangement = Arrangement.spacedBy(20.dp), userScrollEnabled = false, modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                                 itemsIndexed(allThumbnails) { _, timestamp ->
                                     Box(modifier = Modifier.width(280.dp).height(160.dp).clip(RoundedCornerShape(8.dp)).background(Color.DarkGray).border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))) {
-                                        AsyncImage(model = ImageRequest.Builder(LocalContext.current).data("${NasApiClient.BASE_URL}${currentMovie.videoUrl?.replace("video_serve", "thumb_serve")}&id=${currentMovie.id}&t=${timestamp/1000}").crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                        AsyncImage(model = ImageRequest.Builder(LocalContext.current).data("${currentMovie.videoUrl?.replace("video_serve", "thumb_serve")}&id=${currentMovie.id}&t=${timestamp/1000}").crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                                     }
                                 }
                             }
