@@ -47,8 +47,6 @@ fun HomeScreen(
     val standardMargin = 20.dp 
     val coroutineScope = rememberCoroutineScope()
 
-    // [중복 제거 핵심] 서버(/home)에서 이미 섹션을 구성해서 보내주므로, 
-    // 앱에서 수동으로 다시 가져오던 로직을 제거합니다. (Theme 중복 호출 방지)
     val combinedSections = remember(homeSections) {
         homeSections.map { section: HomeSection ->
             section.copy(
@@ -78,8 +76,18 @@ fun HomeScreen(
 
     val heroItem = heroPool.getOrNull(currentHeroIndex)
 
-    // [포커스 복구 로직]
-    LaunchedEffect(lastFocusedPath, combinedSections, isLoading) {
+    // [포커스 복구 및 카테고리 전환 처리]
+    LaunchedEffect(currentScreen, lastFocusedPath, combinedSections, isLoading) {
+        // lastFocusedPath가 null이면 (카테고리 전환 등) 최상단으로 강제 스크롤 및 포커스 정보 초기화
+        if (lastFocusedPath == null && !isLoading) {
+            try {
+                rowFocusIndices.clear() // 이전 카테고리의 포커스 인덱스들 초기화
+                lazyListState.scrollToItem(0)
+            } catch (_: Exception) {}
+            return@LaunchedEffect
+        }
+
+        // 포커스 복구 로직 (기존 항목으로 돌아올 때)
         if (lastFocusedPath != null && combinedSections.isNotEmpty() && !isLoading) {
             var foundRowIndex = -1
             var foundItemIndex = -1
@@ -154,7 +162,7 @@ fun HomeScreen(
                             },
                             onDetailClick = { onSeriesClick(heroSeries) },
                             horizontalPadding = standardMargin,
-                            isFirstLoad = lastFocusedPath == null // 🔴 앱 시작 시에만 포커스 허용하도록 플래그 전달
+                            isFirstLoad = false // 카테고리 클릭 시 포커스 강제 이동 방지 (TopBar 유지)
                         )
                     }
                 } else if (isLoading) {
@@ -190,7 +198,7 @@ fun HomeScreen(
                                     state = rowState,
                                     marginPx = marginPx,
                                     focusRequester = focusRequester,
-                                    shouldRequestFocus = history.seriesPath == lastFocusedPath,
+                                    shouldRequestFocus = lastFocusedPath != null && history.seriesPath == lastFocusedPath,
                                     onFocusRestored = onFocusRestored,
                                     onClick = { onHistoryClick(history) }
                                 )
@@ -203,7 +211,6 @@ fun HomeScreen(
                     val rowKey = "row_${section.title}"
                     val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
                     Column(modifier = Modifier.fillMaxWidth()) { 
-                        // 초성 리스트 지원 SectionTitle 호출
                         SectionTitle(
                             title = section.title, 
                             horizontalPadding = standardMargin,
@@ -238,7 +245,7 @@ fun HomeScreen(
                                 overview = item.overview,
                                 year = item.year,
                                 rating = item.rating,
-                                shouldRequestFocus = item.path == lastFocusedPath,
+                                shouldRequestFocus = lastFocusedPath != null && item.path != null && item.path == lastFocusedPath,
                                 onFocusRestored = onFocusRestored,
                                 onClick = { onSeriesClick(item.toSeries()) }
                             )
@@ -263,21 +270,3 @@ private fun Category.toSeries() = Series(
     year = this.year,
     rating = this.rating
 )
-
-private fun List<Series>.toCategories(): List<Category> {
-    return this.map { series: Series ->
-        Category(
-            name = series.title,
-            path = series.fullPath,
-            posterPath = series.posterPath,
-            genreIds = series.genreIds,
-            genreNames = series.genreNames,
-            director = series.director,
-            actors = series.actors,
-            overview = series.overview,
-            year = series.year,
-            rating = series.rating,
-            movies = series.episodes
-        )
-    }
-}
