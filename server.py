@@ -953,7 +953,6 @@ def fetch_metadata_async(force_all=False):
     finally:
         IS_METADATA_RUNNING = False
 
-
 def get_sections_for_category(cat, kw=None):
     cache_key = f"sections_{cat}_{kw}"
     if cache_key in _SECTION_CACHE:
@@ -963,32 +962,58 @@ def get_sections_for_category(cat, kw=None):
     if not cat_data: return []
 
     base_list = cat_data.get("all", [])
-    genre_precalc = cat_data.get("genre_map", {})
+    genre_map = cat_data.get("genre_map", {})
+    folders = cat_data.get("folders", {})  # 미리 분류된 폴더들
+
     if not base_list: return []
 
     target_list = base_list
     is_search = False
+
+    # [수술 핵심] '제목', '최신', 'UHD' 등을 검색어가 아닌 "폴더 필터"로 처리
     if kw and kw not in ["전체", "All"]:
-        sk = kw.strip().lower()
-        target_list = [i for i in base_list if sk in i['path'].lower() or sk in i['name'].lower()]
-        is_search = True
+        if kw in folders:
+            # kw가 폴더명(제목, 최신, UHD)이면 준비된 리스트 사용 (섞임 발생 안 함)
+            target_list = folders[kw]
+        else:
+            # 그 외의 경우에만 실제 검색 수행 (사용자 직접 검색)
+            sk = kw.strip().lower()
+            target_list = [i for i in base_list if sk in i['path'].lower() or sk in i['name'].lower()]
+            is_search = True
+            # 검색 결과에 대해서만 장르 재분류
+            genre_map = {}
+            for item in target_list:
+                for g in item.get('genreNames', []):
+                    genre_map.setdefault(g, []).append(item)
+
+    if not target_list: return []
 
     if cat == 'air':
         sections = [{"title": "실시간 방영 중", "items": target_list}]
     else:
         sections = []
+        # 1. 추천 섹션
         if len(target_list) > 10:
-            sections.append({"title": "오늘의 추천", "items": random.sample(target_list, min(30, len(target_list)))})
+            sections.append({
+                "title": f"{kw if kw else ''} 오늘의 추천".strip(),
+                "items": random.sample(target_list, min(40, len(target_list)))
+            })
 
-        # 미리 분류된 장르 활용
-        if not is_search:
-            top_genres = sorted(genre_precalc.keys(), key=lambda x: len(genre_precalc[x]), reverse=True)[:3]
-            for g in top_genres:
-                g_items = genre_precalc[g]
-                if len(g_items) >= 5:
-                    sections.append({"title": f"인기 {g}", "items": random.sample(g_items, min(40, len(g_items)))})
+        # 2. 장르별 섹션 (영화 '제목' 탭처럼 데이터가 너무 많을 때는 연산 절약을 위해 생략)
+        if not (cat == 'movies' and kw == '제목'):
+            sorted_genres = sorted(genre_map.keys(), key=lambda x: len(genre_map[x]), reverse=True)
+            for g in [g for g in sorted_genres if g not in ["TV 영화", "애니메이션"]][:3]:
+                if len(genre_map[g]) >= 5:
+                    sections.append({
+                        "title": f"인기 {g}",
+                        "items": random.sample(genre_map[g], min(60, len(genre_map[g])))
+                    })
 
-        sections.append({"title": "전체 목록", "items": target_list})
+        # 3. 전체 목록
+        sections.append({
+            "title": "전체 목록" if not is_search else f"'{kw}' 검색 결과",
+            "items": target_list
+        })
 
     _SECTION_CACHE[cache_key] = sections
     return sections
@@ -1004,7 +1029,6 @@ def get_category_sections():
 def get_home():
     return gzip_response(HOME_RECOMMEND)
 
-
 @app.route('/list')
 def get_list():
     p = request.args.get('path', '')
@@ -1013,9 +1037,8 @@ def get_list():
     for label, code in m.items():
         if label in p: cat = code; break
 
-    # 구조 변경 대응
     cat_data = _FAST_CATEGORY_CACHE.get(cat, {})
-    bl = cat_data.get("all", [])
+    bl = cat_data.get("all", []) # 바뀐 구조 대응
 
     kw = request.args.get('keyword')
     lim = int(request.args.get('limit', 1000))
@@ -1023,8 +1046,7 @@ def get_list():
 
     if kw and kw not in ["전체", "All"]:
         search_kw = nfc(kw).lower()
-        res = [item for item in bl if
-               f"/{search_kw}/" in f"/{item['path'].lower()}/" or search_kw in item['name'].lower()]
+        res = [item for item in bl if f"/{search_kw}/" in f"/{item['path'].lower()}/" or search_kw in item['name'].lower()]
     else:
         res = bl
 
@@ -1430,46 +1452,75 @@ def kill_old_processes(sid):
         except:
             pass
 
-
 @app.route('/video_serve')
 def video_serve():
-    path, prefix = request.args.get('path'), request.args.get('type')
+    path_raw, prefix = request.args.get('path'), request.args.get('type')
     try:
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
-        full_path = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path))))
+        full_path = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
+
         if not os.path.exists(full_path):
-            log("VIDEO", f"File not found: {full_path}")
+            log("VIDEO", f"파일을 찾을 수 없음: {full_path}")
             return "Not Found", 404
 
-        # [iOS HLS Logic]
         ua = request.headers.get('User-Agent', '').lower()
         is_ios = any(x in ua for x in ['iphone', 'ipad', 'apple', 'avfoundation'])
 
-        # [수정] 안드로이드나 에뮬레이터(ExoPlayer)에서 'apple' 키워드로 인해 iOS로 오판되는 현상 방지
+        # 안드로이드/ExoPlayer는 iOS 로직(HLS 강제 전환)에서 제외
         if 'android' in ua or 'exoplayer' in ua:
             is_ios = False
 
-        if is_ios and not full_path.lower().endswith(('.mp4', '.m4v', '.mov')):
+        # --- [iOS용 HLS 스트리밍 로직] ---
+        file_ext = full_path.lower()
+        if is_ios and not file_ext.endswith(('.mp4', '.m4v', '.mov')):
             sid = hashlib.md5(full_path.encode()).hexdigest()
             kill_old_processes(sid)
-
             sdir = os.path.join(HLS_ROOT, sid)
             os.makedirs(sdir, exist_ok=True)
             video_m3u8 = os.path.join(sdir, "video.m3u8")
 
             if not os.path.exists(video_m3u8):
-                cmd = [FFMPEG_PATH, '-y', '-i', full_path, '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
-                       '-sn', '-c:a', 'aac', '-f', 'hls', '-hls_time', '6', '-hls_list_size', '0', video_m3u8]
+                # 영상은 그대로 복사, 소리만 AAC로 변환하여 HLS 생성
+                cmd = [FFMPEG_PATH, '-y', '-i', full_path,
+                       '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+                       '-f', 'hls', '-hls_time', '6', '-hls_list_size', '0', video_m3u8]
                 FFMPEG_PROCS[sid] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 for _ in range(40):
                     if os.path.exists(video_m3u8): break
                     time.sleep(0.5)
-
             return redirect(f"http://{MY_IP}:5000/hls/{sid}/video.m3u8")
 
+        # --- [안드로이드/PC용 소리 문제 해결 로직] ---
+        # 주소창에 &transcode=true가 붙어오면 오디오를 AAC로 실시간 변환하여 전송
+        # (만약 모든 영화에서 무조건 소리가 나게 하려면 아래 조건을 True로 바꾸세요)
+        force_transcode_audio = request.args.get('transcode') == 'true'
+
+        if force_transcode_audio:
+            log("VIDEO", f"🔊 오디오 실시간 AAC 변환 시작: {os.path.basename(full_path)}")
+
+            def generate_transcoded():
+                # -c:v copy (영상은 그대로), -c:a aac (소리만 변환)
+                cmd = [
+                    FFMPEG_PATH, "-i", full_path,
+                    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                    "-f", "matroska", "pipe:1"
+                ]
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                try:
+                    while True:
+                        chunk = proc.stdout.read(65536)
+                        if not chunk: break
+                        yield chunk
+                finally:
+                    proc.kill()
+
+            return Response(generate_transcoded(), mimetype='video/x-matroska')
+
+        # 기본값: 원본 파일 전송 (가장 빠르고 Seek 지원이 원활함)
         return send_file(full_path, conditional=True)
-    except:
-        log("VIDEO", f"Error serving video: {traceback.format_exc()}")
+
+    except Exception as e:
+        log("VIDEO_ERROR", f"재생 중 에러 발생: {str(e)}")
         return "Internal Server Error", 500
 
 
@@ -2650,44 +2701,56 @@ def build_all_caches():
 
 def _rebuild_fast_memory_cache():
     global _FAST_CATEGORY_CACHE, _SECTION_CACHE, _DETAIL_MEM_CACHE
-    log("SYSTEM", "⚡ 메모리 캐시 최적화 빌드 시작 (정제 자동 복구 포함)...")
+    log("SYSTEM", "⚡ 메모리 캐시 최적화 빌드 시작 (카테고리 엄격 분리 및 폴더 분류)...")
     _SECTION_CACHE = {}
     _DETAIL_MEM_CACHE = {}
     temp_cache = {}
     conn = get_db()
 
+    # 각 카테고리별로 정확한 경로 키워드 정의
+    STRICT_PATH_MAP = {
+        "movies": ["영화", "movie"],
+        "foreigntv": ["외국tv", "foreigntv"],
+        "koreantv": ["국내tv", "koreantv"],
+        "animations_all": ["애니메이션", "animations_all", "라프텔"],
+        "air": ["방송중", "air"]
+    }
+
     for cat in ["movies", "foreigntv", "koreantv", "animations_all", "air"]:
+        # DB에서 해당 카테고리로 분류된 모든 데이터 조회
         query = "SELECT path, name, cleanedName, tmdbTitle, tmdbId, posterPath, year, genreNames, overview FROM series WHERE category = ? ORDER BY yearVal DESC"
         rows = conn.execute(query, (cat,)).fetchall()
 
         items = []
         seen_keys = set()
         genre_precalc = {}
-        recent_precalc = []
+        folder_precalc = {}  # 서브 폴더(최신, UHD, 제목)별 사전 분류
+
+        allowed_keywords = STRICT_PATH_MAP.get(cat, [])
 
         for r in rows:
+            path = r['path']
+            path_lower = path.lower()
+
+            # [수술 핵심 1] 다른 카테고리가 섞여 들어오는 것을 경로 기반으로 완전 차단
+            is_valid_path = any(kw in path_lower for kw in allowed_keywords)
+            if not is_valid_path:
+                continue
+
+            # [수술 핵심 2] 중복 제거
             tmdb_id = r['tmdbId']
-            # DB에 없으면 실시간으로 계산해서 캐시에 보관 (속도와 중복 제거 동시에 해결)
-            c_name = r['cleanedName'] or clean_title_complex(r['name'], full_path=r['path'])[0]
-
+            c_name = r['cleanedName'] or clean_title_complex(r['name'], full_path=path)[0]
             group_key = tmdb_id if tmdb_id else c_name
-            if not group_key or group_key in seen_keys: continue
+            if not group_key or group_key in seen_keys:
+                continue
 
-            path_lower = r['path'].lower()
-            if not r['posterPath'] and cat != 'air': continue
-
-            # 기존 방어벽 유지
-            if cat == 'animations_all' and '애니메이션' not in path_lower and '라프텔' not in path_lower:
-                continue
-            elif cat == 'movies' and '영화' not in path_lower and 'movie' not in path_lower:
-                continue
-            elif cat == 'koreantv' and not path_lower.startswith('koreantv'):
-                continue
-            elif cat == 'foreigntv' and not path_lower.startswith('foreigntv'):
+            # 포스터 없는 항목 제외 (방송중 제외)
+            if not r['posterPath'] and cat != 'air':
                 continue
 
             seen_keys.add(group_key)
 
+            # 데이터 구성
             genres = []
             if r['genreNames']:
                 try:
@@ -2697,17 +2760,26 @@ def _rebuild_fast_memory_cache():
 
             display_name = r['tmdbTitle'] or c_name or r['name']
             item = {
-                "path": r['path'], "name": display_name.strip(), "posterPath": r['posterPath'],
+                "path": path, "name": display_name.strip(), "posterPath": r['posterPath'],
                 "year": r['year'], "genreNames": genres, "overview": r['overview'], "tmdbId": tmdb_id
             }
             items.append(item)
 
+            # [수술 핵심 3] 폴더명에 따른 사전 분류 (최신, UHD, 제목 등)
+            # 경로 구조: movies/제목/영화명.mkv -> parts[1]이 '제목'
+            parts = path.split('/')
+            if len(parts) >= 2:
+                folder_name = parts[1]  # 실제 서버의 서브 폴더명
+                folder_precalc.setdefault(folder_name, []).append(item)
+
             for g in genres:
                 genre_precalc.setdefault(g, []).append(item)
-            if r['year'] and r['year'] >= '2024':
-                recent_precalc.append(item)
 
-        temp_cache[cat] = {"all": items, "genre_map": genre_precalc, "recent": recent_precalc}
+        temp_cache[cat] = {
+            "all": items,
+            "genre_map": genre_precalc,
+            "folders": folder_precalc
+        }
         log("SYSTEM", f"✅ {cat} 캐시 빌드 완료 ({len(items)}개)")
 
     conn.close()
@@ -2761,29 +2833,21 @@ def build_home_recommend():
         new_sections = []
 
         def get_unique_picks(cat_name, limit=15):
-            # 구조 변경 대응
             cat_data = _FAST_CATEGORY_CACHE.get(cat_name, {})
-            items = list(cat_data.get("all", []))
+            items = list(cat_data.get("all", []))  # 바뀐 구조 대응
             if not items: return []
             random.shuffle(items)
             return items[:limit]
 
-        ftv = get_unique_picks('foreigntv')
-        if ftv:
-            new_sections.append({"title": "인기 외국 TV 시리즈", "items": ftv})
-            log("HOME", f"✅ 외국 TV 빌드 완료: {len(ftv)}개")
-
-        ktv = get_unique_picks('koreantv')
-        if ktv:
-            new_sections.append({"title": "화제의 국내 드라마", "items": ktv})
-            log("HOME", f"✅ 국내 TV 빌드 완료: {len(ktv)}개")
+        for cat_name, title in [("foreigntv", "인기 외국 TV 시리즈"), ("koreantv", "화제의 국내 드라마")]:
+            picks = get_unique_picks(cat_name)
+            if picks: new_sections.append({"title": title, "items": picks})
 
         air_data = _FAST_CATEGORY_CACHE.get('air', {})
-        air = list(air_data.get("all", []))
+        air = list(air_data.get("all", []))  # 바뀐 구조 대응
         if air:
             random.shuffle(air)
             new_sections.append({"title": "실시간 방영 중", "items": air[:15]})
-            log("HOME", f"✅ 방송중 빌드 완료: {len(air[:15])}개")
 
         HOME_RECOMMEND = new_sections
         log("HOME", "✨ 홈 추천 빌드 최종 완료")
