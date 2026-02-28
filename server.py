@@ -956,59 +956,79 @@ def get_sections_for_category(cat, kw=None):
     start_time = time.perf_counter()
     cache_key = f"sections_{cat}_{kw}"
 
-    # 1. 메모리 캐시 확인 로그
     if cache_key in _SECTION_CACHE:
-        log("PERF", f"⚡ [캐시 히트] {cache_key} - 0.001초 미만")
         return _SECTION_CACHE[cache_key]
 
-    log("PERF", f"🔍 [연산 시작] 카테고리: {cat}, 키워드: {kw}")
-
     cat_data = _FAST_CATEGORY_CACHE.get(cat, {})
-    if not cat_data:
-        log("PERF", f"⚠️ {cat} 데이터가 메모리에 없습니다.")
-        return []
+    if not cat_data: return []
 
-    folders = cat_data.get("folders", {})
     all_list = cat_data.get("all", [])
+    folders = cat_data.get("folders", {})
 
-    # 2. 리스트 필터링 단계 시간 측정
-    filter_start = time.perf_counter()
+    # 1. 필터링 로직
     if kw and kw in folders:
         target_list = folders[kw]
-        log("PERF", f"📂 폴더 직매칭 성공: {len(target_list)}개")
     elif kw and kw not in ["전체", "All"]:
         sk = nfc(kw).lower().strip()
         target_list = [i for i in all_list if sk in i.get('_search_name', '')]
-        log("PERF", f"🔎 검색 필터링 완료: {len(target_list)}개")
     else:
         target_list = all_list
-        log("PERF", f"📄 전체 리스트 사용: {len(target_list)}개")
-
-    log("PERF", f"⏱️ 데이터 필터링 소요: {time.perf_counter() - filter_start:.4f}초")
 
     if not target_list: return []
 
-    # 3. 섹션 구성 단계 시간 측정
-    section_start = time.perf_counter()
+    # 2. 카테고리/탭별 감성 테마명 설정
+    def get_attractive_title(category, keyword, section_type):
+        titles = {
+            "recommend": {
+                "movies": ["📽️ 지금 봐야 할 인생 영화", "🎬 놓치면 아까운 명작 컬렉션", "⭐️ 별점이 증명하는 추천 영화"],
+                "animations_all": ["✨ 라프텔 화제의 애니메이션", "🔥 정주행을 부르는 대작 애니", "💫 덕심 자극! 인기 애니"],
+                "koreantv": ["🇰🇷 한국인이 사랑한 대작 드라마", "📺 한 번 시작하면 멈출 수 없는 드라마"],
+                "foreigntv": ["🌎 전 세계가 열광한 시리즈", "🎬 최고의 몰입감! 해외 드라마"],
+                "air": ["🔴 현재 가장 뜨거운 실시간 방영작"],
+                "default": [f"🎬 {keyword} 탭의 엄선된 추천작"]
+            },
+            "genre": [f"🔥 {keyword} 내 인기 {{}} 장르", f"🎞️ 세대를 아우르는 {{}} 명작"]
+        }
+
+        if section_type == "recommend":
+            pick_list = titles["recommend"].get(category, titles["recommend"]["default"])
+            return random.choice(pick_list)
+        return random.choice(titles["genre"])
+
     sections = []
 
-    # [최적화] 제목 탭은 추천/장르를 빼고 전체 목록만 먼저 보냄
-    if cat == 'movies' and kw == '제목':
-        # 16,000개를 한 번에 보내면 앱이 뻗으므로 상위 2000개로 제한 테스트 (성능 확인용)
-        limit = 2000
-        display_list = target_list[:limit]
+    # [테마 1] 감성적인 추천 섹션
+    if len(target_list) > 20:
         sections.append({
-            "title": f"📂 제목별 목록 (상위 {limit}개 시범 출력)",
-            "items": display_list
+            "title": get_attractive_title(cat, kw, "recommend"),
+            "items": random.sample(target_list, min(40, len(target_list)))
         })
-    else:
-        # 기존 TV 시리즈용 추천/장르 로직 (그대로 유지)
-        sections.append({"title": f"'{kw}' 전체 목록", "items": target_list})
 
-    log("PERF", f"⏱️ 섹션 구성 소요: {time.perf_counter() - section_start:.4f}초")
+    # [테마 2] 장르별 베스트 (현재 리스트 기준)
+    current_genre_map = {}
+    for item in target_list:
+        for g_name in item.get('genreNames', []):
+            if g_name not in ["애니메이션", "TV 영화"]:
+                current_genre_map.setdefault(g_name, []).append(item)
 
+    sorted_genres = sorted(current_genre_map.keys(), key=lambda x: len(current_genre_map[x]), reverse=True)
+    for g in sorted_genres[:3]:
+        if len(current_genre_map[g]) >= 5:
+            base_genre_title = get_attractive_title(cat, kw, "genre")
+            sections.append({
+                "title": base_genre_title.format(g),
+                "items": random.sample(current_genre_map[g], min(50, len(current_genre_map[g])))
+            })
+
+    # [테마 3] 전체 목록 (요청하신 대로 아주 깔끔하게 고정)
+    display_limit = 3000
+    sections.append({
+        "title": "📂 전체목록",
+        "items": target_list[:display_limit]
+    })
+
+    log("PERF", f"✅ {cat}>{kw} 감성 테마 섹션 구성 완료")
     _SECTION_CACHE[cache_key] = sections
-    log("PERF", f"✅ [함수 종료] 전체 처리 시간: {time.perf_counter() - start_time:.4f}초")
     return sections
 
 @app.route('/category_sections')
@@ -1194,79 +1214,74 @@ def pre_generate_individual_task(ep_thumb_url):
 
 @app.route('/search')
 def search_videos():
-    # 1. 검색어 정규화
-    q = nfc(request.args.get('q', '')).lower().strip()
-    if not q: return jsonify([])
+    try:
+        q = request.args.get('q', '').strip()
+        cat_filter = request.args.get('cat', '전체')
+        if not q: return jsonify([])
 
-    log("SEARCH", f"🔍 검색 요청 수신: '{q}'")
-    conn = get_db()
+        q_nfc = nfc(q)
+        q_nfd = nfd(q)
+        log("SEARCH", f"🔍 검색어: '{q_nfc}' (필터: {cat_filter})")
 
-    # 2. 검색 및 그룹화 쿼리 (스페셜, 더빙, 자막 분리 로직 완벽 복원)
-    # path, tmdbId, overview까지 검색 범위를 확장하여 "원피스" 검색 누락을 방지합니다.
-    query = """
-        SELECT s.*
-        FROM series s
-        WHERE (
-            s.path LIKE ? OR s.name LIKE ? OR s.cleanedName LIKE ? OR s.tmdbId LIKE ? OR s.overview LIKE ?
-        )
-        AND EXISTS (SELECT 1 FROM episodes WHERE series_path = s.path)
-        GROUP BY
-            s.category,
-            TRIM(s.cleanedName),
-            CASE
-                WHEN s.path LIKE '%더빙%' THEN '더빙'
-                WHEN s.path LIKE '%자막%' THEN '자막'
-                ELSE ''
-            END,
-            CASE
-                WHEN s.path LIKE '%스페셜%' THEN '스페셜'
-                WHEN s.path LIKE '%극장판%' THEN '극장판'
-                WHEN s.path LIKE '%OVA%' THEN 'OVA'
-                ELSE ''
-            END
-        ORDER BY
-            CASE WHEN s.name LIKE ? THEN 1 WHEN s.cleanedName LIKE ? THEN 2 ELSE 3 END,
-            s.name ASC
-    """
+        conn = get_db()
+        cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
+        target_cat = cat_map.get(cat_filter)
 
-    search_param = f'%{q}%'
-    cursor = conn.execute(query, (
-        search_param, search_param, search_param, search_param, search_param,
-        f'{q}%', f'{q}%'
-    ))
+        # [핵심 수술] 낱개 노출 방지 및 시리즈 그룹화 쿼리
+        # tmdbId가 있으면 ID로, 없으면 cleanedName(정제된 제목)으로 묶습니다.
+        query = """
+            SELECT * FROM series
+            WHERE (name LIKE ? OR name LIKE ? OR cleanedName LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ? OR tmdbTitle LIKE ? OR path LIKE ?)
+        """
+        params = [f"%{q_nfc}%", f"%{q_nfd}%", f"%{q_nfc}%", f"%{q_nfd}%", f"%{q_nfc}%", f"%{q_nfd}%", f"%{q_nfc}%"]
 
-    rows = []
-    for row in cursor.fetchall():
-        item = dict(row)
+        if target_cat:
+            query += " AND category = ?"
+            params.append(target_cat)
 
-        # 3. 화면에 보여줄 이름 결정 (태그 조합 로직 완벽 복원)
-        # 사용자가 더빙인지 자막인지, 극장판인지 검색 결과에서 바로 알 수 있습니다.
-        orig_path = item.get('path', '').lower()
-        base_name = item.get('tmdbTitle') or item.get('cleanedName') or item.get('name')
+        query += """
+            AND EXISTS (SELECT 1 FROM episodes WHERE series_path = series.path)
+            GROUP BY
+                category,
+                COALESCE(NULLIF(tmdbId, ''), cleanedName, name),
+                CASE WHEN path LIKE '%더빙%' THEN '더빙' WHEN path LIKE '%자막%' THEN '자막' ELSE '' END
+            ORDER BY
+                CASE WHEN name LIKE ? THEN 1 WHEN cleanedName LIKE ? THEN 2 ELSE 3 END, name ASC
+        """
+        params.extend([f'{q_nfc}%', f'{q_nfc}%'])
 
-        tag_str = ""
-        if '스페셜' in orig_path: tag_str += "[스페셜]"
-        elif '극장판' in orig_path: tag_str += "[극장판]"
-        elif 'ova' in orig_path: tag_str += "[OVA]"
+        cursor = conn.execute(query, params)
+        rows = []
+        for row in cursor.fetchall():
+            item = dict(row)
 
-        if '더빙' in orig_path: tag_str += "[더빙]"
-        elif '자막' in orig_path: tag_str += "[자막]"
+            # 데이터 규격 맞추기 (앱 크래시 방지)
+            base_name = nfc(item.get('tmdbTitle') or item.get('cleanedName') or item.get('name'))
+            orig_path = item.get('path', '').lower()
+            tag_str = "".join([f" [{t}]" for t in ["더빙", "자막", "극장판", "OVA"] if t.lower() in orig_path])
 
-        item['name'] = f"{base_name} {tag_str}".strip()
-        item['movies'] = []
-
-        # JSON 필드 복구
-        for col in ['genreIds', 'genreNames', 'actors']:
-            if item.get(col):
+            processed = {
+                "name": f"{base_name}{tag_str}".strip(),
+                "path": item['path'], "category": item['category'],
+                "posterPath": item['posterPath'] or "", "year": item['year'] or "",
+                "overview": (item['overview'] or "")[:200], "genreNames": [], "actors": [],
+                "movies": [], "seasons": {}
+            }
+            # JSON 필드 복구
+            for col in ['genreNames', 'actors']:
                 try:
-                    item[col] = json.loads(item[col])
+                    processed[col] = json.loads(item[col]) if item.get(col) else []
                 except:
-                    item[col] = []
-        rows.append(item)
+                    pass
 
-    conn.close()
-    log("SEARCH", f"✅ 검색 완료: '{q}' -> {len(rows)}건 발견")
-    return gzip_response(rows)
+            rows.append(processed)
+
+        conn.close()
+        log("SEARCH", f"✅ 검색 완료: {len(rows)}개 시리즈 발견")
+        return gzip_response(rows)
+    except:
+        log("SEARCH_ERROR", traceback.format_exc());
+        return jsonify([])
 
 @app.route('/rescan_broken')
 def rescan_broken():
