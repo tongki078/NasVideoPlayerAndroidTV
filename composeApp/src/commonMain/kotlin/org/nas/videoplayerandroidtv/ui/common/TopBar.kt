@@ -17,6 +17,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -26,13 +28,27 @@ import androidx.compose.ui.unit.sp
 import org.nas.videoplayerandroidtv.Screen
 
 @Composable
-fun NetflixTopBar(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
+fun NetflixTopBar(
+    currentScreen: Screen, 
+    homeFocusRequester: FocusRequester? = null, // [추가] 홈 버튼 포커스 요청용
+    onFocusChanged: (Boolean) -> Unit = {}, // [추가] 상단바 포커스 여부 알림
+    onScreenSelected: (Screen) -> Unit
+) {
+    var isAnyItemFocused by remember { mutableStateOf(false) }
+    
+    LaunchedEffect(isAnyItemFocused) {
+        onFocusChanged(isAnyItemFocused)
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
             .height(64.dp)
-            .padding(horizontal = 48.dp),
+            .padding(horizontal = 48.dp)
+            .onFocusChanged { 
+                // Row 자체보다는 자식들이 포커스 되는지 확인
+            },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -46,8 +62,23 @@ fun NetflixTopBar(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
                 modifier = Modifier.padding(end = 8.dp)
             )
             
-            TopBarItem(label = "홈", icon = Icons.Default.Home, screen = Screen.HOME, currentScreen = currentScreen, onClick = onScreenSelected)
-            TopBarItem(label = "검색", icon = Icons.Default.Search, screen = Screen.SEARCH, currentScreen = currentScreen, onClick = onScreenSelected)
+            TopBarItem(
+                label = "홈", 
+                icon = Icons.Default.Home, 
+                screen = Screen.HOME, 
+                currentScreen = currentScreen, 
+                focusRequester = homeFocusRequester, // 홈 버튼에 전달
+                onFocusChanged = { if(it) isAnyItemFocused = true else checkAnyFocused(isAnyItemFocused) { isAnyItemFocused = false } },
+                onClick = onScreenSelected
+            )
+            TopBarItem(
+                label = "검색", 
+                icon = Icons.Default.Search, 
+                screen = Screen.SEARCH, 
+                currentScreen = currentScreen,
+                onFocusChanged = { if(it) isAnyItemFocused = true else isAnyItemFocused = false },
+                onClick = onScreenSelected
+            )
         }
         
         // 우측: 카테고리 텍스트 메뉴
@@ -61,10 +92,22 @@ fun NetflixTopBar(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
             )
             
             menuItems.forEach { (label, screen) ->
-                TopBarItem(label = label, screen = screen, currentScreen = currentScreen, onClick = onScreenSelected)
+                TopBarItem(
+                    label = label, 
+                    screen = screen, 
+                    currentScreen = currentScreen,
+                    onFocusChanged = { if(it) isAnyItemFocused = true else isAnyItemFocused = false },
+                    onClick = onScreenSelected
+                )
             }
         }
     }
+}
+
+// 헬퍼 함수: 자식들 포커스 체크 (간소화)
+private fun checkAnyFocused(current: Boolean, update: () -> Unit) {
+    // 실제로는 더 복잡한 체크가 필요할 수 있으나 여기서는 단순화
+    update()
 }
 
 @Composable
@@ -73,7 +116,9 @@ private fun TopBarItem(
     screen: Screen,
     currentScreen: Screen,
     onClick: (Screen) -> Unit,
-    icon: ImageVector? = null
+    icon: ImageVector? = null,
+    focusRequester: FocusRequester? = null, // [추가]
+    onFocusChanged: (Boolean) -> Unit = {} // [추가]
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val isSelected = currentScreen == screen
@@ -88,9 +133,13 @@ private fun TopBarItem(
 
     Box(
         modifier = Modifier
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .clip(RoundedCornerShape(8.dp))
             .background(if (isFocused) Color.White.copy(alpha = 0.1f) else Color.Transparent)
-            .onFocusChanged { isFocused = it.isFocused }
+            .onFocusChanged { 
+                isFocused = it.isFocused 
+                onFocusChanged(it.isFocused)
+            }
             .focusable()
             .clickable { onClick(screen) }
             .padding(horizontal = if (icon != null) 10.dp else 14.dp, vertical = 6.dp),

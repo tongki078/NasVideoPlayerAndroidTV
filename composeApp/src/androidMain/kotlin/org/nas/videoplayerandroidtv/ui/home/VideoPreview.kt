@@ -45,13 +45,13 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
 
-        // [획기적 개선] 버퍼링을 극한으로 줄여 즉시 재생 시도
+        // [획기적 개선] 버퍼링을 극한으로 줄여 즉시 재생 시도 (소리 인코딩 시간 고려)
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                200,   // minBufferMs: 500 -> 200으로 단축
-                1000,  // maxBufferMs: 2000 -> 1000으로 단축
-                200,   // bufferForPlaybackMs
-                200    // bufferForPlaybackAfterRebufferMs
+                100,   // minBufferMs: 200 -> 100으로 더 단축
+                500,   // maxBufferMs: 1000 -> 500으로 더 단축
+                100,   // bufferForPlaybackMs
+                100    // bufferForPlaybackAfterRebufferMs
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -64,11 +64,11 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
                     .setUsage(C.USAGE_MEDIA)
                     .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
                     .build(),
-                true
+                true // 오디오 포커스 관리 활성화 (소리 재생 필수)
             )
             .build().apply {
                 playWhenReady = true
-                volume = 0f
+                volume = 0.6f // 미리보기 소리를 60% 정도로 활성화
                 repeatMode = Player.REPEAT_MODE_ALL
                 addListener(object : Player.Listener {
                     override fun onRenderedFirstFrame() {
@@ -84,6 +84,7 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
     LaunchedEffect(previewUrl) {
         if (previewUrl.isBlank()) return@LaunchedEffect
         isVideoRendered = false
+        exoPlayer.stop() // 이전 재생 확실히 중단
         val mediaItem = MediaItem.Builder().setUri(previewUrl).build()
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()

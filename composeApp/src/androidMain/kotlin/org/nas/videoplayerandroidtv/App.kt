@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -40,6 +41,7 @@ import org.nas.videoplayerandroidtv.ui.player.VideoPlayerScreen
 import org.nas.videoplayerandroidtv.ui.search.SearchScreen
 import org.nas.videoplayerandroidtv.db.AppDatabase
 import app.cash.sqldelight.db.SqlDriver
+import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -70,7 +72,6 @@ fun App(driver: SqlDriver) {
     var moviePlaylist by remember { mutableStateOf<List<Movie>>(emptyList()) }
     var lastPlaybackPosition by rememberSaveable { mutableLongStateOf(0L) }
     
-    // 마지막으로 선택했던 시리즈의 경로를 저장하여 포커스 복구에 사용
     var lastSelectedSeriesPath by rememberSaveable { mutableStateOf<String?>(null) }
 
     // 검색 실행 로직
@@ -96,7 +97,7 @@ fun App(driver: SqlDriver) {
     val selectedSubMode = subModeStates.getOrDefault(currentScreen, 0)
 
     val subModes = when(currentScreen) {
-        Screen.MOVIES -> listOf("최신", "UHD", "제목") // 순서 변경: 최신 -> UHD -> 제목
+        Screen.MOVIES -> listOf("최신", "UHD", "제목")
         Screen.KOREAN_TV -> listOf("드라마", "시트콤", "예능", "교양", "다큐멘터리")
         Screen.FOREIGN_TV -> listOf("미국 드라마", "일본 드라마", "중국 드라마", "기타국가 드라마", "다큐")
         Screen.ANIMATIONS -> listOf("라프텔", "시리즈")
@@ -136,11 +137,24 @@ fun App(driver: SqlDriver) {
     val allRowStates = remember { mutableStateMapOf<String, MutableMap<String, LazyListState>>() }
     val allRowFocusIndices = remember { mutableStateMapOf<String, SnapshotStateMap<String, Int>>() }
 
-    BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME) {
+    // [수정] 네비게이션 개선: 뒤로가기 시 홈으로 포커스 이동
+    val homeFocusRequester = remember { FocusRequester() }
+    var isTopBarFocused by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME || !isTopBarFocused) {
         when {
             selectedMovie != null -> { selectedMovie = null }
             selectedSeries != null -> { selectedSeries = null }
-            currentScreen != Screen.HOME -> { currentScreen = Screen.HOME }
+            currentScreen != Screen.HOME -> { 
+                currentScreen = Screen.HOME 
+                scope.launch {
+                    delay(50)
+                    homeFocusRequester.requestFocus()
+                }
+            }
+            !isTopBarFocused -> {
+                homeFocusRequester.requestFocus()
+            }
         }
     }
 
@@ -154,9 +168,13 @@ fun App(driver: SqlDriver) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(modifier = Modifier.fillMaxSize()) {
                 if (selectedMovie == null) {
-                    NetflixTopBar(currentScreen) { screen ->
+                    NetflixTopBar(
+                        currentScreen = currentScreen,
+                        homeFocusRequester = homeFocusRequester,
+                        onFocusChanged = { isTopBarFocused = it }
+                    ) { screen ->
                         if (currentScreen != screen) {
-                            lastSelectedSeriesPath = null // 카테고리 변경 시 이전 포커스 정보 초기화
+                            lastSelectedSeriesPath = null
                         }
                         currentScreen = screen
                         selectedSeries = null 
@@ -178,7 +196,7 @@ fun App(driver: SqlDriver) {
                                     isSelected = selectedSubMode == index, 
                                     onClick = { 
                                         if (selectedSubMode != index) {
-                                            lastSelectedSeriesPath = null // 서브 카테고리 변경 시 초기화
+                                            lastSelectedSeriesPath = null
                                         }
                                         subModeStates[currentScreen] = index
                                         selectedSeries = null 

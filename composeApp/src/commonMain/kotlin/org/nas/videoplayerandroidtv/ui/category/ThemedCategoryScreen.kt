@@ -63,6 +63,7 @@ fun ThemedCategoryScreen(
         mutableStateOf(cache[cacheKey] ?: emptyList()) 
     }
     var isLoading by remember(cacheKey) { mutableStateOf(themedSections.isEmpty()) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(cacheKey) {
         if (themedSections.isNotEmpty()) return@LaunchedEffect
@@ -111,8 +112,7 @@ fun ThemedCategoryScreen(
                     contentPadding = PaddingValues(top = 0.dp, bottom = 60.dp), 
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    items(themedSections, key = { it.title }) { section ->
-                        // [필터링] 포스터가 없는 항목은 리스트에서 제외하여 완성도 향상 (mapNotNull 사용)
+                    itemsIndexed(themedSections, key = { _, it -> it.title }) { index, section ->
                         val seriesList = section.items.mapNotNull { cat ->
                             if (cat.posterPath.isNullOrBlank() && categoryKey != "air") return@mapNotNull null
                             
@@ -136,7 +136,18 @@ fun ThemedCategoryScreen(
                                 title = section.title, 
                                 seriesList = seriesList, 
                                 repository = repository,
-                                onSeriesClick = onSeriesClick
+                                initials = section.initials, // [추가] 초성 필터 전달
+                                onSeriesClick = onSeriesClick,
+                                onInitialClick = { char ->
+                                    // [추가] 해당 초성 섹션으로 스크롤
+                                    scope.launch {
+                                        val targetTitle = "이름 순: $char"
+                                        val targetIndex = themedSections.indexOfFirst { it.title == targetTitle }
+                                        if (targetIndex != -1) {
+                                            lazyListState.animateScrollToItem(targetIndex)
+                                        }
+                                    }
+                                }
                             )
                         }
                     }

@@ -383,27 +383,40 @@ def clean_title_complex(title, full_path=None, base_path=None):
 
 
 def extract_episode_numbers(full_path):
-    n = nfc(full_path)
-    # 1. 표준 패턴 우선 확인 (S01E01, 1기 1화 등)
+    """파일명뿐만 아니라 상위 폴더명까지 분석하여 시즌과 회차를 정확히 추출합니다."""
+    n = nfc(full_path).replace('\\', '/')
+    filename = os.path.basename(n)
+
+    # 1. 경로 전체에서 S01E01 또는 1기 1화 패턴 찾기 (가장 정확함)
     m = re.search(r'(?i)S(\d+)\s*E(\d+)|(\d+)\s*기\s*(\d+)\s*(?:화|회)', n)
     if m:
         if m.group(1): return int(m.group(1)), int(m.group(2))
         return int(m.group(3)), int(m.group(4))
 
-    # 2. 시즌 정보 (없으면 1)
+    # 2. 시즌 정보 찾기 (상위 폴더명 포함)
     season = 1
-    ms = re.search(r'(?i)(?:시즌|Season|S)\s*(\d+)|(\d+)\s*기', n)
-    if ms: season = int(ms.group(1) or ms.group(2))
+    # 폴더명이나 파일명에서 '4시즌', 'Season 4', '4기', 'S4' 등 추출
+    ms = re.search(r'(?i)(?:시즌|Season|S|Part|파트)\s*(\d+)|(\d+)\s*기', n)
+    if ms:
+        season_str = ms.group(1) or ms.group(2)
+        season = int(season_str)
 
-    # 3. 회차 정보 (파일명의 가장 마지막 숫자 뭉치)
-    filename = os.path.basename(n)
-    me = re.search(r'(?i)(?:[.\s_-]E|EP)\s*(\d+)|(\d+)\s*(?:화|회)', filename)
+    # 3. 회차 정보 찾기 (파일명에서만 추출)
+    episode = 1
+    # 파일명에서 'E04', 'EP04', '4화', '4회' 또는 숫자 뭉치 찾기
+    me = re.search(r'(?i)(?:[.\s_-]E|EP|화|회)\s*(\d+)|(\d+)\s*(?:화|회)', filename)
     if me:
-        episode = int(me.group(1) or me.group(2))
+        ep_str = me.group(1) or me.group(2)
+        episode = int(ep_str)
     else:
-        # 마커가 없으면 파일명 끝에서부터 숫자 추출
+        # 마커가 없으면 파일명에서 가장 마지막에 등장하는 숫자 뭉치를 회차로 간주
         nums = re.findall(r'\d+', filename)
-        episode = int(nums[-1]) if nums else 1
+        if nums:
+            # 연도(2024 등)는 제외하기 위해 값이 2000 미만인 마지막 숫자 선택
+            for num in reversed(nums):
+                if int(num) < 2000:
+                    episode = int(num)
+                    break
 
     return season, episode
 
@@ -953,76 +966,131 @@ def fetch_metadata_async(force_all=False):
     finally:
         IS_METADATA_RUNNING = False
 
-# 2. 섹션 생성 로직 수정 (속도 저하 해결 및 폴더 필터링 강화)
 def get_sections_for_category(cat, kw=None):
-    cache_key = f"sections_{cat}_{kw}"
+    kw_norm = nfc(kw) if kw else None
+    cache_key = f"sections_{cat}_{kw_norm}"
+
     if cache_key in _SECTION_CACHE:
         return _SECTION_CACHE[cache_key]
 
     cat_data = _FAST_CATEGORY_CACHE.get(cat, {})
     if not cat_data: return []
 
-    base_list = cat_data.get("all", [])
-    genre_map = cat_data.get("genre_map", {})
+    # 프리빌드된 폴더 데이터 확인 ('제목', '최신' 등)
     folders = cat_data.get("folders", {})
+    if kw_norm and kw_norm in folders:
+        # 폴더 탭 클릭 시: 이미 분류된 데이터를 즉시 구조화하여 반환
+        res = _build_sections_for(cat, kw_norm, folders[kw_norm]["all"], folders[kw_norm]["genre_map"])
+        _SECTION_CACHE[cache_key] = res
+        return res
 
-    if not base_list: return []
-
-    target_list = base_list
+    # 검색 또는 전체보기 처리
+    target_all = cat_data.get("all", [])
+    target_genre_map = cat_data.get("genre_map", {})
     is_search = False
 
-    # [수정] 키워드 처리 로직 개선
-    if kw and kw not in ["전체", "All"]:
-        if kw in folders:
-            # 1. 폴더명과 일치하는 경우 (예: '제목' 탭 클릭 시)
-            # 순수하게 해당 폴더의 리스트만 사용 (다른 다큐/애니 혼입 원천 차단)
-            target_list = folders[kw]
-        else:
-            # 2. 폴더명이 아닌 경우에만 '검색' 모드로 동작
-            sk = nfc(kw).lower().strip()
-            # 검색 시에도 경로 접두사를 확인하여 현재 카테고리 내에서만 검색되도록 보장
-            target_list = [i for i in base_list if sk in i['name'].lower() or f"/{sk}/" in i['path'].lower()]
-            is_search = True
-            # 검색 결과용 장르 맵 재구성 (이 과정이 데이터가 많으면 느림)
-            genre_map = {}
-            for item in target_list:
-                for g in item.get('genreNames', []):
-                    genre_map.setdefault(g, []).append(item)
+    if kw_norm and kw_norm not in ["전체", "All"]:
+        # 순수 검색 수행 (캐시되지 않은 일반 키워드)
+        sk = kw_norm.lower()
+        target_all = [i for i in target_all if sk in i['name'].lower() or sk in i['path'].lower()]
+        is_search = True
+        # 검색 결과용 장르 맵 실시간 생성
+        target_genre_map = {}
+        for item in target_all:
+            for g in item.get('genreNames', []):
+                target_genre_map.setdefault(g, []).append(item)
 
-    if not target_list: return []
+    res = _build_sections_for(cat, kw_norm, target_all, target_genre_map, is_search)
+    if not is_search: _SECTION_CACHE[cache_key] = res
+    return res
+
+def _build_sections_for(cat, kw, target_all, target_genre_map, is_search=False):
+    """지정된 리스트와 장르 맵을 바탕으로 감성 테마 및 초성 그룹 섹션을 생성합니다."""
+    if not target_all: return []
+
+    if cat == 'air':
+        return [{"title": "📺 지금 실시간으로 방영 중!", "items": target_all}]
+
+    # --- [초성 추출 유틸리티 에러 수정본] ---
+    def get_choseong(text):
+        # 한글 초성 19개 전체 리스트 (누락 시 IndexError 발생함)
+        CHOSEONG = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
+        # 사용자 편의를 위해 쌍자음을 기본 자음으로 통합
+        MAP = {'ㄲ': 'ㄱ', 'ㄸ': 'ㄷ', 'ㅃ': 'ㅂ', 'ㅆ': 'ㅅ', 'ㅉ': 'ㅈ'}
+
+        if not text: return '#'
+        char = nfc(text)[0]
+
+        if '가' <= char <= '힣':
+            idx = (ord(char) - 44032) // 588
+            if 0 <= idx < len(CHOSEONG):
+                c = CHOSEONG[idx]
+                return MAP.get(c, c)
+
+        if 'a' <= char.lower() <= 'z':
+            return char.upper()
+
+        return '#'
+
+    # 감성 테마 문구 사전
+    THEME_MAP = {
+        "액션": ["스트레스 풀리는 짜릿한 액션", "가슴이 웅장해지는 액션 영화", "아드레날린 폭발! 액션 정주행"],
+        "코미디": ["배꼽 주의! 웃음 보장 코미디", "기분 전환이 필요할 때! 코미디", "가족과 함께 웃기 좋은 영화"],
+        "드라마": ["가슴 뭉클한 감동 드라마", "인생을 바꾸는 깊은 울림, 드라마", "몰입감 최고! 명작 드라마"],
+        "SF": ["상상력을 자극하는 SF/판타지", "현실을 잊게 할 미지의 세계", "비주얼 끝판왕! SF 대작"],
+        "스릴러": ["심장 쫄깃! 숨 막히는 스릴러", "잠 못 드는 밤, 극강의 스릴러", "반전의 반전! 미스터리 스릴러"],
+        "공포": ["등골이 오싹해지는 공포", "불 끄고 보기 힘든 호러 영화", "심장 주의! 공포 마니아를 위해"],
+        "로맨스": ["설렘 주의보! 로맨틱 코미디", "사랑이 필요한 순간, 로맨스", "달달함 한도 초과! 연애 세포 심폐소생"],
+        "애니메이션": ["동심 파괴 주의! 어른들을 위한 애니", "아이와 함께 보는 힐링 애니", "전 세계가 열광한 재패니메이션"],
+        "범죄": ["치밀한 두뇌 싸움, 범죄 영화", "뒷골목의 승부사들, 느와르 특선", "실화 바탕 범죄 스릴러"]
+    }
 
     sections = []
 
-    # [수정] '제목' 폴더 탭일 경우 속도를 위해 추천 섹션을 건너뛰거나 간소화
-    is_title_tab = (cat == 'movies' and kw == '제목')
-
-    if cat == 'air':
-        sections.append({"title": "실시간 방영 중", "items": target_list})
-    else:
-        # 1. 추천 섹션 (검색이 아니거나, 제목 탭이 아닐 때만 포함하여 속도 향상)
-        if not is_search and not is_title_tab and len(target_list) > 20:
-            sections.append({
-                "title": "오늘의 추천",
-                "items": random.sample(target_list, min(40, len(target_list)))
-            })
-
-        # 2. 장르별 섹션 (영화 '제목' 탭에서는 연산량 절약을 위해 생략)
-        if not is_title_tab:
-            sorted_genres = sorted(genre_map.keys(), key=lambda x: len(genre_map[x]), reverse=True)
-            for g in [g for g in sorted_genres if g not in ["TV 영화", "애니메이션"]][:3]:
-                if len(genre_map[g]) >= 5:
-                    sections.append({
-                        "title": f"인기 {g}",
-                        "items": random.sample(genre_map[g], min(60, len(genre_map[g])))
-                    })
-
-        # 3. 전체 목록
+    # 1. 상단 추천 섹션
+    if len(target_all) > 10:
+        recommend_titles = ["✨ 꼭 봐야 할 인생 작품", "🎬 보석 같은 추천작", "⭐ 오늘은 이거 어때요?", "🔥 가장 핫한 콘텐츠"]
         sections.append({
-            "title": f"'{kw}' 목록" if kw and kw not in ["전체", "All"] else "전체 목록",
-            "items": target_list
+            "title": random.choice(recommend_titles),
+            "items": random.sample(target_all, min(20, len(target_all)))
         })
 
-    _SECTION_CACHE[cache_key] = sections
+    # 2. 초성 그룹화 섹션 (복구)
+    # [최적화] '제목' 탭 클릭 시에는 초성 그룹이 너무 많아지므로 제외, 일반 전체보기에서만 노출
+    is_special_tab = kw and kw not in ["전체", "All"]
+    if not is_search and not is_special_tab:
+        choseong_groups = {}
+        for item in target_all:
+            c = get_choseong(item['name'])
+            choseong_groups.setdefault(c, []).append(item)
+
+        sorted_chars = sorted(choseong_groups.keys(), key=lambda x: (x == '#', x))
+        for char in sorted_chars:
+            sections.append({
+                "title": f"이름 순: {char}",
+                "items": choseong_groups[char][:100]
+            })
+
+    # 3. 장르별 감성 테마 섹션
+    sorted_genres = sorted(target_genre_map.keys(), key=lambda x: len(target_genre_map[x]), reverse=True)
+    for g in [g for g in sorted_genres if g not in ["TV 영화", "애니메이션"]][:5]:
+        if len(target_genre_map[g]) >= 3:
+            theme_title = random.choice(THEME_MAP.get(g, [f"인기 {g}"]))
+            sections.append({
+                "title": theme_title,
+                "items": random.sample(target_genre_map[g], min(30, len(target_genre_map[g])))
+            })
+
+    # 4. 하단 전체 목록 (팅김 방지 500개 제한)
+    list_title = "전체 리스트" if not is_search else f"🔍 '{kw}' 검색 결과"
+    if not is_search and kw:
+        list_title = f"📁 {kw} 폴더 전체 보기"
+
+    sections.append({
+        "title": list_title,
+        "items": target_all[:500]
+    })
+
     return sections
 
 @app.route('/category_sections')
@@ -1070,74 +1138,39 @@ def get_series_detail_api():
     path = request.args.get('path')
     if not path: return gzip_response({})
 
-    # 1. 메모리 캐시 확인
     if path in _DETAIL_MEM_CACHE:
         return gzip_response(_DETAIL_MEM_CACHE[path])
 
     conn = get_db()
-    # 시리즈 정보 조회 (Primary Key 사용으로 매우 빠름)
     row = conn.execute('SELECT * FROM series WHERE path = ?', (path,)).fetchone()
     if not row:
-        # 혹시 모를 NFC/NFD 불일치 대응
         row = conn.execute('SELECT * FROM series WHERE path = ?', (nfc(path),)).fetchone()
 
     if not row:
         conn.close()
-        log("DETAIL_ERROR", f"DB에서 경로를 찾을 수 없음: {path}")
         return gzip_response({})
 
     series = dict(row)
-    t_id = series.get('tmdbId')
-    c_name = series.get('cleanedName')
     cat = series.get('category')
     clean_main_name = series.get('tmdbTitle') or series.get('cleanedName') or series.get('name')
 
-    # 2. 에피소드 조회 로직 (어떤 상황에서도 버튼이 나오도록 보장)
-    all_eps_dict = {}
-
-    # [1단계] 현재 요청된 경로로 직접 조회 (최우선)
+    # 에피소드 가져오기
     rows = conn.execute("SELECT * FROM episodes WHERE series_path = ?", (path,)).fetchall()
     if not rows:
         rows = conn.execute("SELECT * FROM episodes WHERE series_path = ?", (nfc(path),)).fetchall()
 
-    for r in rows:
-        d = dict(r)
-        all_eps_dict[d['id']] = d
-
-    # [2단계] 그룹화 정보가 확실히 있을 때만 추가 에피소드 검색
-    if t_id and len(str(t_id)) > 3:
-        rows = conn.execute("SELECT * FROM episodes WHERE series_path IN (SELECT path FROM series WHERE tmdbId = ?)",
-                            (t_id,)).fetchall()
-        for r in rows:
-            d = dict(r)
-            all_eps_dict[d['id']] = d
-    elif c_name and len(c_name.strip()) > 1:
-        rows = conn.execute(
-            "SELECT * FROM episodes WHERE series_path IN (SELECT path FROM series WHERE cleanedName = ?)",
-            (c_name,)).fetchall()
-        for r in rows:
-            d = dict(r)
-            all_eps_dict[d['id']] = d
-
-    conn.close()
-
-    # 3. [최후의 보루] DB에 에피소드가 아예 없다면 가상의 에피소드 생성 (버튼 출력 보장)
-    if not all_eps_dict:
-        log("DETAIL_FIX", f"에피소드 정보 없음, 가상 생성: {path}")
-        v_id = hashlib.md5(path.encode()).hexdigest()
-        all_eps_dict[v_id] = {
-            "id": v_id, "series_path": path, "title": clean_main_name,
-            "videoUrl": f"/video_serve?type={'movie' if cat == 'movies' else 'ftv'}&path={urllib.parse.quote(path.split('/', 1)[-1])}",
-            "thumbnailUrl": series.get('posterPath')
-        }
-
-    # 4. 중복 제거 통합 및 데이터 가공
     processed_eps = []
-    for eid, ep in all_eps_dict.items():
-        sn, en = ep.get('season_number'), ep.get('episode_number')
-        if sn is None: sn, en = extract_episode_numbers(ep.get('title', ''))
+    for r in rows:
+        ep = dict(r)
+        # [핵심 수정] DB에 정보가 없으면 title(파일명)이 아니라 series_path(전체경로)를 넘겨서 분석
+        sn = ep.get('season_number')
+        en = ep.get('episode_number')
 
-        # 영화는 무조건 1시즌 1화로 통일하여 UI를 깔끔하게 함
+        if sn is None or en is None:
+            # 파일명이 아닌 전체 경로를 전달하여 폴더명의 '시즌' 정보를 읽게 함
+            sn, en = extract_episode_numbers(ep.get('series_path', ''))
+
+        # 영화는 항상 1-1로 고정
         if cat == 'movies':
             sn, en = 1, 1
             ep['title'] = clean_main_name
@@ -1145,7 +1178,9 @@ def get_series_detail_api():
         ep['sn'], ep['en'] = sn, en
         processed_eps.append(ep)
 
-    # 5. 정렬 및 결과 구성
+    conn.close()
+
+    # 시즌별로 정렬 및 그룹화
     sorted_eps = sorted(processed_eps, key=lambda x: (x['sn'], x['en']))
     seasons_map = {}
     for ep in sorted_eps:
@@ -1153,14 +1188,14 @@ def get_series_detail_api():
         if sk not in seasons_map: seasons_map[sk] = []
         seasons_map[sk].append(ep)
 
+    # JSON 필드 파싱
     for col in ['genreIds', 'genreNames', 'actors']:
-        val = series.get(col)
-        if val and isinstance(val, str):
+        if series.get(col) and isinstance(series[col], str):
             try:
-                series[col] = json.loads(val)
+                series[col] = json.loads(series[col])
             except:
                 series[col] = []
-        elif not val:
+        elif not series.get(col):
             series[col] = []
 
     series['movies'] = sorted_eps
@@ -2412,7 +2447,7 @@ def admin_stills_page():
     </html>
     """
 
-# --- [UI/캐시 로직 보존] ---
+
 @app.route('/updater')
 def updater_ui():
     return """
@@ -2423,24 +2458,26 @@ def updater_ui():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>NAS Player - 메타데이터 모니터링</title>
         <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; margin: 0; padding: 20px; }
-            .container { max-width: 900px; margin: 0 auto; background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 30px; }
-            h1 { font-size: 24px; color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 15px; margin-top: 0; display: flex; align-items: center; gap: 10px; }
-            .btn-group { margin-bottom: 25px; display: flex; gap: 10px; flex-wrap: wrap; }
-            button { background: #6c757d; color: white; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; transition: opacity 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; color: #333; margin: 0; padding: 20px; }
+            .container { max-width: 1000px; margin: 0 auto; background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 30px; }
+            h1 { font-size: 24px; color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 15px; margin-top: 0; }
+            .btn-group { margin-bottom: 25px; display: flex; gap: 8px; flex-wrap: wrap; }
+            button { background: #6c757d; color: white; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: bold; transition: opacity 0.2s; }
             button:hover { opacity: 0.8; }
-            button.btn-primary { background: #007bff; }
-            button.btn-success { background: #28a745; }
-            button.btn-warning { background: #ffc107; color: #212529; }
+            .btn-primary { background: #007bff; }
+            .btn-success { background: #28a745; }
+            .btn-warning { background: #ffc107; color: #212529; }
+            .btn-danger { background: #dc3545; color: white; }
+            .btn-info { background: #17a2b8; color: white; }
+            .btn-secondary { background: #6c757d; }
+            .surgical-box { background: #fff3cd; border: 1px solid #ffeeba; padding: 20px; border-radius: 8px; margin-bottom: 25px; }
+            .surgical-box h3 { margin-top: 0; color: #856404; font-size: 18px; }
+            .surgical-input-group { display: flex; gap: 10px; margin-top: 10px; }
+            .surgical-input-group input { padding: 12px; flex: 1; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
             .status-box { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
-            .status-header { font-size: 18px; font-weight: bold; margin-bottom: 15px; color: #34495e; display: flex; justify-content: space-between;}
-            .task-badge { background: #e9ecef; color: #495057; padding: 3px 10px; border-radius: 15px; font-size: 13px; font-weight: bold;}
-            .progress-container { background: #e9ecef; border-radius: 8px; height: 20px; width: 100%; overflow: hidden; margin-bottom: 15px; }
-            .progress-bar { background: #28a745; height: 100%; width: 0%; transition: width 0.3s; }
-            .stats { display: flex; justify-content: space-between; font-size: 14px; font-weight: bold; color: #495057; }
-            .stats span.success { color: #28a745; }
-            .stats span.fail { color: #dc3545; }
-            .terminal { background: #1e1e1e; border-radius: 8px; padding: 15px; height: 500px; overflow-y: auto; font-family: 'Consolas', 'Courier New', monospace; font-size: 13px; line-height: 1.6; color: #d4d4d4; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); }
+            .progress-container { background: #e9ecef; border-radius: 8px; height: 22px; width: 100%; overflow: hidden; margin-bottom: 15px; border: 1px solid #ddd; }
+            .progress-bar { background: linear-gradient(90deg, #28a745, #218838); height: 100%; width: 0%; transition: width 0.3s; }
+            .terminal { background: #1e1e1e; border-radius: 8px; padding: 15px; height: 450px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 13px; line-height: 1.5; color: #d4d4d4; }
             .log-success { color: #4CAF50; }
             .log-error { color: #F44336; }
             .log-info { color: #9E9E9E; }
@@ -2450,48 +2487,62 @@ def updater_ui():
         <div class="container">
             <h1>⚙️ 메타데이터 실시간 업데이트 모니터</h1>
 
+            <!-- 신규: 19금 이미지 긴급 수술 섹션 -->
+            <div class="surgical-box">
+                <h3>🚨 성인이미지/잘못된 포스터 긴급 복구</h3>
+                <p style="font-size: 13px; margin:0; color: #666;">포스터가 이상한 제목의 일부를 입력하세요. 해당 캐시를 즉시 파괴하고 깨끗한 정보를 새로 가져옵니다.</p>
+                <div class="surgical-input-group">
+                    <input type="text" id="targetTitle" placeholder="문제가 되는 영상 제목 입력 (예: 무서운 영화)">
+                    <button class="btn-danger" onclick="surgicalFix()">즉시 수정 실행</button>
+                </div>
+            </div>
+
+            <!-- 기존 버튼 리스트 (완벽 보존) -->
             <div class="btn-group">
                 <button class="btn-primary" onclick="triggerTask('/retry_failed_metadata')">↻ 실패 메타데이터 재매칭</button>
                 <button class="btn-success" onclick="triggerTask('/apply_tmdb_thumbnails')">🖼️ TMDB 썸네일 일괄 교체</button>
-                <button class ="btn-primary" style="background-color: #343a40;" onclick="triggerTask('/pre_extract_subtitles')"> 🎬 영화 자막 일괄 추출 </button>
+                <button class="btn-primary" style="background-color: #343a40;" onclick="triggerTask('/pre_extract_subtitles')">🎬 영화 자막 일괄 추출</button>
                 <button class="btn-warning" onclick="triggerTask('/rematch_metadata')">⚠️ 전체 강제 재스캔</button>
-                <button class="btn-info" onclick="window.open('/admin_stills', '_blank')" style="background-color: #17a2b8;">📊 스틸컷 적용 확인</button>
-                <button class ="btn-secondary" onclick="triggerTask('/rescan_broken')" style="background-color: #6c757d;"> 🔍 로컬 폴더 스캔 </button>
-                <!-- 기존 버튼들 밑에 하나 추가 -->
-<button class="btn-warning" style="background-color: #fd7e14;" onclick="triggerTask('/reset_episodes_metadata')">🗑️ 에피소드 회차 정보 초기화 & 재매칭</button>
-<button class="btn-danger" style="background-color: #dc3545;" onclick="triggerTask('/reset_all_tmdb_data')">🚨 전체 TMDB 메타데이터 초기화 (19금 오류 해결)</button>
-<button class="btn-info" style="background-color: #20c997;" onclick="triggerTask('/refresh_cleaned_names')">♻️ 제목 정제 및 그룹화 재정렬 (시즌 묶음 오류 해결)</button>
+                <button class="btn-info" onclick="window.open('/admin_stills', '_blank')">📊 스틸컷 적용 확인</button>
+                <button class="btn-secondary" onclick="triggerTask('/rescan_broken')">🔍 로컬 폴더 스캔</button>
+                <button class="btn-warning" style="background-color: #fd7e14;" onclick="triggerTask('/reset_episodes_metadata')">🗑️ 회차 정보 초기화</button>
+                <button class="btn-danger" onclick="triggerTask('/reset_all_tmdb_data')">🚨 전체 TMDB 데이터 초기화</button>
+                <button class="btn-info" style="background-color: #20c997;" onclick="triggerTask('/refresh_cleaned_names')">♻️ 그룹화 재정렬</button>
             </div>
 
             <div class="status-box">
-                <div class="status-header">
+                <div style="font-weight: bold; margin-bottom: 10px; display:flex; justify-content:space-between;">
                     <span id="statusText">처리 중: 대기 중</span>
-                    <span class="task-badge" id="taskName">대기 중</span>
+                    <span id="progressPercent" style="color:#007bff;">0%</span>
                 </div>
-
-                <div class="progress-container">
-                    <div class="progress-bar" id="progressBar"></div>
-                </div>
-
-                <div class="stats">
-                    <div>
-                        <span id="progressCount">0 / 0</span>
-                        <span id="progressPercent" style="margin-left: 10px; color: #007bff;">0%</span>
-                    </div>
-                    <div>
-                        <span class="success" id="successCount">성공: 0</span> &nbsp;|&nbsp;
-                        <span class="fail" id="failCount">실패: 0</span>
-                    </div>
+                <div class="progress-container"><div class="progress-bar" id="progressBar"></div></div>
+                <div style="display: flex; justify-content: space-between; font-size: 14px; font-weight:bold;">
+                    <span id="progressCount">0 / 0</span>
+                    <span>
+                        <span class="log-success" id="successCount">성공: 0</span> &nbsp;|&nbsp;
+                        <span class="log-error" id="failCount">실패: 0</span>
+                    </span>
                 </div>
             </div>
 
-            <div class="terminal" id="terminalBox"></div>
+            <div class="terminal" id="terminalBox">로그 대기 중...</div>
         </div>
 
         <script>
             async function triggerTask(url) {
-                if (confirm('작업을 시작하시겠습니까? (백그라운드에서 실행되며 모니터링 창에 반영됩니다)')) {
+                if (confirm('작업을 시작하시겠습니까?')) {
                     await fetch(url);
+                    alert('작업이 시작되었습니다. 아래 모니터링 창을 확인하세요.');
+                }
+            }
+
+            async function surgicalFix() {
+                const name = document.getElementById('targetTitle').value;
+                if (!name) { alert('제목을 입력하세요!'); return; }
+                if (confirm(`'${name}'(이)가 포함된 모든 데이터를 파괴하고 새로 매칭할까요?`)) {
+                    const resp = await fetch(`/fix_wrong_match?name=${encodeURIComponent(name)}`);
+                    alert(await resp.text());
+                    location.reload();
                 }
             }
 
@@ -2500,49 +2551,30 @@ def updater_ui():
                     const res = await fetch('/api/updater/status');
                     const data = await res.json();
 
-                    document.getElementById('statusText').innerText = data.is_running ? `처리 중: ${data.current_item}` : `완료됨: ${data.current_item}`;
-                    document.getElementById('taskName').innerText = data.task_name;
+                    document.getElementById('statusText').innerText = data.is_running ? `처리 중: ${data.current_item}` : `완료: ${data.current_item}`;
 
                     const percent = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
                     document.getElementById('progressBar').style.width = percent + '%';
-
-                    if(!data.is_running && data.total > 0) {
-                        document.getElementById('progressBar').style.width = '100%';
-                    }
-
+                    document.getElementById('progressPercent').innerText = percent + '%';
                     document.getElementById('progressCount').innerText = `${data.current.toLocaleString()} / ${data.total.toLocaleString()}`;
-                    document.getElementById('progressPercent').innerText = `${percent}%`;
                     document.getElementById('successCount').innerText = `성공: ${data.success.toLocaleString()}`;
                     document.getElementById('failCount').innerText = `실패: ${data.fail.toLocaleString()}`;
 
                     const term = document.getElementById('terminalBox');
-
-                    if (data.logs.length > 0) {
+                    if (data.logs && data.logs.length > 0) {
                         let html = '';
                         data.logs.forEach(log => {
-                            let cssClass = 'log-info';
-                            let icon = 'ℹ️';
-
-                            if (log.type === 'success') { cssClass = 'log-success'; icon = '✅'; }
-                            else if (log.type === 'error') { cssClass = 'log-error'; icon = '❌'; }
-                            else if (log.type === 'warning') { cssClass = 'log-error'; icon = '⚠️'; }
-
-                            html += `<div class="${cssClass}">${log.time} ${icon} [UPDATE] ${log.msg}</div>`;
+                            let css = 'log-info';
+                            if (log.type === 'success') css = 'log-success';
+                            else if (log.type === 'error' || log.type === 'warning') css = 'log-error';
+                            html += `<div class="${css}">${log.time} [UPDATE] ${log.msg}</div>`;
                         });
-
-                        const isScrolledToBottom = term.scrollHeight - term.clientHeight <= term.scrollTop + 50;
                         term.innerHTML = html;
-
-                        if (isScrolledToBottom) {
-                            term.scrollTop = term.scrollHeight;
-                        }
+                        term.scrollTop = term.scrollHeight;
                     }
-                } catch (e) {
-                    console.error('Failed to fetch status:', e);
-                }
+                } catch (e) {}
             }
-
-            setInterval(updateStatus, 500);
+            setInterval(updateStatus, 1000);
             updateStatus();
         </script>
     </body>
@@ -2669,16 +2701,23 @@ def reset_all_tmdb_data():
 
 @app.route('/fix_wrong_match')
 def fix_wrong_match():
-    """잘못 매칭된 특정 작품(19금 등)의 이름의 일부를 입력받아 그것만 초기화하고 재매칭합니다."""
-    # 예: 브라우저 주소창에 http://192.168.0.2:5000/fix_wrong_match?name=작품이름
+    """잘못 매칭된 특정 작품(19금 이미지 등)의 이름을 입력받아 해당 데이터만 강제 초기화 후 재매칭합니다."""
     target_name = request.args.get('name')
     if not target_name:
-        return "오류: 주소창 끝에 '?name=작품이름' 을 붙여주세요. (예: /fix_wrong_match?name=나루토)", 400
+        return "오류: 주소창 끝에 '?name=작품이름' 을 붙여주세요.", 400
 
     try:
         conn = get_db()
-        # 해당 이름이 포함된 작품의 TMDB 정보만 날립니다.
-        cursor = conn.execute("""
+        # 1. 먼저 해당 이름을 가진 작품 목록을 확보합니다.
+        rows = conn.execute("SELECT name, category FROM series WHERE name LIKE ? OR cleanedName LIKE ?",
+                            (f'%{target_name}%', f'%{target_name}%')).fetchall()
+
+        if not rows:
+            conn.close()
+            return f"'{target_name}'을(를) DB에서 찾을 수 없습니다. 이름을 다시 확인해주세요."
+
+        # 2. 해당 작품들의 TMDB 정보를 DB에서 즉시 삭제합니다.
+        conn.execute("""
             UPDATE series
             SET tmdbId = NULL, posterPath = NULL, overview = NULL,
                 tmdbTitle = NULL, rating = NULL, genreNames = NULL,
@@ -2686,107 +2725,112 @@ def fix_wrong_match():
             WHERE name LIKE ? OR cleanedName LIKE ?
         """, (f'%{target_name}%', f'%{target_name}%'))
 
-        updated_count = cursor.rowcount
         conn.commit()
         conn.close()
 
-        if updated_count > 0:
-            # 메모리 캐시 새로고침
-            build_all_caches()
-            # 지워진 항목만 백그라운드에서 다시 매칭 (include_adult=false 가 적용된 상태로!)
-            threading.Thread(target=fetch_metadata_async, args=(False,), daemon=True).start()
-            return f"성공! '{target_name}'이(가) 포함된 {updated_count}개 작품의 메타데이터를 삭제하고 올바른 정보로 재매칭을 시작했습니다."
-        else:
-            return f"'{target_name}'을(를) DB에서 찾을 수 없습니다. 이름을 다시 확인해주세요."
+        # 3. 메모리 캐시를 즉시 비워 앱에서 이미지가 사라지게 합니다.
+        build_all_caches()
 
+        # 4. 백그라운드에서 '캐시를 무시하고(ignore_cache=True)' 재매칭을 수행합니다.
+        def rematch_task():
+            for row in rows:
+                log("FIX", f"Surgical Rematch: {row['name']}")
+                # ignore_cache=True를 주어 기존의 잘못된 19금 캐시를 무시하고 TMDB에서 새로 받아옵니다.
+                get_tmdb_info_server(row['name'], category=row['category'], ignore_cache=True)
+            build_all_caches()  # 매칭 완료 후 캐시 다시 빌드
+
+        threading.Thread(target=rematch_task, daemon=True).start()
+
+        return f"성공! '{target_name}' 관련 {len(rows)}건의 메타데이터를 파괴하고 재매칭을 시작했습니다. 잠시 후 확인하세요."
     except Exception as e:
-        return f"에러 발생: {str(e)}"
+        return f"에러 발생: {str(e)}", 500
 
 def build_all_caches():
     # 이 함수는 외부(업데이터 등)에서 캐시 갱신을 요청할 때만 사용합니다.
     _rebuild_fast_memory_cache()
 
-# 1. 캐시 빌드 로직 수정 (혼용 방지 및 정확한 폴더 분류)
 def _rebuild_fast_memory_cache():
     global _FAST_CATEGORY_CACHE, _SECTION_CACHE, _DETAIL_MEM_CACHE
-    log("SYSTEM", "⚡ 메모리 캐시 최적화 빌드 시작 (카테고리 엄격 분리 및 폴더 분류)...")
+    log("SYSTEM", "⚡ 메모리 캐시 최적화 빌드 시작 (정밀 분류 모드)...")
     _SECTION_CACHE = {}
     _DETAIL_MEM_CACHE = {}
     temp_cache = {}
     conn = get_db()
 
-    # 각 카테고리별로 시스템에 정의된 코드
-    CATS = ["movies", "foreigntv", "koreantv", "animations_all", "air"]
+    # 카테고리별 엄격한 경로 접두사 정의
+    STRICT_PREFIX = {
+        "movies": "movies/",
+        "foreigntv": "foreigntv/",
+        "koreantv": "koreantv/",
+        "animations_all": "animations_all/",
+        "air": "air/"
+    }
 
-    for cat in CATS:
-        # DB에서 해당 카테고리로 분류된 모든 데이터 조회
-        query = "SELECT path, name, cleanedName, tmdbTitle, tmdbId, posterPath, year, genreNames, overview FROM series WHERE category = ? ORDER BY yearVal DESC"
+    for cat in STRICT_PREFIX.keys():
+        log("SYSTEM", f"📂 [{cat}] 데이터 정밀 분석 중...")
+        query = "SELECT path, name, cleanedName, tmdbTitle, tmdbId, posterPath, year, genreNames FROM series WHERE category = ? ORDER BY yearVal DESC"
         rows = conn.execute(query, (cat,)).fetchall()
 
         items = []
         seen_keys = set()
-        genre_precalc = {}
-        folder_precalc = {}  # 서브 폴더(제목, 최신, UHD 등)별 사전 분류
+        genre_map = {}
+        folders = {} # { folder_name: { "all": [], "genre_map": {} } }
 
-        # 해당 카테고리의 경로 접두사 (예: "movies/")
-        path_prefix = cat.lower() + "/"
+        prefix = STRICT_PREFIX[cat]
 
         for r in rows:
             path = r['path']
-            path_lower = path.lower()
-
-            # [수정] 엄격한 경로 체크: path가 반드시 "category/"로 시작해야 함 (타 카테고리 혼입 방지)
-            if not path_lower.startswith(path_prefix):
+            # 1. 경로 엄격 체크 (타 카테고리 혼입 방지)
+            if not path.lower().startswith(prefix):
                 continue
 
-            # 중복 제거 (TMDB ID 또는 정제된 이름 기준)
+            # 2. 중복 제거 (그룹화)
             tmdb_id = r['tmdbId']
             c_name = r['cleanedName'] or r['name']
             group_key = tmdb_id if tmdb_id else c_name
             if not group_key or group_key in seen_keys:
                 continue
-
-            # 포스터 없는 항목 제외 (방송중 제외)
-            if not r['posterPath'] and cat != 'air':
-                continue
-
             seen_keys.add(group_key)
 
-            # 장르 데이터 복구
+            # 3. 데이터 가공 (팅김 방지를 위해 overview 제외)
             genres = []
             if r['genreNames']:
-                try:
-                    genres = json.loads(r['genreNames'])
-                except:
-                    pass
+                try: genres = json.loads(r['genreNames'])
+                except: pass
 
             display_name = r['tmdbTitle'] or c_name or r['name']
             item = {
                 "path": path, "name": display_name.strip(), "posterPath": r['posterPath'],
-                "year": r['year'], "genreNames": genres, "overview": r['overview'], "tmdbId": tmdb_id
+                "year": r['year'], "genreNames": genres, "tmdbId": tmdb_id
             }
             items.append(item)
 
-            # [수정] 폴더 분류 로직 강화
-            # 예: "movies/제목/영화.mp4" -> parts[1] == "제목"
-            parts = path.split('/')
-            if len(parts) > 2: # 최소 3단 구조 (카테고리/폴더/파일)여야 함
-                folder_name = parts[1]
-                folder_precalc.setdefault(folder_name, []).append(item)
-
+            # 전체 카테고리 장르 맵 생성
             for g in genres:
-                genre_precalc.setdefault(g, []).append(item)
+                genre_map.setdefault(g, []).append(item)
+
+            # 4. 서브 폴더별 프리빌드 (탭 클릭 시 광속 응답용)
+            # 경로 구조: movies/제목/영화.mkv -> parts[1]이 '제목'
+            parts = path.split('/')
+            if len(parts) >= 3:
+                folder_name = nfc(parts[1]) # 인코딩 통일
+                f_info = folders.setdefault(folder_name, {"all": [], "genre_map": {}})
+                f_info["all"].append(item)
+                for g in genres:
+                    f_info["genre_map"].setdefault(g, []).append(item)
 
         temp_cache[cat] = {
             "all": items,
-            "genre_map": genre_precalc,
-            "folders": folder_precalc
+            "genre_map": genre_map,
+            "folders": folders
         }
-        log("SYSTEM", f"✅ {cat} 캐시 빌드 완료 ({len(items)}개, 폴더 {len(folder_precalc)}개)")
+        log("SYSTEM", f"✅ {cat} 캐시 완료 ({len(items)}개, 폴더 {len(folders)}개)")
 
     conn.close()
     _FAST_CATEGORY_CACHE = temp_cache
     build_home_recommend()
+    log("SYSTEM", "🚀 모든 카테고리 프리빌드 완료!")
+
 def clean_title_generic(full_path, category_base_path):
     # 1. 카테고리 루트로부터의 상대 경로 추출 (예: '애니메이션/명탐정 코난/1기/파일.mp4')
     rel_path = nfc(os.path.relpath(full_path, category_base_path))

@@ -44,7 +44,8 @@ data class Cast(
 @Serializable
 data class HomeSection(
     val title: String,
-    val items: List<Category>
+    val items: List<Category>,
+    val initials: List<String>? = emptyList() // [추가] 초성 필터 리스트
 )
 
 data class Series(
