@@ -201,6 +201,10 @@ def init_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series ON episodes(series_path)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cleanedName ON series(cleanedName)')
 
+        # 🔴 [추가] 조회 및 정렬 속도를 극대화하는 복합 인덱스
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cat_year ON series(category, yearVal DESC)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series_path ON episodes(series_path)')
+
         # 🔴 [추가] 사용자님이 요청하신 인덱스 명시적 생성
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series_path ON episodes(series_path)')
 
@@ -955,85 +959,39 @@ def get_sections_for_category(cat, kw=None):
     if cache_key in _SECTION_CACHE:
         return _SECTION_CACHE[cache_key]
 
-    base_list = _FAST_CATEGORY_CACHE.get(cat, [])
+    cat_data = _FAST_CATEGORY_CACHE.get(cat, {})
+    if not cat_data: return []
+
+    base_list = cat_data.get("all", [])
+    genre_precalc = cat_data.get("genre_map", {})
     if not base_list: return []
 
     target_list = base_list
     is_search = False
     if kw and kw not in ["전체", "All"]:
-        search_kw = kw.strip().lower()
-        target_list = [i for i in base_list if
-                       f"/{search_kw}/" in f"/{i['path'].lower()}/" or search_kw in i['name'].lower()]
+        sk = kw.strip().lower()
+        target_list = [i for i in base_list if sk in i['path'].lower() or sk in i['name'].lower()]
         is_search = True
-
-    if not target_list: return []
-
-    # 🔴 [중복 제거 핵심] 🔴
-    final_unique_list = []
-    seen_keys = set()
-
-    for item in target_list:
-        display_name = item.get('name', '')
-        tmdb_id = item.get('tmdbId')
-
-        # [수정] 텍스트 노이즈 제거 후 순수 이름으로 비교 키 생성
-        pure_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', display_name)
-        pure_name = re.sub(r'[^\w가-힣]', '', nfc(pure_name)).lower()
-
-        # [중요] 변수 정의를 조건문보다 먼저 수행 (에러 해결)
-        dedupe_key = f"ID_{tmdb_id}" if tmdb_id else f"NAME_{pure_name}"
-        name_key = f"NAME_{pure_name}"
-
-        # ID가 다르더라도 이름이 같으면 동일 작품으로 간주하여 차단
-        if dedupe_key in seen_keys or (pure_name and name_key in seen_keys):
-            continue
-
-        final_unique_list.append(item)
-        seen_keys.add(dedupe_key)
-        if pure_name:
-            seen_keys.add(name_key)
-
-    target_list = final_unique_list
 
     if cat == 'air':
         sections = [{"title": "실시간 방영 중", "items": target_list}]
     else:
         sections = []
-        # 1. 오늘의 추천 (랜덤)
-        if len(target_list) > 20:
-            random_picks = random.sample(target_list, min(40, len(target_list)))
-            sections.append({"title": f"{kw if is_search else ''} 오늘의 추천".strip(), "items": random_picks})
+        if len(target_list) > 10:
+            sections.append({"title": "오늘의 추천", "items": random.sample(target_list, min(30, len(target_list)))})
 
-        # 2. 최신 공개작
-        recent_items = [i for i in target_list if i.get('year') and i['year'] >= '2024']
-        if len(recent_items) >= 5:
-            sections.append({"title": f"{kw if is_search else ''} 최신 공개작".strip(), "items": recent_items[:100]})
+        # 미리 분류된 장르 활용
+        if not is_search:
+            top_genres = sorted(genre_precalc.keys(), key=lambda x: len(genre_precalc[x]), reverse=True)[:3]
+            for g in top_genres:
+                g_items = genre_precalc[g]
+                if len(g_items) >= 5:
+                    sections.append({"title": f"인기 {g}", "items": random.sample(g_items, min(40, len(g_items)))})
 
-        genre_map = {}
-        for item in target_list:
-            for g in item.get('genreNames', []):
-                if g not in genre_map: genre_map[g] = []
-                genre_map[g].append(item)
+        sections.append({"title": "전체 목록", "items": target_list})
 
-        sorted_genres = sorted(genre_map.keys(), key=lambda x: len(genre_map[x]), reverse=True)
-        display_genres = [g for g in sorted_genres if g not in ["TV 영화", "애니메이션"] or cat != 'animations_all'][:3]
-
-        for g in display_genres:
-            g_items = genre_map[g]
-            if len(g_items) >= 5:
-                title = f"{kw if is_search else ''} 인기 {g}".strip()
-                sections.append({"title": title, "items": random.sample(g_items, min(60, len(g_items)))})
-
-        # 🔴 [수정] 전체 목록 정렬 로직
-        # 애니메이션 카테고리이거나 검색 중이 아닐 때 가나다순으로 정렬
-        all_list_items = list(target_list)
-        if cat == 'animations_all':
-            all_list_items.sort(key=lambda x: x['name'])
-
-        sections.append({"title": "전체 목록", "items": all_list_items})
     _SECTION_CACHE[cache_key] = sections
     return sections
-
 
 @app.route('/category_sections')
 def get_category_sections():
@@ -1050,20 +1008,19 @@ def get_home():
 @app.route('/list')
 def get_list():
     p = request.args.get('path', '')
-    m = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air",
-         "movies": "movies", "foreigntv": "foreigntv", "koreantv": "koreantv", "animations_all": "animations_all",
-         "air": "air"}
+    m = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
     cat = "movies"
     for label, code in m.items():
-        if label in p:
-            cat = code
-            break
-    bl = _FAST_CATEGORY_CACHE.get(cat, [])
+        if label in p: cat = code; break
+
+    # 구조 변경 대응
+    cat_data = _FAST_CATEGORY_CACHE.get(cat, {})
+    bl = cat_data.get("all", [])
+
     kw = request.args.get('keyword')
     lim = int(request.args.get('limit', 1000))
     off = int(request.args.get('offset', 0))
 
-    # [수정] "제목" 예외 제거 및 폴더 단위 필터링 강화
     if kw and kw not in ["전체", "All"]:
         search_kw = nfc(kw).lower()
         res = [item for item in bl if
@@ -1071,97 +1028,117 @@ def get_list():
     else:
         res = bl
 
-    # [추가] list API에서도 중복 제거 (필터링 후 결과가 겹칠 수 있음)
-    final_res = []
-    seen = set()
-    for item in res:
-        key = item.get('tmdbId') or item['name']
-        if key not in seen:
-            final_res.append(item)
-            seen.add(key)
+    return gzip_response(res[off:off + lim])
 
-    return gzip_response(final_res[off:off + lim])
 
 
 # 상세페이지 결과 캐시를 위한 전역 변수 (함수 밖에 위치)
 _DETAIL_MEM_CACHE = {}
+
 
 @app.route('/api/series_detail')
 def get_series_detail_api():
     path = request.args.get('path')
     if not path: return gzip_response({})
 
-    # 1. 메모리 캐시 확인 (있으면 즉시 반환)
+    # 1. 메모리 캐시 확인
     if path in _DETAIL_MEM_CACHE:
         return gzip_response(_DETAIL_MEM_CACHE[path])
 
     conn = get_db()
+    # 시리즈 정보 조회 (Primary Key 사용으로 매우 빠름)
     row = conn.execute('SELECT * FROM series WHERE path = ?', (path,)).fetchone()
     if not row:
+        # 혹시 모를 NFC/NFD 불일치 대응
+        row = conn.execute('SELECT * FROM series WHERE path = ?', (nfc(path),)).fetchone()
+
+    if not row:
         conn.close()
+        log("DETAIL_ERROR", f"DB에서 경로를 찾을 수 없음: {path}")
         return gzip_response({})
 
     series = dict(row)
-    clean_main_name = series.get('tmdbTitle') or series.get('cleanedName') or series.get('name')
-    series['name'] = clean_main_name
-
     t_id = series.get('tmdbId')
     c_name = series.get('cleanedName')
+    cat = series.get('category')
+    clean_main_name = series.get('tmdbTitle') or series.get('cleanedName') or series.get('name')
 
-    # 2. 에피소드 통합 조회
-    if t_id:
-        cursor = conn.execute("""
-            SELECT * FROM episodes
-            WHERE series_path IN (SELECT path FROM series WHERE tmdbId = ?)
-        """, (t_id,))
-    else:
-        cursor = conn.execute("""
-            SELECT * FROM episodes
-            WHERE series_path IN (SELECT path FROM series WHERE cleanedName = ?)
-        """, (c_name,))
+    # 2. 에피소드 조회 로직 (어떤 상황에서도 버튼이 나오도록 보장)
+    all_eps_dict = {}
 
-    all_eps = [dict(r) for r in cursor.fetchall()]
+    # [1단계] 현재 요청된 경로로 직접 조회 (최우선)
+    rows = conn.execute("SELECT * FROM episodes WHERE series_path = ?", (path,)).fetchall()
+    if not rows:
+        rows = conn.execute("SELECT * FROM episodes WHERE series_path = ?", (nfc(path),)).fetchall()
+
+    for r in rows:
+        d = dict(r)
+        all_eps_dict[d['id']] = d
+
+    # [2단계] 그룹화 정보가 확실히 있을 때만 추가 에피소드 검색
+    if t_id and len(str(t_id)) > 3:
+        rows = conn.execute("SELECT * FROM episodes WHERE series_path IN (SELECT path FROM series WHERE tmdbId = ?)",
+                            (t_id,)).fetchall()
+        for r in rows:
+            d = dict(r)
+            all_eps_dict[d['id']] = d
+    elif c_name and len(c_name.strip()) > 1:
+        rows = conn.execute(
+            "SELECT * FROM episodes WHERE series_path IN (SELECT path FROM series WHERE cleanedName = ?)",
+            (c_name,)).fetchall()
+        for r in rows:
+            d = dict(r)
+            all_eps_dict[d['id']] = d
+
     conn.close()
 
-    # 3. 에피소드 중복 제거 및 번호 추출 (최적화)
-    unique_eps_dict = {}
-    for ep in all_eps:
-        # DB에 이미 번호가 있다면 정규식 계산 생략 (속도 향상 핵심)
-        sn = ep.get('season_number')
-        en = ep.get('episode_number')
+    # 3. [최후의 보루] DB에 에피소드가 아예 없다면 가상의 에피소드 생성 (버튼 출력 보장)
+    if not all_eps_dict:
+        log("DETAIL_FIX", f"에피소드 정보 없음, 가상 생성: {path}")
+        v_id = hashlib.md5(path.encode()).hexdigest()
+        all_eps_dict[v_id] = {
+            "id": v_id, "series_path": path, "title": clean_main_name,
+            "videoUrl": f"/video_serve?type={'movie' if cat == 'movies' else 'ftv'}&path={urllib.parse.quote(path.split('/', 1)[-1])}",
+            "thumbnailUrl": series.get('posterPath')
+        }
 
-        if sn is None or en is None:
-            sn, en = extract_episode_numbers(ep.get('title', ''))
+    # 4. 중복 제거 통합 및 데이터 가공
+    processed_eps = []
+    for eid, ep in all_eps_dict.items():
+        sn, en = ep.get('season_number'), ep.get('episode_number')
+        if sn is None: sn, en = extract_episode_numbers(ep.get('title', ''))
 
-        if (sn, en) not in unique_eps_dict:
-            ep['sn'], ep['en'] = sn, en
-            ep['title'] = f"{en}화 {clean_main_name}"
-            unique_eps_dict[(sn, en)] = ep
+        # 영화는 무조건 1시즌 1화로 통일하여 UI를 깔끔하게 함
+        if cat == 'movies':
+            sn, en = 1, 1
+            ep['title'] = clean_main_name
 
-    # 4. 정렬 및 그룹화
-    sorted_eps = sorted(unique_eps_dict.values(), key=lambda x: (x['sn'], x['en']))
+        ep['sn'], ep['en'] = sn, en
+        processed_eps.append(ep)
+
+    # 5. 정렬 및 결과 구성
+    sorted_eps = sorted(processed_eps, key=lambda x: (x['sn'], x['en']))
     seasons_map = {}
     for ep in sorted_eps:
         sk = f"{ep['sn']}시즌"
         if sk not in seasons_map: seasons_map[sk] = []
         seasons_map[sk].append(ep)
 
-    # 5. 필드 변환
     for col in ['genreIds', 'genreNames', 'actors']:
-        if series.get(col) and isinstance(series[col], str):
+        val = series.get(col)
+        if val and isinstance(val, str):
             try:
-                series[col] = json.loads(series[col])
+                series[col] = json.loads(val)
             except:
                 series[col] = []
-        elif not series.get(col):
+        elif not val:
             series[col] = []
 
     series['movies'] = sorted_eps
     series['seasons'] = seasons_map
+    series['name'] = clean_main_name
 
-    # 6. 결과를 메모리에 캐싱 (최대 100개까지 보관하거나 간단히 저장)
     _DETAIL_MEM_CACHE[path] = series
-
     return gzip_response(series)
 
 
@@ -2673,35 +2650,33 @@ def build_all_caches():
 
 def _rebuild_fast_memory_cache():
     global _FAST_CATEGORY_CACHE, _SECTION_CACHE, _DETAIL_MEM_CACHE
-    log("SYSTEM", "⚡ 메모리 캐시 최적화 빌드 시작...")
+    log("SYSTEM", "⚡ 메모리 캐시 최적화 빌드 시작 (정제 자동 복구 포함)...")
     _SECTION_CACHE = {}
     _DETAIL_MEM_CACHE = {}
     temp_cache = {}
     conn = get_db()
 
     for cat in ["movies", "foreigntv", "koreantv", "animations_all", "air"]:
-        # SQL에서는 복잡한 계산 없이 인덱스(category, yearVal)를 탈 수 있는 단순 조회만 수행
-        query = "SELECT * FROM series WHERE category = ? ORDER BY yearVal DESC"
+        query = "SELECT path, name, cleanedName, tmdbTitle, tmdbId, posterPath, year, genreNames, overview FROM series WHERE category = ? ORDER BY yearVal DESC"
         rows = conn.execute(query, (cat,)).fetchall()
 
         items = []
-        seen_keys = set()  # 중복 체크용 고속 Set
+        seen_keys = set()
+        genre_precalc = {}
+        recent_precalc = []
 
         for r in rows:
-            # 1. 중복 판단 키 생성 (ID가 있으면 ID, 없으면 정제된 이름)
-            group_key = r['tmdbId'] if r['tmdbId'] else r['cleanedName']
-            if not group_key: continue
+            tmdb_id = r['tmdbId']
+            # DB에 없으면 실시간으로 계산해서 캐시에 보관 (속도와 중복 제거 동시에 해결)
+            c_name = r['cleanedName'] or clean_title_complex(r['name'], full_path=r['path'])[0]
 
-            # 2. 이미 처리한 작품이면 건너뜀 (메모리에서 즉시 처리되므로 SQL보다 수백 배 빠름)
-            if group_key in seen_keys:
-                continue
+            group_key = tmdb_id if tmdb_id else c_name
+            if not group_key or group_key in seen_keys: continue
 
-            # 3. 포스터가 없는 항목 필터링 (방송중 제외)
-            if not r['posterPath'] and cat != 'air':
-                continue
-
-            # 4. 🔴 [핵심 방어벽 수정] 너무 빡빡한 한글 폴더 검사 제거
             path_lower = r['path'].lower()
+            if not r['posterPath'] and cat != 'air': continue
+
+            # 기존 방어벽 유지
             if cat == 'animations_all' and '애니메이션' not in path_lower and '라프텔' not in path_lower:
                 continue
             elif cat == 'movies' and '영화' not in path_lower and 'movie' not in path_lower:
@@ -2713,25 +2688,30 @@ def _rebuild_fast_memory_cache():
 
             seen_keys.add(group_key)
 
-            # 5. 앱 노출용 데이터 구성
-            display_name = r['tmdbTitle'] or r['cleanedName'] or r['name']
-            items.append({
-                "path": r['path'],
-                "name": display_name.strip(),
-                "posterPath": r['posterPath'],
-                "year": r['year'],
-                "genreNames": json.loads(r['genreNames']) if r['genreNames'] else [],
-                "overview": r['overview'],
-                "tmdbId": r['tmdbId'],
-                "movies": []
-            })
+            genres = []
+            if r['genreNames']:
+                try:
+                    genres = json.loads(r['genreNames'])
+                except:
+                    pass
 
-        temp_cache[cat] = items
-        log("SYSTEM", f"✅ {cat} 캐시 완료 ({len(items)}개)")
+            display_name = r['tmdbTitle'] or c_name or r['name']
+            item = {
+                "path": r['path'], "name": display_name.strip(), "posterPath": r['posterPath'],
+                "year": r['year'], "genreNames": genres, "overview": r['overview'], "tmdbId": tmdb_id
+            }
+            items.append(item)
+
+            for g in genres:
+                genre_precalc.setdefault(g, []).append(item)
+            if r['year'] and r['year'] >= '2024':
+                recent_precalc.append(item)
+
+        temp_cache[cat] = {"all": items, "genre_map": genre_precalc, "recent": recent_precalc}
+        log("SYSTEM", f"✅ {cat} 캐시 빌드 완료 ({len(items)}개)")
 
     conn.close()
     _FAST_CATEGORY_CACHE = temp_cache
-    # 홈 추천 데이터 빌드 호출
     build_home_recommend()
 
 def clean_title_generic(full_path, category_base_path):
@@ -2777,47 +2757,36 @@ def clean_title_generic(full_path, category_base_path):
 def build_home_recommend():
     global HOME_RECOMMEND
     log("HOME", "🏠 홈 추천 데이터 빌드 시작...")
-
     try:
         new_sections = []
 
         def get_unique_picks(cat_name, limit=15):
-            items = list(_FAST_CATEGORY_CACHE.get(cat_name, []))
+            # 구조 변경 대응
+            cat_data = _FAST_CATEGORY_CACHE.get(cat_name, {})
+            items = list(cat_data.get("all", []))
             if not items: return []
             random.shuffle(items)
+            return items[:limit]
 
-            picks = []
-            seen_titles = set()
-            for item in items:
-                # TMDB ID 또는 이름을 기준으로 중복 제거
-                work_key = item.get('tmdbId') or nfc(item['name']).lower().replace(" ", "").strip()
-                if work_key not in seen_titles:
-                    picks.append(item)
-                    seen_titles.add(work_key)
-                if len(picks) >= limit: break
-            return picks
-
-        # 1. 인기 외국 TV 시리즈
         ftv = get_unique_picks('foreigntv')
         if ftv:
             new_sections.append({"title": "인기 외국 TV 시리즈", "items": ftv})
             log("HOME", f"✅ 외국 TV 빌드 완료: {len(ftv)}개")
 
-        # 2. 화제의 국내 드라마
         ktv = get_unique_picks('koreantv')
         if ktv:
             new_sections.append({"title": "화제의 국내 드라마", "items": ktv})
             log("HOME", f"✅ 국내 TV 빌드 완료: {len(ktv)}개")
 
-        # 3. 실시간 방영중
-        air = list(_FAST_CATEGORY_CACHE.get('air', []))
+        air_data = _FAST_CATEGORY_CACHE.get('air', {})
+        air = list(air_data.get("all", []))
         if air:
             random.shuffle(air)
             new_sections.append({"title": "실시간 방영 중", "items": air[:15]})
+            log("HOME", f"✅ 방송중 빌드 완료: {len(air[:15])}개")
 
         HOME_RECOMMEND = new_sections
         log("HOME", "✨ 홈 추천 빌드 최종 완료")
-
     except Exception as e:
         log("HOME_ERROR", f"Error: {e}")
 
