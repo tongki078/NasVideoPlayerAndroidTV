@@ -42,7 +42,7 @@ class VideoRepositoryImpl : VideoRepository {
     private fun Category.toSeries() = Series(
         title = if (!tmdbTitle.isNullOrBlank()) tmdbTitle else (name ?: ""),
         episodes = movies ?: emptyList(),
-        seasons = seasons ?: emptyMap(), // [추가] 서버에서 온 시즌 데이터를 매핑
+        seasons = seasons ?: emptyMap(),
         fullPath = path,
         category = category,
         posterPath = posterPath,
@@ -143,10 +143,12 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun searchVideos(query: String, category: String): List<Series> = try {
         val response = client.get("$baseUrl/search") {
             parameter("q", query)
-            parameter("cat", category)
+            if (category.isNotEmpty()) {
+                parameter("cat", category)
+            }
         }.body<List<Category>>()
         
-        response.filter { !isGenericFolder(it.name) }.map { it.fixUrls().toSeries() }
+        response.map { it.fixUrls().toSeries() }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         emptyList()

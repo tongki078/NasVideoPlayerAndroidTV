@@ -76,23 +76,18 @@ fun HomeScreen(
 
     val heroItem = heroPool.getOrNull(currentHeroIndex)
 
-    // [포커스 복구 및 카테고리 전환 처리]
-    LaunchedEffect(currentScreen, lastFocusedPath, combinedSections, isLoading) {
-        // lastFocusedPath가 null이면 (카테고리 전환 등) 최상단으로 강제 스크롤 및 포커스 정보 초기화
-        if (lastFocusedPath == null && !isLoading) {
-            try {
-                rowFocusIndices.clear() // 이전 카테고리의 포커스 인덱스들 초기화
-                lazyListState.scrollToItem(0)
-            } catch (_: Exception) {}
-            return@LaunchedEffect
-        }
-
-        // 포커스 복구 로직 (기존 항목으로 돌아올 때)
+    // [포커스 복구 로직]
+    // 뒤로 가기 시 마지막으로 선택했던 항목으로 스크롤 및 포커스를 복구합니다.
+    LaunchedEffect(lastFocusedPath, combinedSections, isLoading) {
+        // lastFocusedPath가 있을 때만 복구 로직을 수행합니다. 
+        // 기존에 있던 'null일 때 scrollToItem(0)' 로직은 복구 완료 후 lastFocusedPath가 null이 될 때
+        // 스크롤이 최상단으로 튀는 버그를 유발하므로 제거했습니다.
         if (lastFocusedPath != null && combinedSections.isNotEmpty() && !isLoading) {
             var foundRowIndex = -1
             var foundItemIndex = -1
             var foundRowKey = ""
 
+            // 1. 시청 기록에서 찾기
             if (currentScreen == Screen.HOME && watchHistory.isNotEmpty()) {
                 val idx = watchHistory.indexOfFirst { it.seriesPath == lastFocusedPath }
                 if (idx != -1) {
@@ -102,6 +97,7 @@ fun HomeScreen(
                 }
             }
 
+            // 2. 각 섹션에서 찾기
             if (foundRowIndex == -1) {
                 combinedSections.forEachIndexed { sIdx, section ->
                     val iIdx = section.items.indexOfFirst { it.path == lastFocusedPath }
@@ -113,10 +109,15 @@ fun HomeScreen(
                 }
             }
 
+            // 항목을 찾으면 해당 위치로 스크롤 및 포커스 설정
             if (foundRowIndex != -1) {
-                delay(200)
+                delay(100) 
                 try {
-                    lazyListState.scrollToItem(foundRowIndex)
+                    // 이미 화면에 보이고 있다면 강제 스크롤하지 않아 미세한 점프를 방지합니다.
+                    val isVisible = lazyListState.layoutInfo.visibleItemsInfo.any { it.index == foundRowIndex }
+                    if (!isVisible) {
+                        lazyListState.scrollToItem(foundRowIndex)
+                    }
                     rowFocusIndices[foundRowKey] = foundItemIndex
                 } catch (_: Exception) {}
             }
@@ -162,7 +163,7 @@ fun HomeScreen(
                             },
                             onDetailClick = { onSeriesClick(heroSeries) },
                             horizontalPadding = standardMargin,
-                            isFirstLoad = false // 카테고리 클릭 시 포커스 강제 이동 방지 (TopBar 유지)
+                            isFirstLoad = false
                         )
                     }
                 } else if (isLoading) {

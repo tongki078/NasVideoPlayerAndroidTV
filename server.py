@@ -1021,11 +1021,11 @@ def get_sections_for_category(cat, kw=None):
             })
 
     # [테마 3] 전체 목록 (요청하신 대로 아주 깔끔하게 고정)
-    display_limit = 3000
-    sections.append({
-        "title": "전체목록",
-        "items": target_list[:display_limit]
-    })
+    # display_limit = 3000
+    # sections.append({
+    #     "title": "전체목록",
+    #     "items": target_list[:display_limit]
+    # })
 
     log("PERF", f"✅ {cat}>{kw} 감성 테마 섹션 구성 완료")
     _SECTION_CACHE[cache_key] = sections
@@ -1232,6 +1232,7 @@ def search_videos():
         query = """
             SELECT * FROM series
             WHERE (name LIKE ? OR name LIKE ? OR cleanedName LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ? OR tmdbTitle LIKE ? OR path LIKE ?)
+            AND posterPath IS NOT NULL
         """
         params = [f"%{q_nfc}%", f"%{q_nfd}%", f"%{q_nfc}%", f"%{q_nfd}%", f"%{q_nfc}%", f"%{q_nfd}%", f"%{q_nfc}%"]
 
@@ -1262,17 +1263,28 @@ def search_videos():
 
             processed = {
                 "name": f"{base_name}{tag_str}".strip(),
-                "path": item['path'], "category": item['category'],
-                "posterPath": item['posterPath'] or "", "year": item['year'] or "",
-                "overview": (item['overview'] or "")[:200], "genreNames": [], "actors": [],
-                "movies": [], "seasons": {}
+                "path": item['path'],
+                "category": item['category'],
+                "posterPath": item['posterPath'] or "",
+                "year": item['year'] or "",
+                "overview": (item['overview'] or "")[:200],
+                "genreIds": [],
+                "genreNames": [],
+                "director": item.get('director') or "",
+                "rating": item.get('rating') or "",
+                "tmdbTitle": item.get('tmdbTitle') or "",
+                "tmdbId": item.get('tmdbId') or "",
+                "actors": [],
+                "movies": [],
+                "seasons": {}
             }
             # JSON 필드 복구
-            for col in ['genreNames', 'actors']:
+            for col in ['genreIds', 'genreNames', 'actors']:
                 try:
-                    processed[col] = json.loads(item[col]) if item.get(col) else []
+                    if item.get(col):
+                        processed[col] = json.loads(item[col])
                 except:
-                    pass
+                    processed[col] = []
 
             rows.append(processed)
 
@@ -2483,10 +2495,23 @@ def updater_ui():
                 <button class="btn-warning" onclick="triggerTask('/rematch_metadata')">⚠️ 전체 강제 재스캔</button>
                 <button class="btn-info" onclick="window.open('/admin_stills', '_blank')" style="background-color: #17a2b8;">📊 스틸컷 적용 확인</button>
                 <button class ="btn-secondary" onclick="triggerTask('/rescan_broken')" style="background-color: #6c757d;"> 🔍 로컬 폴더 스캔 </button>
-                <!-- 기존 버튼들 밑에 하나 추가 -->
-<button class="btn-warning" style="background-color: #fd7e14;" onclick="triggerTask('/reset_episodes_metadata')">🗑️ 에피소드 회차 정보 초기화 & 재매칭</button>
-<button class="btn-danger" style="background-color: #dc3545;" onclick="triggerTask('/reset_all_tmdb_data')">🚨 전체 TMDB 메타데이터 초기화 (19금 오류 해결)</button>
-<button class="btn-info" style="background-color: #20c997;" onclick="triggerTask('/refresh_cleaned_names')">♻️ 제목 정제 및 그룹화 재정렬 (시즌 묶음 오류 해결)</button>
+                <button class="btn-warning" style="background-color: #fd7e14;" onclick="triggerTask('/reset_episodes_metadata')">🗑️ 에피소드 회차 정보 초기화 & 재매칭</button>
+                <button class="btn-danger" style="background-color: #dc3545;" onclick="triggerTask('/reset_all_tmdb_data')">🚨 전체 TMDB 메타데이터 초기화 (19금 오류 해결)</button>
+                <button class="btn-info" style="background-color: #20c997;" onclick="triggerTask('/refresh_cleaned_names')">♻️ 제목 정제 및 그룹화 재정렬 (시즌 묶음 오류 해결)</button>
+                <button class="btn-success" style="background-color: #20c997;" onclick="triggerTask('/api/retry_all_no_poster')">🖼️ 전체 포스터 누락 재매칭</button>
+            </div>
+
+            <!-- 개별 메타데이터 수정 섹션 -->
+            <div class="status-box" style="margin-top: 10px; background: #fff3cd; border-color: #ffeeba; border-left: 5px solid #ffc107;">
+                <div class="status-header" style="color: #856404;">🚨 성인 이미지 / 오매칭 개별 수정</div>
+                <div style="display: flex; gap: 10px; align-items: center; margin-top: 10px;">
+                    <input type="text" id="fixNameInput" placeholder="수정할 작품 제목 입력 (예: 나루토)"
+                           style="flex: 1; padding: 12px; border-radius: 6px; border: 1px solid #ffc107; font-size: 14px;">
+                    <button class="btn-warning" onclick="fixMetadata()" style="white-space: nowrap; background: #fd7e14; color: white;">데이터 초기화 및 재매칭</button>
+                </div>
+                <p style="font-size: 12px; color: #856404; margin-top: 8px; margin-bottom: 0;">
+                    * 입력한 검색어가 포함된 모든 시리즈의 메타데이터를 삭제하고, TMDB에서 성인물 제외 필터를 적용하여 다시 정보를 가져옵니다.
+                </p>
             </div>
 
             <div class="status-box">
@@ -2518,6 +2543,28 @@ def updater_ui():
             async function triggerTask(url) {
                 if (confirm('작업을 시작하시겠습니까? (백그라운드에서 실행되며 모니터링 창에 반영됩니다)')) {
                     await fetch(url);
+                }
+            }
+
+            async function fixMetadata() {
+                const nameInput = document.getElementById('fixNameInput');
+                const name = nameInput.value.trim();
+
+                if (!name) {
+                    alert('수정할 작품의 제목을 입력해주세요.');
+                    return;
+                }
+
+                if (confirm(`'${name}'이(가) 포함된 모든 작품의 메타데이터를 삭제하고 재매칭하시겠습니까?\\n(성인물 제외 필터가 적용됩니다)`)) {
+                    try {
+                        const resp = await fetch(`/fix_wrong_match?name=${encodeURIComponent(name)}`);
+                        const result = await resp.text();
+                        alert(result);
+                        nameInput.value = '';
+                        updateStatus();
+                    } catch (e) {
+                        alert('에러가 발생했습니다: ' + e);
+                    }
                 }
             }
 
@@ -2574,7 +2621,6 @@ def updater_ui():
     </body>
     </html>
     """
-
 
 @app.route('/api/updater/status')
 def get_updater_status():
@@ -2764,7 +2810,8 @@ def _rebuild_fast_memory_cache():
             c_name = r['cleanedName'] or r['name']
             group_key = tmdb_id if tmdb_id else c_name
             if not group_key or group_key in seen_keys: continue
-            if not r['posterPath'] and cat != 'air': continue
+            # [수정 후] 모든 카테고리에서 포스터가 없으면 리스트에서 숨김
+            if not r['posterPath']: continue
             seen_keys.add(group_key)
 
             display_name = nfc(r['tmdbTitle'] or c_name or r['name'])
@@ -2798,6 +2845,101 @@ def _rebuild_fast_memory_cache():
     _FAST_CATEGORY_CACHE = temp_cache
     build_home_recommend()
 
+def clean_title_for_retry(title):
+    if not title: return ""
+    # 1. 모든 괄호와 그 안의 내용 제거
+    t = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}|\【.*?\】|\「.*?\」', ' ', title)
+    # 2. 한글, 영문, 숫자만 남기고 나머지 특수문자/기호 제거
+    t = "".join(re.findall(r'[가-힣a-zA-Z0-9\s]+', t))
+    # 3. 연속된 공백 정리
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+def get_pure_ko_title(title):
+    # 아예 한글 단어만 추출 (최후의 수단)
+    ko_only = "".join(re.findall(r'[가-힣]+', title))
+    return ko_only.strip()
+
+def get_tmdb_info_with_fallback(orig_name, full_path=None, category=None):
+    # [1단계] 기본 검색 (기존 로직)
+    info = get_tmdb_info_server(orig_name, category=category, ignore_cache=True)
+    if not info.get('failed'): return info
+
+    # [2단계] 더 강력한 정제 후 재검색
+    clean_retry = clean_title_for_retry(orig_name)
+    if clean_retry and clean_retry != orig_name:
+        log("RETRY", f"🔄 2단계 시도 (정제어): {clean_retry}")
+        info = get_tmdb_info_server(clean_retry, category=category, ignore_cache=True)
+        if not info.get('failed'): return info
+
+    # [3단계] 부모 폴더명으로 시도 (애니메이션/시리즈물 특화)
+    if full_path:
+        parent_folder = os.path.basename(os.path.dirname(full_path))
+        # 폴더명이 카테고리명과 같거나 너무 짧으면 무시
+        if parent_folder and len(parent_folder) > 1 and parent_folder not in ["movies", "animations_all", "air"]:
+            clean_parent = clean_title_for_retry(parent_folder)
+            log("RETRY", f"🔄 3단계 시도 (폴더명): {clean_parent}")
+            info = get_tmdb_info_server(clean_parent, category=category, ignore_cache=True)
+            if not info.get('failed'): return info
+
+    # [4단계] 순수 한글 키워드만 추출하여 시도 (최후의 수단)
+    pure_ko = get_pure_ko_title(orig_name)
+    if pure_ko and len(pure_ko) >= 2:
+        log("RETRY", f"🔄 4단계 시도 (순수 한글): {pure_ko}")
+        info = get_tmdb_info_server(pure_ko, category=category, ignore_cache=True)
+        return info
+
+    return {"failed": True}
+
+def run_retry_all_no_poster():
+    set_update_state(is_running=True, task_name="포스터 누락 정밀 재매칭", clear_logs=True)
+    emit_ui_log("포스터가 없는 항목들에 대해 4단계 정밀 매칭을 시작합니다.", "info")
+
+    conn = get_db()
+    # 포스터가 없는 항목들 추출 (failed 여부 상관없이 전체 시도)
+    targets = conn.execute("SELECT name, path, category FROM series WHERE posterPath IS NULL").fetchall()
+    conn.close()
+
+    total = len(targets)
+    set_update_state(total=total, current=0, success=0, fail=0)
+
+    success_count = 0
+    for idx, row in enumerate(targets):
+        name, path, cat = row['name'], row['path'], row['category']
+        with UPDATE_LOCK:
+            UPDATE_STATE["current"] = idx + 1
+            UPDATE_STATE["current_item"] = name
+
+        # 위에서 만든 fallback 엔진 호출
+        info = get_tmdb_info_with_fallback(name, full_path=path, category=cat)
+
+        if not info.get('failed'):
+            # 성공 시 DB 업데이트
+            u_conn = get_db()
+            up = (
+                info.get('posterPath'), info.get('year'), info.get('overview'),
+                info.get('rating'), info.get('tmdbId'), info.get('title') or info.get('name'),
+                name
+            )
+            u_conn.execute('''
+                UPDATE series SET
+                posterPath=?, year=?, overview=?, rating=?, tmdbId=?, tmdbTitle=?, failed=0
+                WHERE name=?
+            ''', up)
+            u_conn.commit()
+            u_conn.close()
+
+            success_count += 1
+            with UPDATE_LOCK:
+                UPDATE_STATE["success"] += 1
+            emit_ui_log(f"매칭 성공: {name} -> {info.get('title')}", "success")
+        else:
+            with UPDATE_LOCK:
+                UPDATE_STATE["fail"] += 1
+
+    build_all_caches()
+    set_update_state(is_running=False, current_item=f"작업 완료 (신규 매칭: {success_count}건)")
+    emit_ui_log(f"정밀 재매칭 완료. 총 {success_count}개의 포스터를 새로 찾았습니다.", "success")
 
 def clean_title_generic(full_path, category_base_path):
     # 1. 카테고리 루트로부터의 상대 경로 추출 (예: '애니메이션/명탐정 코난/1기/파일.mp4')
@@ -2930,6 +3072,25 @@ def test_grouping_logic():
     }
     test_conn.close()
     return jsonify(report)
+
+@app.route('/api/retry_all_no_poster')
+def retry_all_no_poster():
+    """포스터가 없는 모든 항목에 대해 4단계 정밀 재매칭을 백그라운드에서 시작합니다."""
+    # 이미 다른 작업(스캔, 매칭 등)이 실행 중인지 확인
+    if UPDATE_STATE.get("is_running", False):
+        return jsonify({
+            "status": "error",
+            "message": f"현재 '{UPDATE_STATE.get('task_name')}' 작업이 진행 중입니다. 잠시 후 다시 시도해주세요."
+        }), 409
+
+    # 백그라운드 스레드에서 정밀 재매칭 루프 실행
+    import threading
+    threading.Thread(target=run_retry_all_no_poster, daemon=True).start()
+
+    return jsonify({
+        "status": "success",
+        "message": "모든 카테고리의 포스터 누락 항목에 대해 4단계 정밀 재매칭 작업을 시작했습니다. /updater 페이지에서 진행 상황을 확인하세요."
+    })
 
 def background_init_tasks():
     build_all_caches()
