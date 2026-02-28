@@ -807,54 +807,77 @@ def perform_full_scan():
     threading.Thread(target=fetch_metadata_async, daemon=True).start()
 
 
-def fetch_metadata_async(force_all=False):
+def fetch_metadata_async(force_all=False, target_name=None):
     global IS_METADATA_RUNNING
     if IS_METADATA_RUNNING:
         log("METADATA", "이미 프로세스가 실행 중입니다. 중단합니다.")
         return
     IS_METADATA_RUNNING = True
-    log("METADATA", f"⚙️ 병렬 매칭 프로세스 시작 (force_all={force_all})")
+
+    # 작업명 설정 (타겟이 있으면 표시)
+    task_display_name = f"메타데이터 매칭 (대상: {target_name})" if target_name else "메타데이터 매칭"
+    log("METADATA", f"⚙️ 병렬 매칭 프로세스 시작 (force_all={force_all}, target='{target_name}')")
 
     try:
         conn = get_db()
         cursor = conn.cursor()
+
+        # 1. 대상 카운팅 쿼리 수정 (진행률 표시용)
+        count_query = "SELECT COUNT(*) FROM series WHERE failed = 0"
+        count_params = []
+        if target_name:
+            count_query += " AND (name LIKE ? OR cleanedName LIKE ?)"
+            count_params.extend([f'%{target_name}%', f'%{target_name}%'])
+        else:
+            count_query += " AND (tmdbId IS NULL OR tmdbTitle IS NULL)"
+
+        t_wait = cursor.execute(count_query, count_params).fetchone()[0]
         t_all = cursor.execute("SELECT COUNT(*) FROM series").fetchone()[0]
         t_ok = cursor.execute("SELECT COUNT(*) FROM series WHERE tmdbId IS NOT NULL").fetchone()[0]
         t_fail = cursor.execute("SELECT COUNT(*) FROM series WHERE failed = 1").fetchone()[0]
-        t_wait = cursor.execute("""
-            SELECT COUNT(*) FROM series
-            WHERE failed = 0
-            AND (tmdbId IS NULL OR tmdbTitle IS NULL)
-        """).fetchone()[0]
 
-        set_update_state(is_running=True, task_name="메타데이터 매칭", total=t_all,
+        set_update_state(is_running=True, task_name=task_display_name, total=t_all,
                          current=t_ok + t_fail, success=t_ok, fail=t_fail, clear_logs=True)
-        emit_ui_log(f"메타데이터 매칭 작업을 시작합니다. (대상: {t_wait}개)", "info")
+        emit_ui_log(f"{task_display_name} 작업을 시작합니다. (대상: {t_wait}개)", "info")
 
-        if force_all:
+        if force_all and not target_name:
             conn.execute('UPDATE series SET failed=0 WHERE tmdbId IS NULL')
             conn.commit()
 
-        uncleaned_names_rows = conn.execute(
-            'SELECT name, path FROM series WHERE cleanedName IS NULL AND tmdbId IS NULL AND failed = 0 GROUP BY name').fetchall()
+        # 2. 제목 정제 안 된 항목들 처리 (필터 적용)
+        uncleaned_query = 'SELECT name, path FROM series WHERE cleanedName IS NULL AND tmdbId IS NULL AND failed = 0'
+        uncleaned_params = []
+        if target_name:
+            uncleaned_query += ' AND (name LIKE ? OR cleanedName LIKE ?)'
+            uncleaned_params.extend([f'%{target_name}%', f'%{target_name}%'])
+        uncleaned_query += ' GROUP BY name'
+
+        uncleaned_names_rows = conn.execute(uncleaned_query, uncleaned_params).fetchall()
         if uncleaned_names_rows:
             for idx, r in enumerate(uncleaned_names_rows):
                 name = r['name']
-                # [수정] 메타데이터 매칭 시에도 정확한 경로 기반 정제 수행
                 ct, yr = clean_title_complex(name, full_path=r['path'])
                 cursor.execute('UPDATE series SET cleanedName=?, yearVal=? WHERE name=? AND cleanedName IS NULL',
                                (ct, yr, name))
                 if (idx + 1) % 2000 == 0: conn.commit()
             conn.commit()
 
-        group_rows = conn.execute('''
+        # 3. 매칭 대상 그룹화 쿼리 수정 (핵심!)
+        group_query = '''
             SELECT cleanedName, yearVal, category, MIN(name) as sample_name, GROUP_CONCAT(name, '|') as orig_names
             FROM series
             WHERE failed = 0
-            AND (tmdbId IS NULL OR tmdbTitle IS NULL OR path IN (SELECT series_path FROM episodes WHERE season_number IS NULL))
             AND cleanedName IS NOT NULL
-            GROUP BY cleanedName, yearVal, category
-        ''').fetchall()
+        '''
+        group_params = []
+        if target_name:
+            group_query += ' AND (name LIKE ? OR cleanedName LIKE ?)'
+            group_params.extend([f'%{target_name}%', f'%{target_name}%'])
+        else:
+            group_query += ' AND (tmdbId IS NULL OR tmdbTitle IS NULL OR path IN (SELECT series_path FROM episodes WHERE season_number IS NULL))'
+
+        group_query += ' GROUP BY cleanedName, yearVal, category'
+        group_rows = conn.execute(group_query, group_params).fetchall()
         conn.close()
 
         tasks = []
@@ -870,7 +893,9 @@ def fetch_metadata_async(force_all=False):
         total = len(tasks)
 
         def process_one(task):
-            info = get_tmdb_info_server(task['sample_name'], category=task['category'], ignore_cache=force_all)
+            # 타겟팅 작업일 때는 캐시를 무시하고 새로 가져오도록 함 (강제 갱신 효과)
+            info = get_tmdb_info_server(task['sample_name'], category=task['category'],
+                                        ignore_cache=(target_name is not None))
             return (task, info)
 
         batch_size = 50
@@ -924,7 +949,6 @@ def fetch_metadata_async(force_all=False):
                             if EN:
                                 ei = info['seasons_data'].get(f"{sn}_{EN}")
                                 if ei:
-                                    # 고화질 스틸컷 주소 (original) 적용
                                     still_url = f"https://image.tmdb.org/t/p/original{ei.get('still_path')}" if ei.get(
                                         'still_path') else None
                                     ep_batch.append(
@@ -940,7 +964,8 @@ def fetch_metadata_async(force_all=False):
             total_fail += batch_fail
 
             with UPDATE_LOCK:
-                UPDATE_STATE["current"] = (t_ok + t_fail + total_success + total_fail)
+                # 진행률 갱신
+                UPDATE_STATE["current"] = (t_ok + total_success + total_fail)
                 UPDATE_STATE["success"] = (t_ok + total_success)
                 UPDATE_STATE["fail"] = (t_fail + total_fail)
 
@@ -950,6 +975,7 @@ def fetch_metadata_async(force_all=False):
         log("METADATA", f"⚠️ 에러 발생: {traceback.format_exc()}")
     finally:
         IS_METADATA_RUNNING = False
+
 
 
 def get_sections_for_category(cat, kw=None):
@@ -2503,14 +2529,18 @@ def updater_ui():
 
             <!-- 개별 메타데이터 수정 섹션 -->
             <div class="status-box" style="margin-top: 10px; background: #fff3cd; border-color: #ffeeba; border-left: 5px solid #ffc107;">
-                <div class="status-header" style="color: #856404;">🚨 성인 이미지 / 오매칭 개별 수정</div>
+                <div class="status-header" style="color: #856404;">🚨 성인 이미지 / 오매칭 개별 수정 및 수동 매칭</div>
                 <div style="display: flex; gap: 10px; align-items: center; margin-top: 10px;">
-                    <input type="text" id="fixNameInput" placeholder="수정할 작품 제목 입력 (예: 나루토)"
+                    <input type="text" id="fixNameInput" placeholder="작품 제목 키워드 (예: 미공개X파일)"
+                           style="flex: 1.5; padding: 12px; border-radius: 6px; border: 1px solid #ffc107; font-size: 14px;">
+                    <input type="text" id="tmdbIdInput" placeholder="TMDB ID (예: tv:32863)"
                            style="flex: 1; padding: 12px; border-radius: 6px; border: 1px solid #ffc107; font-size: 14px;">
-                    <button class="btn-warning" onclick="fixMetadata()" style="white-space: nowrap; background: #fd7e14; color: white;">데이터 초기화 및 재매칭</button>
+                    <button class="btn-warning" onclick="manualMatchSimple()" style="white-space: nowrap; background: #28a745; color: white;">수동 ID 매칭</button>
+                    <button class="btn-warning" onclick="fixMetadata()" style="white-space: nowrap; background: #fd7e14; color: white;">자동 재매칭</button>
                 </div>
                 <p style="font-size: 12px; color: #856404; margin-top: 8px; margin-bottom: 0;">
-                    * 입력한 검색어가 포함된 모든 시리즈의 메타데이터를 삭제하고, TMDB에서 성인물 제외 필터를 적용하여 다시 정보를 가져옵니다.
+                    * <b>수동 ID 매칭:</b> TMDB ID를 직접 입력하여 강제로 연결합니다. (가장 정확)<br>
+                    * <b>자동 재매칭:</b> 제목으로 다시 검색합니다. (성인물 제외 필터 적용)
                 </p>
             </div>
 
@@ -2543,6 +2573,27 @@ def updater_ui():
             async function triggerTask(url) {
                 if (confirm('작업을 시작하시겠습니까? (백그라운드에서 실행되며 모니터링 창에 반영됩니다)')) {
                     await fetch(url);
+                }
+            }
+
+            async function manualMatchSimple() {
+                const name = document.getElementById('fixNameInput').value.trim();
+                const id = document.getElementById('tmdbIdInput').value.trim();
+
+                if (!name || !id) {
+                    alert('작품 제목 키워드와 TMDB ID를 모두 입력해주세요.');
+                    return;
+                }
+
+                if (confirm(`'${name}'이 포함된 모든 항목을 TMDB ID '${id}'로 강제 매칭하시겠습니까?`)) {
+                    try {
+                        const resp = await fetch(`/api/manual_match_simple?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}`);
+                        const result = await resp.text();
+                        alert(result);
+                        updateStatus();
+                    } catch (e) {
+                        alert('에러 발생: ' + e);
+                    }
                 }
             }
 
@@ -2738,18 +2789,16 @@ def reset_all_tmdb_data():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
-
 @app.route('/fix_wrong_match')
 def fix_wrong_match():
     """잘못 매칭된 특정 작품(19금 등)의 이름의 일부를 입력받아 그것만 초기화하고 재매칭합니다."""
-    # 예: 브라우저 주소창에 http://192.168.0.2:5000/fix_wrong_match?name=작품이름
     target_name = request.args.get('name')
     if not target_name:
         return "오류: 주소창 끝에 '?name=작품이름' 을 붙여주세요. (예: /fix_wrong_match?name=나루토)", 400
 
     try:
         conn = get_db()
-        # 해당 이름이 포함된 작품의 TMDB 정보만 날립니다.
+        # 1. 해당 이름이 포함된 작품의 TMDB 정보만 초기화
         cursor = conn.execute("""
             UPDATE series
             SET tmdbId = NULL, posterPath = NULL, overview = NULL,
@@ -2765,9 +2814,9 @@ def fix_wrong_match():
         if updated_count > 0:
             # 메모리 캐시 새로고침
             build_all_caches()
-            # 지워진 항목만 백그라운드에서 다시 매칭 (include_adult=false 가 적용된 상태로!)
-            threading.Thread(target=fetch_metadata_async, args=(False,), daemon=True).start()
-            return f"성공! '{target_name}'이(가) 포함된 {updated_count}개 작품의 메타데이터를 삭제하고 올바른 정보로 재매칭을 시작했습니다."
+            # 2. 🔴 수정: fetch_metadata_async에 target_name을 전달하여 '해당 작품만' 매칭하도록 함
+            threading.Thread(target=fetch_metadata_async, kwargs={'target_name': target_name}, daemon=True).start()
+            return f"성공! '{target_name}' 관련 {updated_count}개 항목을 초기화하고 전용 재매칭을 시작했습니다."
         else:
             return f"'{target_name}'을(를) DB에서 찾을 수 없습니다. 이름을 다시 확인해주세요."
 
@@ -3091,6 +3140,131 @@ def retry_all_no_poster():
         "status": "success",
         "message": "모든 카테고리의 포스터 누락 항목에 대해 4단계 정밀 재매칭 작업을 시작했습니다. /updater 페이지에서 진행 상황을 확인하세요."
     })
+
+
+@app.route('/api/debug_search_conan')
+def debug_search_conan():
+    conn = get_db()
+    # 검색 쿼리에서 필터를 하나씩 제거하며 어디서 걸러지는지 확인합니다.
+
+    # 1. 단순히 이름만 맞는게 몇개인지?
+    total = conn.execute("SELECT COUNT(*) FROM series WHERE name LIKE '%명탐정 코난%'").fetchone()[0]
+
+    # 2. 포스터가 있는게 몇개인지?
+    has_poster = \
+    conn.execute("SELECT COUNT(*) FROM series WHERE name LIKE '%명탐정 코난%' AND posterPath IS NOT NULL").fetchone()[0]
+
+    # 3. 에피소드가 연결된게 몇개인지?
+    has_episodes = conn.execute("""
+        SELECT COUNT(*) FROM series s
+        WHERE s.name LIKE '%명탐정 코난%'
+        AND EXISTS (SELECT 1 FROM episodes e WHERE e.series_path = s.path)
+    """).fetchone()[0]
+
+    # 4. 실제 검색 쿼리에서 최종적으로 남는 데이터 샘플
+    final_sample = conn.execute(
+        "SELECT name, path, posterPath, tmdbId FROM series WHERE name LIKE '%명탐정 코난%' LIMIT 5").fetchall()
+
+    conn.close()
+    return jsonify({
+        "1_이름매칭_총수": total,
+        "2_포스터보유_수": has_poster,
+        "3_에피소드연결_수": has_episodes,
+        "4_데이터샘플": [dict(r) for r in final_sample]
+    })
+
+@app.route('/api/manual_match_simple')
+def manual_match_simple():
+    """TMDB ID를 직접 입력받아 특정 키워드가 포함된 모든 시리즈를 강제 매칭 (락 보호 강화)"""
+    target_name = request.args.get('name')
+    full_id = request.args.get('id')
+
+    if not target_name or not full_id or ':' not in full_id:
+        return "오류: 작품 키워드와 TMDB ID(타입:ID)가 모두 필요합니다.", 400
+
+    # 현재 다른 메타데이터 작업이 수행 중인지 확인 (충돌 방지)
+    if IS_METADATA_RUNNING:
+        emit_ui_log("대기 중: 다른 메타데이터 작업이 진행 중입니다. 잠시 후 다시 시도하세요.", "warning")
+        return "현재 다른 작업이 실행 중입니다. 10초 후 다시 시도하세요.", 409
+
+    emit_ui_log(f"수동 ID 매칭 시작: '{target_name}' -> {full_id}", "info")
+
+    m_type, t_id = full_id.split(':')
+
+    try:
+        # 1. TMDB 데이터 조회
+        headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
+        d_resp = requests.get(
+            f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings,credits",
+            headers=headers, timeout=10).json()
+
+        if 'id' not in d_resp:
+            emit_ui_log(f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", "error")
+            return f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", 404
+
+        ko_title = d_resp.get('title') or d_resp.get('name')
+        yv = (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0]
+
+        # 성인 등급 확인 (참고용 로그)
+        is_adult = d_resp.get('adult', False)
+        if is_adult:
+            emit_ui_log("주의: 선택하신 작품이 성인물로 분류되어 있습니다.", "warning")
+
+        # 장르 및 정보 가공
+        genre_names = [g['name'] for g in d_resp.get('genres', [])]
+        cast_data = d_resp.get('credits', {}).get('cast', [])
+        actors = [{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in cast_data[:10]]
+        crew_data = d_resp.get('credits', {}).get('crew', [])
+        director = next((c['name'] for c in crew_data if c.get('job') == 'Director'), "")
+
+        # 2. DB 업데이트 (락 발생 시 최대 5번 재시도)
+        updated_count = 0
+        conn = None
+        for attempt in range(5):
+            try:
+                conn = get_db()
+                cursor = conn.cursor()
+                up = (
+                    d_resp.get('poster_path'), yv, d_resp.get('overview'),
+                    None, d_resp.get('number_of_seasons'),
+                    json.dumps([g['id'] for g in d_resp.get('genres', [])]),
+                    json.dumps(genre_names, ensure_ascii=False),
+                    director,
+                    json.dumps(actors, ensure_ascii=False),
+                    full_id,
+                    ko_title
+                )
+
+                cursor.execute("""
+                    UPDATE series
+                    SET posterPath=?, year=?, overview=?, rating=?, seasonCount=?,
+                        genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, tmdbTitle=?, failed=0
+                    WHERE name LIKE ? OR cleanedName LIKE ?
+                """, (*up, f'%{target_name}%', f'%{target_name}%'))
+
+                updated_count = cursor.rowcount
+                conn.commit()
+                break  # 성공 시 루프 탈출
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower():
+                    emit_ui_log(f"DB가 사용 중입니다. 재시도 중... ({attempt + 1}/5)", "warning")
+                    time.sleep(2)  # 2초 대기 후 다시 시도
+                else:
+                    raise e
+            finally:
+                if conn: conn.close()
+
+        if updated_count > 0:
+            emit_ui_log(f"매칭 성공! '{target_name}' 관련 {updated_count}건을 '{ko_title}'로 변경 완료.", "success")
+            build_all_caches()
+            return f"성공! {updated_count}개 항목을 '{ko_title}'로 매칭했습니다."
+        else:
+            emit_ui_log(f"오류: '{target_name}' 키워드로 검색된 DB 항목이 없습니다.", "error")
+            return f"오류: 키워드를 확인해주세요.", 404
+
+    except Exception as e:
+        emit_ui_log(f"수동 매칭 중 에러: {str(e)}", "error")
+        return f"에러 발생: {str(e)}"
 
 def background_init_tasks():
     build_all_caches()

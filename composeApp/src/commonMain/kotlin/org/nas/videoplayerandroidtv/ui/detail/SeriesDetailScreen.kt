@@ -178,8 +178,23 @@ fun SeriesDetailScreen(
 
 @Composable
 private fun InfoBadge(text: String, color: Color = Color.White.copy(alpha = 0.15f), textColor: Color = Color.White, isOutlined: Boolean = false) {
-    Box(modifier = Modifier.padding(end = 10.dp).clip(RoundedCornerShape(4.dp)).background(if (isOutlined) Color.Transparent else color).then(if (isOutlined) Modifier.border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(4.dp)) else Modifier).padding(horizontal = 8.dp, vertical = 3.dp), contentAlignment = Alignment.Center) {
-        Text(text = text, color = textColor, fontSize = 10.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+    Box(
+        modifier = Modifier
+            .padding(end = 10.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (isOutlined) Color.Transparent else color)
+            .then(if (isOutlined) Modifier.border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(4.dp)) else Modifier)
+            .padding(horizontal = 8.dp, vertical = 2.dp), 
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text, 
+            color = textColor, 
+            fontSize = 10.sp, 
+            fontWeight = FontWeight.Bold, 
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(bottom = 1.dp) // 텍스트가 폰트 내부 패딩 때문에 아래로 쏠려 보여서 1dp nudging
+        )
     }
 }
 
