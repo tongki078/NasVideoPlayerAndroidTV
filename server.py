@@ -953,6 +953,7 @@ def fetch_metadata_async(force_all=False):
     finally:
         IS_METADATA_RUNNING = False
 
+# 2. 섹션 생성 로직 수정 (속도 저하 해결 및 폴더 필터링 강화)
 def get_sections_for_category(cat, kw=None):
     cache_key = f"sections_{cat}_{kw}"
     if cache_key in _SECTION_CACHE:
@@ -963,24 +964,26 @@ def get_sections_for_category(cat, kw=None):
 
     base_list = cat_data.get("all", [])
     genre_map = cat_data.get("genre_map", {})
-    folders = cat_data.get("folders", {})  # 미리 분류된 폴더들
+    folders = cat_data.get("folders", {})
 
     if not base_list: return []
 
     target_list = base_list
     is_search = False
 
-    # [수술 핵심] '제목', '최신', 'UHD' 등을 검색어가 아닌 "폴더 필터"로 처리
+    # [수정] 키워드 처리 로직 개선
     if kw and kw not in ["전체", "All"]:
         if kw in folders:
-            # kw가 폴더명(제목, 최신, UHD)이면 준비된 리스트 사용 (섞임 발생 안 함)
+            # 1. 폴더명과 일치하는 경우 (예: '제목' 탭 클릭 시)
+            # 순수하게 해당 폴더의 리스트만 사용 (다른 다큐/애니 혼입 원천 차단)
             target_list = folders[kw]
         else:
-            # 그 외의 경우에만 실제 검색 수행 (사용자 직접 검색)
-            sk = kw.strip().lower()
-            target_list = [i for i in base_list if sk in i['path'].lower() or sk in i['name'].lower()]
+            # 2. 폴더명이 아닌 경우에만 '검색' 모드로 동작
+            sk = nfc(kw).lower().strip()
+            # 검색 시에도 경로 접두사를 확인하여 현재 카테고리 내에서만 검색되도록 보장
+            target_list = [i for i in base_list if sk in i['name'].lower() or f"/{sk}/" in i['path'].lower()]
             is_search = True
-            # 검색 결과에 대해서만 장르 재분류
+            # 검색 결과용 장르 맵 재구성 (이 과정이 데이터가 많으면 느림)
             genre_map = {}
             for item in target_list:
                 for g in item.get('genreNames', []):
@@ -988,19 +991,23 @@ def get_sections_for_category(cat, kw=None):
 
     if not target_list: return []
 
+    sections = []
+
+    # [수정] '제목' 폴더 탭일 경우 속도를 위해 추천 섹션을 건너뛰거나 간소화
+    is_title_tab = (cat == 'movies' and kw == '제목')
+
     if cat == 'air':
-        sections = [{"title": "실시간 방영 중", "items": target_list}]
+        sections.append({"title": "실시간 방영 중", "items": target_list})
     else:
-        sections = []
-        # 1. 추천 섹션
-        if len(target_list) > 10:
+        # 1. 추천 섹션 (검색이 아니거나, 제목 탭이 아닐 때만 포함하여 속도 향상)
+        if not is_search and not is_title_tab and len(target_list) > 20:
             sections.append({
-                "title": f"{kw if kw else ''} 오늘의 추천".strip(),
+                "title": "오늘의 추천",
                 "items": random.sample(target_list, min(40, len(target_list)))
             })
 
-        # 2. 장르별 섹션 (영화 '제목' 탭처럼 데이터가 너무 많을 때는 연산 절약을 위해 생략)
-        if not (cat == 'movies' and kw == '제목'):
+        # 2. 장르별 섹션 (영화 '제목' 탭에서는 연산량 절약을 위해 생략)
+        if not is_title_tab:
             sorted_genres = sorted(genre_map.keys(), key=lambda x: len(genre_map[x]), reverse=True)
             for g in [g for g in sorted_genres if g not in ["TV 영화", "애니메이션"]][:3]:
                 if len(genre_map[g]) >= 5:
@@ -1011,7 +1018,7 @@ def get_sections_for_category(cat, kw=None):
 
         # 3. 전체 목록
         sections.append({
-            "title": "전체 목록" if not is_search else f"'{kw}' 검색 결과",
+            "title": f"'{kw}' 목록" if kw and kw not in ["전체", "All"] else "전체 목록",
             "items": target_list
         })
 
@@ -2699,6 +2706,7 @@ def build_all_caches():
     # 이 함수는 외부(업데이터 등)에서 캐시 갱신을 요청할 때만 사용합니다.
     _rebuild_fast_memory_cache()
 
+# 1. 캐시 빌드 로직 수정 (혼용 방지 및 정확한 폴더 분류)
 def _rebuild_fast_memory_cache():
     global _FAST_CATEGORY_CACHE, _SECTION_CACHE, _DETAIL_MEM_CACHE
     log("SYSTEM", "⚡ 메모리 캐시 최적화 빌드 시작 (카테고리 엄격 분리 및 폴더 분류)...")
@@ -2707,16 +2715,10 @@ def _rebuild_fast_memory_cache():
     temp_cache = {}
     conn = get_db()
 
-    # 각 카테고리별로 정확한 경로 키워드 정의
-    STRICT_PATH_MAP = {
-        "movies": ["영화", "movie"],
-        "foreigntv": ["외국tv", "foreigntv"],
-        "koreantv": ["국내tv", "koreantv"],
-        "animations_all": ["애니메이션", "animations_all", "라프텔"],
-        "air": ["방송중", "air"]
-    }
+    # 각 카테고리별로 시스템에 정의된 코드
+    CATS = ["movies", "foreigntv", "koreantv", "animations_all", "air"]
 
-    for cat in ["movies", "foreigntv", "koreantv", "animations_all", "air"]:
+    for cat in CATS:
         # DB에서 해당 카테고리로 분류된 모든 데이터 조회
         query = "SELECT path, name, cleanedName, tmdbTitle, tmdbId, posterPath, year, genreNames, overview FROM series WHERE category = ? ORDER BY yearVal DESC"
         rows = conn.execute(query, (cat,)).fetchall()
@@ -2724,22 +2726,22 @@ def _rebuild_fast_memory_cache():
         items = []
         seen_keys = set()
         genre_precalc = {}
-        folder_precalc = {}  # 서브 폴더(최신, UHD, 제목)별 사전 분류
+        folder_precalc = {}  # 서브 폴더(제목, 최신, UHD 등)별 사전 분류
 
-        allowed_keywords = STRICT_PATH_MAP.get(cat, [])
+        # 해당 카테고리의 경로 접두사 (예: "movies/")
+        path_prefix = cat.lower() + "/"
 
         for r in rows:
             path = r['path']
             path_lower = path.lower()
 
-            # [수술 핵심 1] 다른 카테고리가 섞여 들어오는 것을 경로 기반으로 완전 차단
-            is_valid_path = any(kw in path_lower for kw in allowed_keywords)
-            if not is_valid_path:
+            # [수정] 엄격한 경로 체크: path가 반드시 "category/"로 시작해야 함 (타 카테고리 혼입 방지)
+            if not path_lower.startswith(path_prefix):
                 continue
 
-            # [수술 핵심 2] 중복 제거
+            # 중복 제거 (TMDB ID 또는 정제된 이름 기준)
             tmdb_id = r['tmdbId']
-            c_name = r['cleanedName'] or clean_title_complex(r['name'], full_path=path)[0]
+            c_name = r['cleanedName'] or r['name']
             group_key = tmdb_id if tmdb_id else c_name
             if not group_key or group_key in seen_keys:
                 continue
@@ -2750,7 +2752,7 @@ def _rebuild_fast_memory_cache():
 
             seen_keys.add(group_key)
 
-            # 데이터 구성
+            # 장르 데이터 복구
             genres = []
             if r['genreNames']:
                 try:
@@ -2765,11 +2767,11 @@ def _rebuild_fast_memory_cache():
             }
             items.append(item)
 
-            # [수술 핵심 3] 폴더명에 따른 사전 분류 (최신, UHD, 제목 등)
-            # 경로 구조: movies/제목/영화명.mkv -> parts[1]이 '제목'
+            # [수정] 폴더 분류 로직 강화
+            # 예: "movies/제목/영화.mp4" -> parts[1] == "제목"
             parts = path.split('/')
-            if len(parts) >= 2:
-                folder_name = parts[1]  # 실제 서버의 서브 폴더명
+            if len(parts) > 2: # 최소 3단 구조 (카테고리/폴더/파일)여야 함
+                folder_name = parts[1]
                 folder_precalc.setdefault(folder_name, []).append(item)
 
             for g in genres:
@@ -2780,12 +2782,11 @@ def _rebuild_fast_memory_cache():
             "genre_map": genre_precalc,
             "folders": folder_precalc
         }
-        log("SYSTEM", f"✅ {cat} 캐시 빌드 완료 ({len(items)}개)")
+        log("SYSTEM", f"✅ {cat} 캐시 빌드 완료 ({len(items)}개, 폴더 {len(folder_precalc)}개)")
 
     conn.close()
     _FAST_CATEGORY_CACHE = temp_cache
     build_home_recommend()
-
 def clean_title_generic(full_path, category_base_path):
     # 1. 카테고리 루트로부터의 상대 경로 추출 (예: '애니메이션/명탐정 코난/1기/파일.mp4')
     rel_path = nfc(os.path.relpath(full_path, category_base_path))
