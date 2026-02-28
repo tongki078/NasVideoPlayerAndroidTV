@@ -390,16 +390,35 @@ def clean_title_complex(title, full_path=None, base_path=None):
 
 def extract_episode_numbers(full_path):
     n = nfc(full_path)
+
+    # [새로운 추가 로직] 폴더 구조 기반 시즌 판별 (스마트 시즌 감지)
+    # 예: "자막 명탐정 코난 미공개X파일 1 (1996)/01화.mp4" -> 시즌 1 추출
+    season = None
+    parts = n.split('/')
+    if len(parts) >= 2:
+        parent_folder = parts[-2]
+
+        # 1. 괄호를 먼저 제거하여 순수 텍스트만 분석 (연도 등에 속지 않기 위해)
+        clean_parent = REGEX_BRACKETS.sub(' ', parent_folder)
+
+        # 2. 명확한 숫자 패턴 (예: X파일 1, 1기, 시즌1) 추출 시도
+        ms = re.search(r'(?i)(?:시즌|Season|S)\s*(\d+)|(\d+)\s*기|(?<=\s)(\d+)(?=\s*$)', clean_parent)
+        if ms:
+            season = int(ms.group(1) or ms.group(2) or ms.group(3))
+
+    # [기존 로직] 파일명 기반 마커 추출
     # 1. 표준 패턴 우선 확인 (S01E01, 1기 1화 등)
     m = re.search(r'(?i)S(\d+)\s*E(\d+)|(\d+)\s*기\s*(\d+)\s*(?:화|회)', n)
     if m:
         if m.group(1): return int(m.group(1)), int(m.group(2))
-        return int(m.group(3)), int(m.group(4))
+        if not season: season = int(m.group(3))
+        return season, int(m.group(4))
 
-    # 2. 시즌 정보 (없으면 1)
-    season = 1
-    ms = re.search(r'(?i)(?:시즌|Season|S)\s*(\d+)|(\d+)\s*기', n)
-    if ms: season = int(ms.group(1) or ms.group(2))
+    # 2. 파일명 내의 시즌 정보 (위에서 폴더 시즌을 찾지 못했을 때만)
+    if not season:
+        season = 1
+        ms = re.search(r'(?i)(?:시즌|Season|S)\s*(\d+)|(\d+)\s*기', n)
+        if ms: season = int(ms.group(1) or ms.group(2))
 
     # 3. 회차 정보 (파일명의 가장 마지막 숫자 뭉치)
     filename = os.path.basename(n)
@@ -1192,7 +1211,9 @@ def get_series_detail_api():
     processed_eps = []
     for eid, ep in all_eps_dict.items():
         sn, en = ep.get('season_number'), ep.get('episode_number')
-        if sn is None: sn, en = extract_episode_numbers(ep.get('title', ''))
+        if sn is None:
+            # 데이터베이스에 시즌 번호가 없으면 실시간으로 추출
+            sn, en = extract_episode_numbers(ep.get('title', ''))
 
         # 영화는 무조건 1시즌 1화로 통일하여 UI를 깔끔하게 함
         if cat == 'movies':
@@ -1231,7 +1252,7 @@ def get_series_detail_api():
 def pre_generate_individual_task(ep_thumb_url):
     try:
         u = urllib.parse.urlparse(ep_thumb_url)
-        q = urllib.parse.parse_qs(u.query)
+        q = urllib.parse.parseqs(u.query)
         if 'path' in q and 'type' in q and 'id' in q:
             _generate_thumb_file(q['path'][0], q['type'][0], q['id'][0], q.get('t', ['300'])[0], q.get('w', ['320'])[0])
     except:
@@ -1266,17 +1287,19 @@ def search_videos():
             query += " AND category = ?"
             params.append(target_cat)
 
-        # 2. GROUP BY: tmdbId가 있으면 ID로, 없으면 정제된 제목(cleanedName)으로 묶음
-        # 이 부분이 이번에 가장 강력하게 보정된 부분입니다.
+        # 2. GROUP BY: tmdbId가 있으면 묶되, 검색한 키워드가 원래 이름(name)에 있으면 살려둡니다.
+        # 이렇게 하면 수동매칭 후에도 미공개X파일 같은 개별 카드가 유지됩니다.
         query += """
             GROUP BY
                 category,
-                COALESCE(NULLIF(tmdbId, ''), NULLIF(cleanedName, ''), name),
+                tmdbId,
+                cleanedName,
                 CASE WHEN path LIKE '%더빙%' THEN '더빙' WHEN path LIKE '%자막%' THEN '자막' ELSE '' END
             ORDER BY
                 CASE
-                    WHEN tmdbTitle LIKE ? OR name LIKE ? THEN 1
-                    ELSE 2
+                    WHEN name LIKE ? THEN 1
+                    WHEN tmdbTitle LIKE ? THEN 2
+                    ELSE 3
                 END, name ASC
         """
         params.extend([f'{q_nfc}%', f'{q_nfc}%'])
@@ -1286,7 +1309,7 @@ def search_videos():
         for row in cursor.fetchall():
             item = dict(row)
 
-            # 공식 제목이 있으면 그걸 쓰고, 없으면 정제된 제목 사용
+            # 표시 이름: 복구된 원래 제목(cleanedName)이 있으면 그것을 우선 사용
             base_name = nfc(item.get('tmdbTitle') or item.get('cleanedName') or item.get('name'))
 
             # 태그 정보 복원
@@ -2477,33 +2500,6 @@ def admin_stills_page():
     </body>
     </html>
     """
-
-
-@app.route('/api/restore_names')
-def restore_names():
-    target = "미공개X파일"
-    try:
-        conn = get_db()
-        # 오직 '미공개X파일'이 포함된 데이터 중,
-        # 수동 매칭으로 인해 이름이 본편(명탐정 코난)으로 바뀐 것들만 원래대로 되돌립니다.
-        cursor = conn.execute("""
-            UPDATE series
-            SET tmdbTitle = cleanedName
-            WHERE (name LIKE ? OR cleanedName LIKE ?)
-              AND tmdbTitle != cleanedName
-        """, (f'%{target}%', f'%{target}%'))
-
-        updated_count = cursor.rowcount
-        conn.commit()
-        conn.close()
-
-        # 메모리 캐시를 즉시 갱신하여 앱에 바로 반영되게 합니다.
-        build_all_caches()
-
-        log("RESTORE", f"✅ '{target}' 관련 {updated_count}개 항목 복구 완료")
-        return f"성공! '{target}' 관련 {updated_count}개 항목의 이름을 원래대로('{target}') 복구했습니다."
-    except Exception as e:
-        return f"복구 중 에러 발생: {str(e)}"
 
 # --- [UI/캐시 로직 보존] ---
 @app.route('/updater')
