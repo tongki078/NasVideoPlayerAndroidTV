@@ -137,23 +137,28 @@ fun App(driver: SqlDriver) {
     val allRowStates = remember { mutableStateMapOf<String, MutableMap<String, LazyListState>>() }
     val allRowFocusIndices = remember { mutableStateMapOf<String, SnapshotStateMap<String, Int>>() }
 
-    // [수정] 네비게이션 개선: 뒤로가기 시 홈으로 포커스 이동
+    // [수정] 네비게이션 개선: 뒤로가기 시 현재 화면 유지하며 상단바 포커스 우선
     val homeFocusRequester = remember { FocusRequester() }
     var isTopBarFocused by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME || !isTopBarFocused) {
+    BackHandler(enabled = selectedMovie != null || selectedSeries != null || !isTopBarFocused || currentScreen != Screen.HOME) {
         when {
             selectedMovie != null -> { selectedMovie = null }
             selectedSeries != null -> { selectedSeries = null }
+            // 1순위: 포커스가 리스트(아래쪽)에 있으면 현재 화면 유지하며 상단 홈 아이콘으로 포커스 이동
+            !isTopBarFocused -> {
+                scope.launch {
+                    delay(50)
+                    homeFocusRequester.requestFocus()
+                }
+            }
+            // 2순위: 이미 상단바에 포커스가 있는데 홈 화면이 아니면 그제서야 홈 화면으로 이동
             currentScreen != Screen.HOME -> { 
                 currentScreen = Screen.HOME 
                 scope.launch {
                     delay(50)
                     homeFocusRequester.requestFocus()
                 }
-            }
-            !isTopBarFocused -> {
-                homeFocusRequester.requestFocus()
             }
         }
     }

@@ -47,12 +47,26 @@ fun HomeScreen(
     val standardMargin = 20.dp 
     val coroutineScope = rememberCoroutineScope()
 
-    val combinedSections = remember(homeSections) {
+    // [강력한 필터링] 모든 카테고리(애니 포함)에서 포스터가 없는 항목은 절대 노출 안함
+    val combinedSections = remember(homeSections, currentScreen) {
         homeSections.map { section: HomeSection ->
             section.copy(
                 items = section.items.filter { item: Category ->
                     val name = (item.name ?: "").trim()
+                    // 1. 의미 없는 제목 필터링
                     if (isGenericTitle(name)) return@filter false
+                    
+                    // 2. [필터링 강화] 포스터가 없는 항목 제외
+                    // posterPath가 null이거나, 비었거나, 문자열 "null"인 경우 모두 필터링
+                    val hasPoster = !item.posterPath.isNullOrBlank() && item.posterPath != "null"
+                    
+                    // "방송중" 화면이 아니고, 섹션 제목에도 "방영/방송"이 없을 때만 필터링 수행
+                    val isAirSection = currentScreen == Screen.ON_AIR || 
+                                     section.title.contains("방영") || 
+                                     section.title.contains("방송")
+                    
+                    if (!isAirSection && !hasPoster) return@filter false
+                    
                     true
                 }
             )
@@ -76,18 +90,15 @@ fun HomeScreen(
 
     val heroItem = heroPool.getOrNull(currentHeroIndex)
 
-    // [포커스 복구 및 카테고리 전환 처리]
     LaunchedEffect(currentScreen, lastFocusedPath, combinedSections, isLoading) {
-        // lastFocusedPath가 null이면 (카테고리 전환 등) 최상단으로 강제 스크롤 및 포커스 정보 초기화
         if (lastFocusedPath == null && !isLoading) {
             try {
-                rowFocusIndices.clear() // 이전 카테고리의 포커스 인덱스들 초기화
+                rowFocusIndices.clear()
                 lazyListState.scrollToItem(0)
             } catch (_: Exception) {}
             return@LaunchedEffect
         }
 
-        // 포커스 복구 로직 (기존 항목으로 돌아올 때)
         if (lastFocusedPath != null && combinedSections.isNotEmpty() && !isLoading) {
             var foundRowIndex = -1
             var foundItemIndex = -1
@@ -162,7 +173,7 @@ fun HomeScreen(
                             },
                             onDetailClick = { onSeriesClick(heroSeries) },
                             horizontalPadding = standardMargin,
-                            isFirstLoad = false // 카테고리 클릭 시 포커스 강제 이동 방지 (TopBar 유지)
+                            isFirstLoad = false
                         )
                     }
                 } else if (isLoading) {
