@@ -980,14 +980,14 @@ def get_sections_for_category(cat, kw=None):
     def get_attractive_title(category, keyword, section_type):
         titles = {
             "recommend": {
-                "movies": ["📽️ 지금 봐야 할 인생 영화", "🎬 놓치면 아까운 명작 컬렉션", "⭐️ 별점이 증명하는 추천 영화"],
-                "animations_all": ["✨ 라프텔 화제의 애니메이션", "🔥 정주행을 부르는 대작 애니", "💫 덕심 자극! 인기 애니"],
-                "koreantv": ["🇰🇷 한국인이 사랑한 대작 드라마", "📺 한 번 시작하면 멈출 수 없는 드라마"],
-                "foreigntv": ["🌎 전 세계가 열광한 시리즈", "🎬 최고의 몰입감! 해외 드라마"],
-                "air": ["🔴 현재 가장 뜨거운 실시간 방영작"],
-                "default": [f"🎬 {keyword} 탭의 엄선된 추천작"]
+                "movies": ["지금 봐야 할 인생 영화", "놓치면 아까운 명작 컬렉션", "별점이 증명하는 추천 영화"],
+                "animations_all": ["화제의 애니메이션", "정주행을 부르는 대작 애니", "덕심 자극! 인기 애니"],
+                "koreantv": ["한국인이 사랑한 대작 드라마", "한 번 시작하면 멈출 수 없는 드라마"],
+                "foreigntv": ["전 세계가 열광한 시리즈", "최고의 몰입감! 해외 드라마"],
+                "air": ["현재 가장 뜨거운 실시간 방영작"],
+                "default": [f"{keyword} 탭의 엄선된 추천작"]
             },
-            "genre": [f"🔥 {keyword} 내 인기 {{}} 장르", f"🎞️ 세대를 아우르는 {{}} 명작"]
+            "genre": [f"{keyword} 내 인기 {{}} 장르", f"세대를 아우르는 {{}} 명작"]
         }
 
         if section_type == "recommend":
@@ -1023,7 +1023,7 @@ def get_sections_for_category(cat, kw=None):
     # [테마 3] 전체 목록 (요청하신 대로 아주 깔끔하게 고정)
     display_limit = 3000
     sections.append({
-        "title": "📂 전체목록",
+        "title": "전체목록",
         "items": target_list[:display_limit]
     })
 
