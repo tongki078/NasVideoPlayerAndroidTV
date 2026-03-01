@@ -172,6 +172,7 @@ def get_db():
     try:
         # WAL 모드 설정 시 락이 걸려도 전체 프로세스가 중단되지 않도록 함
         conn.execute('PRAGMA journal_mode=WAL')
+        # conn.execute('PRAGMA journal_mode=TRUNCATE')
         # busy_timeout을 한번 더 명시적으로 설정 (밀리초 단위, 30000ms = 30초)
         conn.execute('PRAGMA busy_timeout = 30000')
         # [추가] temp_store를 메모리로 변경하여 디스크 I/O 최적화 및 디스크 풀림 현상 완화
@@ -998,6 +999,14 @@ def fetch_metadata_async(force_all=False, target_name=None):
 
 
 def get_sections_for_category(cat, kw=None):
+
+    GENRE_MAP = {
+        "Sci-Fi & Fantasy": "SF & 판타지",
+        "Action & Adventure": "액션 & 어드벤처",
+        "Science Fiction": "SF",
+        "Animation": "애니메이션"
+    }
+
     start_time = time.perf_counter()
     cache_key = f"sections_{cat}_{kw}"
 
@@ -1030,9 +1039,9 @@ def get_sections_for_category(cat, kw=None):
                 "koreantv": ["한국인이 사랑한 대작 드라마", "한 번 시작하면 멈출 수 없는 드라마"],
                 "foreigntv": ["전 세계가 열광한 시리즈", "최고의 몰입감! 해외 드라마"],
                 "air": ["현재 가장 뜨거운 실시간 방영작"],
-                "default": [f"{keyword} 탭의 엄선된 추천작"]
+                "default": [f"엄선된 추천작"]
             },
-            "genre": [f"{keyword} 내 인기 {{}} 장르", f"세대를 아우르는 {{}} 명작"]
+            "genre": [f"인기 {{}} 장르", f"세대를 아우르는 {{}} 명작"]
         }
 
         if section_type == "recommend":
@@ -1052,7 +1061,10 @@ def get_sections_for_category(cat, kw=None):
     # [테마 2] 장르별 베스트 (현재 리스트 기준)
     current_genre_map = {}
     for item in target_list:
-        for g_name in item.get('genreNames', []):
+        for g_raw in item.get('genreNames', []):
+            # 영어 이름을 한글로 변환 (맵에 없으면 그대로 사용)
+            g_name = GENRE_MAP.get(g_raw, g_raw)
+
             if g_name not in ["애니메이션", "TV 영화"]:
                 current_genre_map.setdefault(g_name, []).append(item)
 
@@ -1211,9 +1223,7 @@ def get_series_detail_api():
     processed_eps = []
     for eid, ep in all_eps_dict.items():
         sn, en = ep.get('season_number'), ep.get('episode_number')
-        if sn is None:
-            # 데이터베이스에 시즌 번호가 없으면 실시간으로 추출
-            sn, en = extract_episode_numbers(ep.get('title', ''))
+        if sn is None: sn, en = extract_episode_numbers(ep.get('title', ''))
 
         # 영화는 무조건 1시즌 1화로 통일하여 UI를 깔끔하게 함
         if cat == 'movies':
@@ -1252,7 +1262,7 @@ def get_series_detail_api():
 def pre_generate_individual_task(ep_thumb_url):
     try:
         u = urllib.parse.urlparse(ep_thumb_url)
-        q = urllib.parse.parseqs(u.query)
+        q = urllib.parse.parse_qs(u.query)
         if 'path' in q and 'type' in q and 'id' in q:
             _generate_thumb_file(q['path'][0], q['type'][0], q['id'][0], q.get('t', ['300'])[0], q.get('w', ['320'])[0])
     except:
@@ -1267,34 +1277,36 @@ def search_videos():
         if not q: return jsonify([])
 
         q_nfc = nfc(q)
-        q_nfd = nfd(q)
         log("SEARCH", f"🔍 검색어: '{q_nfc}' (필터: {cat_filter})")
 
         conn = get_db()
         cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
         target_cat = cat_map.get(cat_filter)
 
-        # 1. WHERE 조건: 이름/제목에 검색어가 포함되고 포스터가 있는 것만
+        # 1. WHERE 조건
         query = """
             SELECT * FROM series
             WHERE (name LIKE ? OR name LIKE ? OR cleanedName LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ? OR tmdbTitle LIKE ?)
             AND posterPath IS NOT NULL
             AND EXISTS (SELECT 1 FROM episodes WHERE series_path = series.path)
         """
-        params = [f"%{q_nfc}%", f"%{q_nfd}%", f"%{q_nfc}%", f"%{q_nfd}%", f"%{q_nfc}%", f"%{q_nfd}%"]
+        params = [f"%{q_nfc}%", f"%{nfd(q)}%", f"%{q_nfc}%", f"%{nfd(q)}%", f"%{q_nfc}%", f"%{nfd(q)}%"]
 
         if target_cat:
             query += " AND category = ?"
             params.append(target_cat)
 
-        # 2. GROUP BY: tmdbId가 있으면 묶되, 검색한 키워드가 원래 이름(name)에 있으면 살려둡니다.
-        # 이렇게 하면 수동매칭 후에도 미공개X파일 같은 개별 카드가 유지됩니다.
+        # 2. GROUP BY: 태그를 기준으로 그룹을 나누어 데이터 누락 방지
         query += """
             GROUP BY
                 category,
                 tmdbId,
                 cleanedName,
-                CASE WHEN path LIKE '%더빙%' THEN '더빙' WHEN path LIKE '%자막%' THEN '자막' ELSE '' END
+                CASE
+                    WHEN (path LIKE '%더빙%' OR name LIKE '%더빙%') THEN '더빙'
+                    WHEN (path LIKE '%자막%' OR name LIKE '%자막%') THEN '자막'
+                    ELSE ''
+                END
             ORDER BY
                 CASE
                     WHEN name LIKE ? THEN 1
@@ -1309,12 +1321,29 @@ def search_videos():
         for row in cursor.fetchall():
             item = dict(row)
 
-            # 표시 이름: 복구된 원래 제목(cleanedName)이 있으면 그것을 우선 사용
+            # 앱 표시용 기본 이름 (TMDB 제목 우선)
             base_name = nfc(item.get('tmdbTitle') or item.get('cleanedName') or item.get('name'))
 
-            # 태그 정보 복원
-            orig_path = item.get('path', '').lower()
-            tag_str = "".join([f" [{t}]" for t in ["더빙", "자막", "극장판", "OVA"] if t.lower() in orig_path])
+            # --- [태그 복원 로직 개선 및 로그 추가] ---
+            # 검사할 텍스트를 path와 name 모두 합쳐서 생성
+            orig_path = nfc(item.get('path', ''))
+            orig_name = nfc(item.get('name', ''))
+            full_check_text = (orig_path + " " + orig_name).lower()
+
+            detected_tags = []
+            if "더빙" in full_check_text: detected_tags.append("더빙")
+            if "자막" in full_check_text: detected_tags.append("자막")
+            if "극장판" in full_check_text or item.get('category') == 'movies':
+                if "극장판" not in detected_tags: detected_tags.append("극장판")
+            if "ova" in full_check_text: detected_tags.append("OVA")
+
+            # 상세 로그 (태그가 안 나올 때 원인 파악용)
+            if "코난" in base_name:
+                log("TAG_DEBUG",
+                    f"작품: {base_name} | 검출태그: {detected_tags} | 원본Name: {orig_name[:30]}... | Path포함여부(자막): {'자막' in full_check_text}")
+
+            # [태그] 문자열 생성
+            tag_str = "".join([f" [{t}]" for t in detected_tags])
 
             processed = {
                 "name": f"{base_name}{tag_str}".strip(),
@@ -1329,6 +1358,7 @@ def search_videos():
                 "tmdbId": item.get('tmdbId') or "",
                 "actors": [], "movies": [], "seasons": {}
             }
+
             # JSON 필드 복구
             for col in ['genreIds', 'genreNames', 'actors']:
                 try:
@@ -1339,7 +1369,6 @@ def search_videos():
             rows.append(processed)
 
         conn.close()
-        log("SEARCH", f"✅ 검색 완료: {len(rows)}개 시리즈 발견")
         return gzip_response(rows)
     except Exception as e:
         log("SEARCH_ERROR", f"에러: {str(e)}")
@@ -2501,6 +2530,33 @@ def admin_stills_page():
     </html>
     """
 
+
+@app.route('/api/restore_names')
+def restore_names():
+    target = "미공개X파일"
+    try:
+        conn = get_db()
+        # 오직 '미공개X파일'이 포함된 데이터 중,
+        # 수동 매칭으로 인해 이름이 본편(명탐정 코난)으로 바뀐 것들만 원래대로 되돌립니다.
+        cursor = conn.execute("""
+            UPDATE series
+            SET tmdbTitle = cleanedName
+            WHERE (name LIKE ? OR cleanedName LIKE ?)
+              AND tmdbTitle != cleanedName
+        """, (f'%{target}%', f'%{target}%'))
+
+        updated_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        # 메모리 캐시를 즉시 갱신하여 앱에 바로 반영되게 합니다.
+        build_all_caches()
+
+        log("RESTORE", f"✅ '{target}' 관련 {updated_count}개 항목 복구 완료")
+        return f"성공! '{target}' 관련 {updated_count}개 항목의 이름을 원래대로('{target}') 복구했습니다."
+    except Exception as e:
+        return f"복구 중 에러 발생: {str(e)}"
+
 # --- [UI/캐시 로직 보존] ---
 @app.route('/updater')
 def updater_ui():
@@ -3197,6 +3253,98 @@ def debug_search_conan():
         "3_에피소드연결_수": has_episodes,
         "4_데이터샘플": [dict(r) for r in final_sample]
     })
+
+@app.route('/api/debug_xfile_seasons')
+def debug_xfile_seasons():
+    conn = get_db()
+    # 미공개X파일 에피소드들이 DB에 어떻게 저장되어 있는지 10개만 샘플링
+    rows = conn.execute("""
+        SELECT title, season_number, episode_number
+        FROM episodes
+        WHERE title LIKE '%미공개X파일%'
+        LIMIT 10
+    """).fetchall()
+
+    # 묶음 단위로 몇 개씩 있는지 확인
+    group_check = conn.execute("""
+        SELECT season_number, COUNT(*) as cnt
+        FROM episodes
+        WHERE title LIKE '%미공개X파일%'
+        GROUP BY season_number
+    """).fetchall()
+    conn.close()
+
+    return jsonify({
+        "1_샘플데이터": [dict(r) for r in rows],
+        "2_시즌별_개수": [dict(r) for r in group_check]
+    })
+
+@app.route('/api/fix_xfile_seasons')
+def fix_xfile_seasons():
+    """
+    파일명(title)에 적힌 '미공개X파일1', '미공개X파일3' 등의 텍스트를 직접 읽어
+    시즌 번호로 강제 배정하는 가장 확실한 로직입니다.
+    """
+    import re
+
+    def parse_season_from_filename(filename):
+        season = 1  # 기본값
+
+        # 1. 파일명에서 '미공개X파일 3' 또는 '미공개X파일3' 패턴을 찾아 그 숫자를 시즌으로!
+        # 예: "명탐정코난 미공개X파일3.E01" -> 3 추출
+        # 예: "명탐정 코난 미공개X파일 2" -> 2 추출
+        season_match = re.search(r'(?i)미공개\s*X\s*파일\s*(\d+)', nfc(filename))
+        if season_match:
+            season = int(season_match.group(1))
+
+        # 2. 에피소드 번호 추출 (기존과 동일)
+        episode = 1
+        ep_match = re.search(r'(?i)(?:[.\s_-]E|EP)\s*(\d+)|(\d+)\s*(?:화|회)', nfc(filename))
+        if ep_match:
+            episode = int(ep_match.group(1) or ep_match.group(2))
+        else:
+            nums = re.findall(r'\d+', nfc(filename))
+            if nums:
+                # 미공개X파일3 처럼 시즌 숫자가 마지막일 수 있으므로 가장 마지막 숫자를 에피소드로 봄
+                episode = int(nums[-1])
+
+        return season, episode
+
+    try:
+        conn = get_db()
+        # 미공개X파일이 들어간 모든 에피소드 가져오기
+        episodes = conn.execute("SELECT id, title FROM episodes WHERE title LIKE '%미공개X파일%'").fetchall()
+
+        if not episodes:
+            conn.close()
+            return "대상 에피소드를 찾을 수 없습니다."
+
+        update_batch = []
+        for ep in episodes:
+            ep_id = ep['id']
+            filename = ep['title']
+
+            # 여기서 똑똑하게 뽑아냅니다.
+            season_num, episode_num = parse_season_from_filename(filename)
+            update_batch.append((season_num, episode_num, ep_id))
+
+        cursor = conn.cursor()
+        cursor.executemany(
+            "UPDATE episodes SET season_number = ?, episode_number = ? WHERE id = ?",
+            update_batch
+        )
+        updated_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        # 메모리 캐시 강제 갱신
+        build_all_caches()
+
+        return f"성공! 파일명을 분석하여 총 {len(update_batch)}개의 '미공개X파일' 시즌/회차 정보를 완벽하게 나누었습니다."
+
+    except Exception as e:
+        import traceback
+        return f"에러 발생: {str(e)}<br><pre>{traceback.format_exc()}</pre>"
 
 @app.route('/api/manual_match_simple')
 def manual_match_simple():
