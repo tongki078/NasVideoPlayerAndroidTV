@@ -107,8 +107,8 @@ fun NetflixPivotItem(
     rating: String? = null,
     year: String? = null,
     overview: String? = null,
-    shouldRequestFocus: Boolean = false, // 추가
-    onFocusRestored: () -> Unit = {},    // 추가
+    shouldRequestFocus: Boolean = false,
+    onFocusRestored: () -> Unit = {},
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -124,7 +124,17 @@ fun NetflixPivotItem(
     var dataLoadingJob by remember { mutableStateOf<Job?>(null) }
     var previewJob by remember { mutableStateOf<Job?>(null) }
 
-    // [추가] 포커스 강제 요청 로직
+    // 추가 태그 추출 (Regex 기반 개선)
+    val tags = remember(title) {
+        val tagRegex = Regex("\\[(.*?)\\]")
+        val matches = tagRegex.findAll(title)
+        
+        matches.map { it.groupValues[1].trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
+    }
+
     LaunchedEffect(shouldRequestFocus) {
         if (shouldRequestFocus) {
             focusRequester.requestFocus()
@@ -144,7 +154,10 @@ fun NetflixPivotItem(
                     try {
                         val details = repository.getSeriesDetail(categoryPath)
                         if (details != null) {
-                            if (previewUrl == null) previewUrl = details.episodes.find { !it.videoUrl.isNullOrEmpty() }?.videoUrl
+                            // previewUrl이 없을 때만 업데이트
+                            if (previewUrl == null) {
+                                previewUrl = details.episodes.find { !it.videoUrl.isNullOrEmpty() }?.videoUrl
+                            }
                             if (itemOverview.isNullOrBlank()) itemOverview = details.overview
                             if (itemYear.isNullOrBlank()) itemYear = details.year
                             if (itemRating.isNullOrBlank()) itemRating = details.rating
@@ -163,8 +176,8 @@ fun NetflixPivotItem(
         previewJob?.cancel()
         if (isFocused && !previewUrl.isNullOrBlank()) {
             previewJob = coroutineScope.launch {
-                delay(200) // 짧은 지연 시간 후 미리보기 시작
-                if (isFocused) { // 지연 후에도 포커스가 유지되는지 확인
+                delay(800) // 미리보기 시작 지연시간을 약간 늘려 안정성 확보
+                if (isFocused) {
                     showPreview = true
                 }
             }
@@ -177,25 +190,6 @@ fun NetflixPivotItem(
     val posterMaxHeight = 185.dp
     val infoAreaHeight = 85.dp
     val totalItemHeight = posterMaxHeight + infoAreaHeight
-    
-    // 추가 태그 추출 (Regex 기반 개선)
-    val tags = remember(title) {
-        val tagRegex = Regex("\\[(.*?)\\]")
-        val matches = tagRegex.findAll(title)
-        
-        val list = matches.map { it.groupValues[1].trim() }
-            .filter { it.isNotEmpty() }
-            .distinct()
-            .toList()
-            
-        // 진단 로그 (문제 해결 확인용)
-        if (title.contains("코난")) {
-            println("검색 태그 체크 - 원본 제목: $title")
-            println("검색 태그 체크 - 결과: $list")
-        }
-
-        list
-    }
 
     Box(
         modifier = Modifier
