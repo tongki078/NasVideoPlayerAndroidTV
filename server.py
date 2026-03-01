@@ -1155,81 +1155,112 @@ _DETAIL_MEM_CACHE = {}
 
 @app.route('/api/series_detail')
 def get_series_detail_api():
-    path = request.args.get('path')
-    if not path: return gzip_response({})
+    try:
+        path_raw = request.args.get('path', '')
+        # 1. URL 디코딩 및 정규화
+        path = nfc(urllib.parse.unquote_plus(path_raw))
+        if not path: return gzip_response({})
 
-    if path in _DETAIL_MEM_CACHE:
-        return gzip_response(_DETAIL_MEM_CACHE[path])
+        print(f"\n[DETAIL_DIAG] ====================================", flush=True)
+        print(f"[DETAIL_DIAG] 1. 요청 경로: {path}", flush=True)
 
-    conn = get_db()
-    row = conn.execute('SELECT * FROM series WHERE path = ?', (path,)).fetchone()
-    if not row: row = conn.execute('SELECT * FROM series WHERE path = ?', (nfc(path),)).fetchone()
-    if not row:
+        if path in _DETAIL_MEM_CACHE:
+            return gzip_response(_DETAIL_MEM_CACHE[path])
+
+        conn = get_db()
+        row = conn.execute('SELECT * FROM series WHERE path = ?', (path,)).fetchone()
+        if not row:
+            row = conn.execute('SELECT * FROM series WHERE path = ?', (nfd(path),)).fetchone()
+
+        if not row:
+            conn.close()
+            return gzip_response({})
+
+        series_data = dict(row)
+        t_id = series_data.get('tmdbId')
+        c_name = nfc(series_data.get('cleanedName'))
+
+        # 🟢 [근본 해결 1] 폴더 기반 범위 제한 (다른 폴더와 섞임 방지)
+        # 파일 경로에서 현재 폴더(시리즈 루트)를 추출합니다.
+        path_parts = path.split('/')
+        if len(path_parts) > 1:
+            # 보통 파일 바로 위 폴더를 기준으로 삼되, 시즌 폴더가 있을 수 있으므로 처리
+            parent_dir = "/".join(path_parts[:-1])
+            # 만약 부모 폴더가 '1기', '시즌' 같은 형태면 한 단계 더 위를 루트로 잡음
+            if any(x in path_parts[-2] for x in ['기', '시즌', 'Season', 'Part']):
+                if len(path_parts) > 2:
+                    parent_dir = "/".join(path_parts[:-2])
+        else:
+            parent_dir = ""
+
+        print(f"[DETAIL_DIAG] 2. 시리즈 루트 폴더 확정: {parent_dir}", flush=True)
+
+        # 2. 에피소드 쿼리 (루트 폴더 내의 파일만 가져오도록 LIKE 조건 추가)
+        all_refined_eps = []
+
+        # TMDB ID가 있으면 전역 매칭, 없으면 현재 폴더 범위 내에서만 매칭
+        if t_id:
+            query = "SELECT * FROM episodes WHERE series_path IN (SELECT path FROM series WHERE tmdbId = ?)"
+            params = (t_id,)
+        else:
+            # 🟢 [근본 해결 2] 같은 이름이면서 현재 폴더(parent_dir) 하위에 있는 것만 매칭
+            query = "SELECT * FROM episodes WHERE series_path LIKE ? AND series_path IN (SELECT path FROM series WHERE cleanedName = ?)"
+            params = (f"{parent_dir}%", c_name)
+
+        rows = conn.execute(query, params).fetchall()
+        print(f"[DETAIL_DIAG] 3. 필터링된 DB 결과: {len(rows)}개 발견", flush=True)
+
+        for r in rows:
+            d = dict(r)
+            sn, en = d.get('season_number'), d.get('episode_number')
+            if sn is None: sn, en = extract_episode_numbers(d.get('title', ''))
+
+            all_refined_eps.append({
+                "id": str(d.get('id')),
+                "title": d.get('title'),
+                "videoUrl": d.get('videoUrl'),
+                "thumbnailUrl": d.get('thumbnailUrl'),
+                "overview": d.get('overview'),
+                "air_date": d.get('air_date'),
+                "season_number": sn,
+                "episode_number": en
+            })
+
+        # 3. 정렬 및 시즌 맵 생성
+        sorted_eps = sorted(all_refined_eps, key=lambda x: (x['season_number'] or 1, x['episode_number'] or 0))
+        seasons_map = {}
+        for ep in sorted_eps:
+            sk = f"{ep['season_number'] or 1}시즌"
+            if sk not in seasons_map: seasons_map[sk] = []
+            seasons_map[sk].append(ep)
+
+        # 🟢 [근본 해결 3] 앱 모델 필드명(episodes) 일치화
+        clean_main_name = nfc(series_data.get('tmdbTitle') or series_data.get('cleanedName') or series_data.get('name'))
+
+        # 더빙/자막 태그 유지
+        is_dub = "더빙" in nfc(path + series_data['name']).lower()
+        is_sub = "자막" in nfc(path + series_data['name']).lower()
+
+        response_data = {
+            **series_data,
+            "name": f"{clean_main_name} {'[더빙]' if is_dub else '[자막]' if is_sub else ''}".strip(),
+            "episodes": sorted_eps,  # movies -> episodes 로 수정
+            "seasons": seasons_map,
+            "genreIds": json.loads(series_data.get('genreIds', '[]')) if series_data.get('genreIds') else [],
+            "genreNames": json.loads(series_data.get('genreNames', '[]')) if series_data.get('genreNames') else [],
+            "actors": json.loads(series_data.get('actors', '[]')) if series_data.get('actors') else []
+        }
+
+        print(f"[DETAIL_DIAG] 4. 최종 결과: 에피소드 {len(sorted_eps)}개, 시즌 {len(seasons_map)}개", flush=True)
+        print(f"[DETAIL_DIAG] ====================================\n", flush=True)
+
         conn.close()
-        return gzip_response({})
+        _DETAIL_MEM_CACHE[path] = response_data
+        return gzip_response(response_data)
 
-    series = dict(row)
-    t_id = series.get('tmdbId')
-    cat = series.get('category')
-
-    # 🟢 [근본 해결 3] 현재 시리즈의 타입 파악
-    is_dub = "더빙" in path.lower() or "더빙" in series['name'].lower()
-    is_sub = "자막" in path.lower() or "자막" in series['name'].lower()
-
-    all_eps_dict = {}
-
-    # 에피소드 쿼리 생성 (같은 ID 혹은 같은 이름이면서, 타입이 같은 것만 수집)
-    query_parts = []
-    params = []
-    if t_id:
-        query_parts.append("series_path IN (SELECT path FROM series WHERE tmdbId = ?)")
-        params.append(t_id)
-    else:
-        query_parts.append("series_path IN (SELECT path FROM series WHERE cleanedName = ?)")
-        params.append(series.get('cleanedName'))
-
-    ep_query = f"SELECT * FROM episodes WHERE ({' OR '.join(query_parts)})"
-    rows = conn.execute(ep_query, params).fetchall()
-
-    for r in rows:
-        d = dict(r)
-        ep_path = d['series_path'].lower()
-        ep_name = d['title'].lower()
-
-        # 🟢 [근본 해결 4] 타입 불일치 에피소드 필터링
-        # 현재가 더빙판이면 자막 에피소드 제외, 자막판이면 더빙 에피소드 제외
-        if is_dub and ("자막" in ep_path or "자막" in ep_name): continue
-        if is_sub and ("더빙" in ep_path or "더빙" in ep_name): continue
-
-        all_eps_dict[d['id']] = d
-
-    conn.close()
-
-    # (이후 정렬 및 변환 로직은 기존과 동일하되, 이제 리스트가 깨끗해집니다)
-    processed_eps = []
-    clean_main_name = series.get('tmdbTitle') or series.get('cleanedName') or series.get('name')
-    for eid, ep in all_eps_dict.items():
-        sn, en = ep.get('season_number'), ep.get('episode_number')
-        if sn is None: sn, en = extract_episode_numbers(ep.get('title', ''))
-        if cat == 'movies': sn, en = 1, 1
-        ep['sn'], ep['en'] = sn, en
-        processed_eps.append(ep)
-
-    sorted_eps = sorted(processed_eps, key=lambda x: (x['sn'], x['en']))
-    seasons_map = {}
-    for ep in sorted_eps:
-        sk = f"{ep['sn']}시즌"
-        if sk not in seasons_map: seasons_map[sk] = []
-        seasons_map[sk].append(ep)
-
-    # 데이터 정리 및 캐싱
-    series['movies'] = sorted_eps
-    series['seasons'] = seasons_map
-    series['name'] = f"{clean_main_name} {'[더빙]' if is_dub else '[자막]' if is_sub else ''}".strip()
-
-    _DETAIL_MEM_CACHE[path] = series
-    return gzip_response(series)
-
+    except Exception as e:
+        print(f"[DETAIL_DIAG ERROR] {traceback.format_exc()}", flush=True)
+        return gzip_response({"error": str(e)})
 
 def pre_generate_individual_task(ep_thumb_url):
     try:
@@ -2901,27 +2932,28 @@ def _rebuild_fast_memory_cache():
         folder_precalc = {}
 
         for r in rows:
-            path = r['path']
-            # 🟢 [근본 해결 1] 더빙/자막 타입 추출
+            # 🟢 [개선] 경로와 이름을 모두 NFC로 정규화하여 검사
+            path = nfc(r['path'])
+            name = nfc(r['name'])
             path_lower = path.lower()
-            name_lower = r['name'].lower()
+            name_lower = name.lower()
+
             tag = ""
             if "더빙" in path_lower or "더빙" in name_lower:
                 tag = "더빙"
             elif "자막" in path_lower or "자막" in name_lower:
                 tag = "자막"
 
-            # 🟢 [근본 해결 2] 그룹키를 "ID_타입"으로 생성하여 카드를 분리
             tmdb_id = r['tmdbId']
-            c_name = r['cleanedName'] or r['name']
+            c_name = nfc(r['cleanedName'] or r['name'])
+            # 그룹키에 태그를 포함하여 카드 분리
             group_key = f"{tmdb_id}_{tag}" if tmdb_id else f"{c_name}_{tag}"
 
             if not group_key or group_key in seen_keys: continue
             if not r['posterPath']: continue
             seen_keys.add(group_key)
 
-            display_name = nfc(r['tmdbTitle'] or c_name or r['name'])
-            # 카드 이름에 태그를 명시적으로 붙여 앱에서 인식하게 함
+            display_name = nfc(r['tmdbTitle'] or c_name or name)
             if tag and f"[{tag}]" not in display_name:
                 display_name = f"{display_name} [{tag}]"
 
@@ -2944,7 +2976,7 @@ def _rebuild_fast_memory_cache():
                 folder_precalc.setdefault(folder_name, []).append(item)
 
         temp_cache[cat] = {"all": items, "folders": folder_precalc}
-        log("SYSTEM", f"✅ {cat} 캐시 빌드 완료 ({len(items)}개 시리즈)")
+        log("SYSTEM", f"✅ {cat} 캐시 빌드 완료")
 
     conn.close()
     _FAST_CATEGORY_CACHE = temp_cache
