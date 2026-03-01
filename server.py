@@ -1178,56 +1178,83 @@ def get_series_detail_api():
 
         series_data = dict(row)
         t_id = series_data.get('tmdbId')
+        cat = series_data.get('category')
         c_name = nfc(series_data.get('cleanedName'))
+        db_path = series_data.get('path')  # DB에 저장된 실제 경로
 
-        # 🟢 [근본 해결 1] 지능형 루트 폴더 탐색 (시즌 폴더 건너뛰기)
-        path_parts = path.split('/')
-        if len(path_parts) > 1:
-            parent_dir = "/".join(path_parts[:-1])
-            folder_name = path_parts[-2]  # 파일이 들어있는 폴더명
-
-            # 명확한 시즌/기수 패턴이 폴더명에 포함된 경우에만 한 단계 더 위로 올라감
-            # 연도(2024)나 단순 제목 숫자로 인한 오작동 방지
-            is_season_pattern = re.search(r'(?i)(?:시즌|Season|S)\s*\d+|(\d+)\s*기|X파일\s*\d+|파트\s*\d+|Part\s*\d+',
-                                          folder_name)
-
-            if is_season_pattern and len(path_parts) > 2:
-                parent_dir = "/".join(path_parts[:-2])
-        else:
-            parent_dir = ""
-
-        print(f"[DETAIL_DIAG] 2. 확정된 시리즈 루트: {parent_dir}", flush=True)
-
-        # 2. 에피소드 쿼리 (루트 폴더 기반 + 같은 CleanName 기반)
-        # LIKE parent_dir% 조건을 통해 인근 폴더만 탐색하여 섞임 방지
+        # 🟢 [근본 해결 1] 영화와 시리즈 로직 분리
         all_refined_eps = []
-        query = "SELECT * FROM episodes WHERE series_path LIKE ? AND series_path IN (SELECT path FROM series WHERE cleanedName = ?)"
-        params = (f"{parent_dir}%", c_name)
 
-        rows = conn.execute(query, params).fetchall()
-        print(f"[DETAIL_DIAG] 3. DB 검색 결과: {len(rows)}개 발견", flush=True)
+        if cat == 'movies':
+            # 🎥 영화 모드: 복잡한 폴더 탐색 없이 이 파일(db_path)에 매핑된 에피소드만 1:1로 가져옴
+            print(f"[DETAIL_DIAG] 2. 영화 모드: 단일 파일 매칭 시도", flush=True)
+            query = "SELECT * FROM episodes WHERE series_path = ? OR series_path = ?"
+            rows = conn.execute(query, (db_path, nfd(db_path))).fetchall()
+
+            # 🚨 [긴급 패치] 만약 episodes 테이블에서 데이터가 유실되었다면, 즉석에서 가짜 에피소드를 생성해준다.
+            if not rows:
+                print(f"[DETAIL_DIAG] 2-1. 에피소드 테이블에서 찾지 못함! 가짜 에피소드 생성", flush=True)
+                fake_id = hashlib.md5(db_path.encode()).hexdigest()
+                # 'movies/' prefix 제거 (실제 파일 경로)
+                rel = db_path.replace("movies/", "", 1) if db_path.startswith("movies/") else db_path
+                fake_row = {
+                    "id": fake_id,
+                    "series_path": db_path,
+                    "title": series_data.get('name') or c_name,
+                    "videoUrl": f"/video_serve?type=movie&path={urllib.parse.quote(rel)}",
+                    "thumbnailUrl": f"/thumb_serve?type=movie&id={fake_id}&path={urllib.parse.quote(rel)}",
+                    "overview": series_data.get('overview'),
+                    "air_date": None,
+                    "season_number": 1,
+                    "episode_number": 1
+                }
+                rows = [fake_row]
+        else:
+            # 📺 TV/애니메이션 모드: 기존의 부모 폴더 기반 그룹화 수행
+            path_parts = db_path.split('/')
+            if len(path_parts) > 1:
+                parent_dir = "/".join(path_parts[:-1])
+                folder_name = path_parts[-2]
+                is_season_pattern = re.search(r'(?i)(?:시즌|Season|S)\s*\d+|(\d+)\s*기|X파일\s*\d+|파트\s*\d+|Part\s*\d+',
+                                              folder_name)
+                if is_season_pattern and len(path_parts) > 2:
+                    parent_dir = "/".join(path_parts[:-2])
+            else:
+                parent_dir = ""
+
+            print(f"[DETAIL_DIAG] 2. 시리즈 모드 루트: {parent_dir}", flush=True)
+            query = "SELECT * FROM episodes WHERE series_path LIKE ? AND series_path IN (SELECT path FROM series WHERE cleanedName = ?)"
+            rows = conn.execute(query, (f"{parent_dir}%", c_name)).fetchall()
+
+        print(f"[DETAIL_DIAG] 3. 에피소드 발견: {len(rows)}개", flush=True)
 
         for r in rows:
             d = dict(r)
             ep_path = nfc(d['series_path'])
 
-            # 🟢 [근본 해결 2] 하위 폴더 분석을 통한 고화질 시즌 분리 로직 (프리렌 대응)
-            rel_sub_path = ep_path.replace(parent_dir, "").strip("/")
-            sub_parts = rel_sub_path.split("/")
+            # 고화질 버전 분리 로직 (시리즈일 때만 작동)
+            season_display_name = "1시즌"
+            sort_weight = 1
 
-            sn, en = d.get('season_number'), d.get('episode_number')
-            if sn is None: sn, en = extract_episode_numbers(d.get('title', ''))
+            if cat != 'movies':
+                # 시리즈의 경우 폴더 구조 분석하여 탭 분리
+                rel_sub_path = ep_path.replace(nfc(parent_dir), "").strip("/")
+                sub_parts = rel_sub_path.split("/")
+                sn, en = d.get('season_number'), d.get('episode_number')
+                if sn is None: sn, en = extract_episode_numbers(d.get('title', ''))
 
-            season_display_name = f"{sn or 1}시즌"
-            sort_weight = sn or 1
+                season_display_name = f"{sn or 1}시즌"
+                sort_weight = sn or 1
 
-            # 만약 파일이 루트보다 더 깊은 하위 폴더(4K, UHD 등)에 있다면 별도 탭으로 분리
-            if len(sub_parts) > 1:
-                # 파일명 바로 위 폴더 혹은 그 상위 폴더 중 키워드가 있는지 확인
-                sub_folder_name = sub_parts[-1] if "." not in sub_parts[-1] else sub_parts[-2]
-                if any(k in sub_folder_name.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"]):
-                    season_display_name = f"고화질 버전 ({sub_folder_name})"
-                    sort_weight = 900 + (sn or 0)  # 일반 시즌보다 뒤로 정렬
+                if len(sub_parts) > 1:
+                    sub_folder_name = sub_parts[-1] if "." not in sub_parts[-1] else sub_parts[-2]
+                    if any(k in sub_folder_name.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"]):
+                        season_display_name = f"고화질 버전 ({sub_folder_name})"
+                        sort_weight = 900 + (sn or 0)
+            else:
+                # 영화는 무조건 1시즌/1화로 고정 (탭 이름을 '영화'로)
+                season_display_name = "영화"
+                sn, en = 1, 1
 
             all_refined_eps.append({
                 "id": str(d.get('id')),
@@ -1250,32 +1277,32 @@ def get_series_detail_api():
             if sk not in seasons_map: seasons_map[sk] = []
             seasons_map[sk].append(ep)
 
-        # 🟢 [근본 해결 3] 앱 모델 필드명(episodes) 일치화 (버튼 실종 방지)
+        # 🟢 [근본 해결 2] 앱 모델 필드명(episodes) 일치화
         clean_main_name = nfc(series_data.get('tmdbTitle') or series_data.get('cleanedName') or series_data.get('name'))
-        is_dub = "더빙" in nfc(path + series_data['name']).lower()
-        is_sub = "자막" in nfc(path + series_data['name']).lower()
+        is_dub = "더빙" in nfc(db_path + series_data['name']).lower()
+        is_sub = "자막" in nfc(db_path + series_data['name']).lower()
 
         response_data = {
             **series_data,
             "name": f"{clean_main_name} {'[더빙]' if is_dub else '[자막]' if is_sub else ''}".strip(),
-            "episodes": sorted_eps,  # movies가 아닌 episodes로 보내야 함
+            "episodes": sorted_eps,  # 상세페이지 버튼용
+            "movies": sorted_eps,  # 홈 미리보기/하위호환용
             "seasons": seasons_map,
             "genreIds": json.loads(series_data.get('genreIds', '[]')) if series_data.get('genreIds') else [],
             "genreNames": json.loads(series_data.get('genreNames', '[]')) if series_data.get('genreNames') else [],
             "actors": json.loads(series_data.get('actors', '[]')) if series_data.get('actors') else []
         }
 
+        conn.close()
         print(f"[DETAIL_DIAG] 4. 최종 결과: 에피소드 {len(sorted_eps)}개, 시즌 {len(seasons_map)}개", flush=True)
         print(f"[DETAIL_DIAG] ====================================\n", flush=True)
 
-        conn.close()
         _DETAIL_MEM_CACHE[path] = response_data
         return gzip_response(response_data)
 
     except Exception as e:
         print(f"[DETAIL_DIAG ERROR] {traceback.format_exc()}", flush=True)
         return gzip_response({"error": str(e)})
-
 
 def pre_generate_individual_task(ep_thumb_url):
     try:
@@ -1599,21 +1626,25 @@ def kill_old_processes(sid):
 def video_serve():
     path_raw, prefix = request.args.get('path'), request.args.get('type')
     try:
+        # PATH_MAP에서 기준 경로 찾기
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
-        full_path = get_real_path(os.path.join(base, nfc(urllib.parse.unquote(path_raw))))
+
+        # 🟢 [개선] unquote_plus를 사용하여 + 기호와 %20 모두 공백으로 정확히 변환
+        decoded_path = urllib.parse.unquote_plus(path_raw)
+        full_path = get_real_path(os.path.join(base, nfc(decoded_path)))
 
         if not os.path.exists(full_path):
-            log("VIDEO", f"파일을 찾을 수 없음: {full_path}")
+            log("VIDEO", f"❌ 파일을 찾을 수 없음: {full_path}")
             return "Not Found", 404
 
         ua = request.headers.get('User-Agent', '').lower()
         is_ios = any(x in ua for x in ['iphone', 'ipad', 'apple', 'avfoundation'])
 
-        # 안드로이드/ExoPlayer는 iOS 로직(HLS 강제 전환)에서 제외
+        # 안드로이드/ExoPlayer는 iOS 로직에서 제외
         if 'android' in ua or 'exoplayer' in ua:
             is_ios = False
 
-        # --- [iOS용 HLS 스트리밍 로직] ---
+        # --- [iOS용 HLS 스트리밍] ---
         file_ext = full_path.lower()
         if is_ios and not file_ext.endswith(('.mp4', '.m4v', '.mov')):
             sid = hashlib.md5(full_path.encode()).hexdigest()
@@ -1623,7 +1654,6 @@ def video_serve():
             video_m3u8 = os.path.join(sdir, "video.m3u8")
 
             if not os.path.exists(video_m3u8):
-                # 영상은 그대로 복사, 소리만 AAC로 변환하여 HLS 생성
                 cmd = [FFMPEG_PATH, '-y', '-i', full_path,
                        '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
                        '-f', 'hls', '-hls_time', '6', '-hls_list_size', '0', video_m3u8]
@@ -1633,25 +1663,26 @@ def video_serve():
                     time.sleep(0.5)
             return redirect(f"http://{MY_IP}:5000/hls/{sid}/video.m3u8")
 
-        # --- [안드로이드/PC용 소리 문제 해결 로직] ---
-        # 주소창에 &transcode=true가 붙어오면 오디오를 AAC로 실시간 변환하여 전송
-        # (만약 모든 영화에서 무조건 소리가 나게 하려면 아래 조건을 True로 바꾸세요)
-        force_transcode_audio = request.args.get('transcode') == 'true'
+        # --- [안드로이드 TV/PC용 소리 및 코덱 해결 로직] ---
+        # 🟢 FLAC 오디오나 고스펙 영상으로 인해 재생이 안 될 경우
+        # 주소창에 &transcode=true를 붙여 호출하면 오디오를 AAC로 실시간 변환하여 전송합니다.
+        force_transcode = request.args.get('transcode') == 'true'
 
-        if force_transcode_audio:
+        if force_transcode:
             log("VIDEO", f"🔊 오디오 실시간 AAC 변환 시작: {os.path.basename(full_path)}")
 
             def generate_transcoded():
-                # -c:v copy (영상은 그대로), -c:a aac (소리만 변환)
+                # -c:v copy (영상 원본 유지), -c:a aac (소리만 변환)
+                # 만약 영상 자체가 안 나오는 거라면 -c:v libx264 로 바꿔야 하지만 부하가 큽니다.
                 cmd = [
                     FFMPEG_PATH, "-i", full_path,
-                    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                    "-c:v", "copy", "-c:a", "aac", "-b:a", "256k",
                     "-f", "matroska", "pipe:1"
                 ]
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
                 try:
                     while True:
-                        chunk = proc.stdout.read(65536)
+                        chunk = proc.stdout.read(1024 * 64)  # 64KB씩 전송
                         if not chunk: break
                         yield chunk
                 finally:
@@ -1659,7 +1690,7 @@ def video_serve():
 
             return Response(generate_transcoded(), mimetype='video/x-matroska')
 
-        # 기본값: 원본 파일 전송 (가장 빠르고 Seek 지원이 원활함)
+        # 기본값: 원본 파일 전송 (가장 빠름)
         return send_file(full_path, conditional=True)
 
     except Exception as e:

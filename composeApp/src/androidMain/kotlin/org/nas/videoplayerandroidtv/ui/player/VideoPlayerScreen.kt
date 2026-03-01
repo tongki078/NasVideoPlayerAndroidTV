@@ -280,39 +280,42 @@ fun VideoPlayerScreen(
                     horizontalAlignment = Alignment.End
                 ) {
                     val titleText = currentMovie.title ?: ""
+                    val isMovie = currentMovie.videoUrl?.contains("type=movie") == true
+                    
                     Text(
                         text = titleText.cleanTitle(keepAfterHyphen = true, includeYear = false),
                         color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
                         style = LocalTextStyle.current.copy(shadow = Shadow(Color.Black, androidx.compose.ui.geometry.Offset(2f, 2f), 4f))
                     )
                     
-                    // 🔴 [버그 수정] 서버에서 전달받은 정확한 번호(season_number, episode_number)를 최우선으로 사용
-                    val infoLabel = buildString {
-                        val season = currentMovie.season_number
-                        val episode = currentMovie.episode_number
-                        
-                        if (season != null && season > 0) {
-                            append("시즌 $season")
-                        } else {
-                            // 서버 값이 없을 때만 기존 정규식 방식(최후의 수단) 사용
-                            append("시즌 ${titleText.extractSeason()}")
-                        }
-                        
-                        if (episode != null && episode > 0) {
-                            append(" : ${episode}화")
-                        } else {
-                            val epInfo = titleText.extractEpisode()
-                            if (epInfo != null) {
-                                append(" : $epInfo")
+                    // 🔴 영화가 아닐 때만 시즌/회차 정보를 표시합니다.
+                    if (!isMovie) {
+                        val infoLabel = buildString {
+                            val season = currentMovie.season_number
+                            val episode = currentMovie.episode_number
+                            
+                            if (season != null && season > 0) {
+                                append("시즌 $season")
+                            } else {
+                                append("시즌 ${titleText.extractSeason()}")
+                            }
+                            
+                            if (episode != null && episode > 0) {
+                                append(" : ${episode}화")
+                            } else {
+                                val epInfo = titleText.extractEpisode()
+                                if (epInfo != null) {
+                                    append(" : $epInfo")
+                                }
                             }
                         }
+                        
+                        Text(
+                            text = infoLabel,
+                            color = Color.White.copy(alpha = 0.8f), fontSize = 18.sp,
+                            style = LocalTextStyle.current.copy(shadow = Shadow(Color.Black, androidx.compose.ui.geometry.Offset(2f, 2f), 4f))
+                        )
                     }
-                    
-                    Text(
-                        text = infoLabel,
-                        color = Color.White.copy(alpha = 0.8f), fontSize = 18.sp,
-                        style = LocalTextStyle.current.copy(shadow = Shadow(Color.Black, androidx.compose.ui.geometry.Offset(2f, 2f), 4f))
-                    )
                 }
             }
 
