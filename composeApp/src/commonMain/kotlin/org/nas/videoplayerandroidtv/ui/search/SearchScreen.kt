@@ -251,14 +251,22 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
     
-    // 추가 태그 추출 (서버에서 넘겨준 title 기준)
+    // 추가 태그 추출 (Regex 기반 개선)
     val tags = remember(series.title) {
-        val list = mutableListOf<String>()
-        if (series.title.contains("[스페셜]")) list.add("스페셜")
-        if (series.title.contains("[극장판]")) list.add("극장판")
-        if (series.title.contains("[OVA]")) list.add("OVA")
-        if (series.title.contains("[더빙]")) list.add("더빙")
-        if (series.title.contains("[자막]")) list.add("자막")
+        val tagRegex = Regex("\\[(.*?)\\]")
+        val matches = tagRegex.findAll(series.title)
+        
+        val list = matches.map { it.groupValues[1].trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
+            
+        // 진단 로그 (문제 해결 확인용)
+        if (series.title.contains("코난")) {
+            println("검색 태그 체크 - 원본 제목: ${series.title}")
+            println("검색 태그 체크 - 결과: $list")
+        }
+        
         list
     }
 
@@ -358,7 +366,7 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
                     }
                     
                     // 불필요한 해상도, 코덱, 날짜 및 회차(E01 등) 릴리즈 태그 정제
-                    val cleanupRegex = Regex("""(?i)[._\-\s]*([sS]\d+[eE]\d+|[eE][pP]?\d{1,4}(?=[.\s_-]|$)|1080p|720p|2160p|4k|fhd|uhd|bluray|web-dl|webrip|hdrip|x264|x265|hevc|aac|ac3|dts|korean|eng|smi|srt|\d{6}|\d{8}).*$""")
+                    val cleanupRegex = Regex("""(?i)[._\-\s]*([sS]\d+[eE]\d+|[eE][pP]?\d{1,4}(?=[.\s_-]|$)|1080p|720p|2160p|4k|fhd|uhd|bluray|web-dl|webrip|hdrip|x264|x265|hevc|avc|aac|ac3|dts|korean|eng|smi|srt|\d{6}|\d{8}).*$""")
                     rawName = cleanupRegex.replace(rawName, "").trim()
                     // 남은 특수문자나 괄호 정리
                     rawName = rawName.trimEnd('-', '_', '.', ' ', '[', '(', '{')

@@ -28,14 +28,22 @@ import org.nas.videoplayerandroidtv.domain.model.Series
 fun MovieCard(series: Series, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     
-    // 추가 태그 추출
+    // 추가 태그 추출 (Regex 기반 개선)
     val tags = remember(series.title) {
-        val list = mutableListOf<String>()
-        if (series.title.contains("[스페셜]")) list.add("스페셜")
-        if (series.title.contains("[극장판]")) list.add("극장판")
-        if (series.title.contains("[OVA]")) list.add("OVA")
-        if (series.title.contains("[더빙]")) list.add("더빙")
-        if (series.title.contains("[자막]")) list.add("자막")
+        val tagRegex = Regex("\\[(.*?)\\]")
+        val matches = tagRegex.findAll(series.title)
+        
+        val list = matches.map { it.groupValues[1].trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
+            
+        // 진단 로그 (문제 해결 확인용)
+        if (series.title.contains("코난")) {
+            println("검색 태그 체크 - 원본 제목: ${series.title}")
+            println("검색 태그 체크 - 결과: $list")
+        }
+
         list
     }
     

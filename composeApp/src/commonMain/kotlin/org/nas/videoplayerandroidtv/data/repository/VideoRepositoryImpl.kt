@@ -40,7 +40,8 @@ class VideoRepositoryImpl : VideoRepository {
     }
 
     private fun Category.toSeries() = Series(
-        title = if (!tmdbTitle.isNullOrBlank()) tmdbTitle else (name ?: ""),
+        // 서버에서 [자막], [더빙] 등 태그가 포함된 최종 이름을 'name' 필드로 보내주므로 이를 우선 사용합니다.
+        title = if (!name.isNullOrBlank()) name else (tmdbTitle ?: ""),
         episodes = movies ?: emptyList(),
         seasons = seasons ?: emptyMap(),
         fullPath = path,

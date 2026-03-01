@@ -178,14 +178,22 @@ fun NetflixPivotItem(
     val infoAreaHeight = 85.dp
     val totalItemHeight = posterMaxHeight + infoAreaHeight
     
-    // 추가 태그 추출
+    // 추가 태그 추출 (Regex 기반 개선)
     val tags = remember(title) {
-        val list = mutableListOf<String>()
-        if (title.contains("[스페셜]")) list.add("스페셜")
-        if (title.contains("[극장판]")) list.add("극장판")
-        if (title.contains("[OVA]")) list.add("OVA")
-        if (title.contains("[더빙]")) list.add("더빙")
-        if (title.contains("[자막]")) list.add("자막")
+        val tagRegex = Regex("\\[(.*?)\\]")
+        val matches = tagRegex.findAll(title)
+        
+        val list = matches.map { it.groupValues[1].trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
+            
+        // 진단 로그 (문제 해결 확인용)
+        if (title.contains("코난")) {
+            println("검색 태그 체크 - 원본 제목: $title")
+            println("검색 태그 체크 - 결과: $list")
+        }
+
         list
     }
 
