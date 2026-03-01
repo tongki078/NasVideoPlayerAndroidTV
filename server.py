@@ -1180,40 +1180,54 @@ def get_series_detail_api():
         t_id = series_data.get('tmdbId')
         c_name = nfc(series_data.get('cleanedName'))
 
-        # 🟢 [근본 해결 1] 폴더 기반 범위 제한 (다른 폴더와 섞임 방지)
-        # 파일 경로에서 현재 폴더(시리즈 루트)를 추출합니다.
+        # 🟢 [근본 해결 1] 지능형 루트 폴더 탐색 (시즌 폴더 건너뛰기)
         path_parts = path.split('/')
         if len(path_parts) > 1:
-            # 보통 파일 바로 위 폴더를 기준으로 삼되, 시즌 폴더가 있을 수 있으므로 처리
             parent_dir = "/".join(path_parts[:-1])
-            # 만약 부모 폴더가 '1기', '시즌' 같은 형태면 한 단계 더 위를 루트로 잡음
-            if any(x in path_parts[-2] for x in ['기', '시즌', 'Season', 'Part']):
-                if len(path_parts) > 2:
-                    parent_dir = "/".join(path_parts[:-2])
+            folder_name = path_parts[-2]  # 파일이 들어있는 폴더명
+
+            # 명확한 시즌/기수 패턴이 폴더명에 포함된 경우에만 한 단계 더 위로 올라감
+            # 연도(2024)나 단순 제목 숫자로 인한 오작동 방지
+            is_season_pattern = re.search(r'(?i)(?:시즌|Season|S)\s*\d+|(\d+)\s*기|X파일\s*\d+|파트\s*\d+|Part\s*\d+',
+                                          folder_name)
+
+            if is_season_pattern and len(path_parts) > 2:
+                parent_dir = "/".join(path_parts[:-2])
         else:
             parent_dir = ""
 
-        print(f"[DETAIL_DIAG] 2. 시리즈 루트 폴더 확정: {parent_dir}", flush=True)
+        print(f"[DETAIL_DIAG] 2. 확정된 시리즈 루트: {parent_dir}", flush=True)
 
-        # 2. 에피소드 쿼리 (루트 폴더 내의 파일만 가져오도록 LIKE 조건 추가)
+        # 2. 에피소드 쿼리 (루트 폴더 기반 + 같은 CleanName 기반)
+        # LIKE parent_dir% 조건을 통해 인근 폴더만 탐색하여 섞임 방지
         all_refined_eps = []
-
-        # TMDB ID가 있으면 전역 매칭, 없으면 현재 폴더 범위 내에서만 매칭
-        if t_id:
-            query = "SELECT * FROM episodes WHERE series_path IN (SELECT path FROM series WHERE tmdbId = ?)"
-            params = (t_id,)
-        else:
-            # 🟢 [근본 해결 2] 같은 이름이면서 현재 폴더(parent_dir) 하위에 있는 것만 매칭
-            query = "SELECT * FROM episodes WHERE series_path LIKE ? AND series_path IN (SELECT path FROM series WHERE cleanedName = ?)"
-            params = (f"{parent_dir}%", c_name)
+        query = "SELECT * FROM episodes WHERE series_path LIKE ? AND series_path IN (SELECT path FROM series WHERE cleanedName = ?)"
+        params = (f"{parent_dir}%", c_name)
 
         rows = conn.execute(query, params).fetchall()
-        print(f"[DETAIL_DIAG] 3. 필터링된 DB 결과: {len(rows)}개 발견", flush=True)
+        print(f"[DETAIL_DIAG] 3. DB 검색 결과: {len(rows)}개 발견", flush=True)
 
         for r in rows:
             d = dict(r)
+            ep_path = nfc(d['series_path'])
+
+            # 🟢 [근본 해결 2] 하위 폴더 분석을 통한 고화질 시즌 분리 로직 (프리렌 대응)
+            rel_sub_path = ep_path.replace(parent_dir, "").strip("/")
+            sub_parts = rel_sub_path.split("/")
+
             sn, en = d.get('season_number'), d.get('episode_number')
             if sn is None: sn, en = extract_episode_numbers(d.get('title', ''))
+
+            season_display_name = f"{sn or 1}시즌"
+            sort_weight = sn or 1
+
+            # 만약 파일이 루트보다 더 깊은 하위 폴더(4K, UHD 등)에 있다면 별도 탭으로 분리
+            if len(sub_parts) > 1:
+                # 파일명 바로 위 폴더 혹은 그 상위 폴더 중 키워드가 있는지 확인
+                sub_folder_name = sub_parts[-1] if "." not in sub_parts[-1] else sub_parts[-2]
+                if any(k in sub_folder_name.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"]):
+                    season_display_name = f"고화질 버전 ({sub_folder_name})"
+                    sort_weight = 900 + (sn or 0)  # 일반 시즌보다 뒤로 정렬
 
             all_refined_eps.append({
                 "id": str(d.get('id')),
@@ -1223,28 +1237,28 @@ def get_series_detail_api():
                 "overview": d.get('overview'),
                 "air_date": d.get('air_date'),
                 "season_number": sn,
-                "episode_number": en
+                "episode_number": en,
+                "display_season": season_display_name,
+                "sort_weight": sort_weight
             })
 
         # 3. 정렬 및 시즌 맵 생성
-        sorted_eps = sorted(all_refined_eps, key=lambda x: (x['season_number'] or 1, x['episode_number'] or 0))
+        sorted_eps = sorted(all_refined_eps, key=lambda x: (x['sort_weight'], x['episode_number'] or 0))
         seasons_map = {}
         for ep in sorted_eps:
-            sk = f"{ep['season_number'] or 1}시즌"
+            sk = ep['display_season']
             if sk not in seasons_map: seasons_map[sk] = []
             seasons_map[sk].append(ep)
 
-        # 🟢 [근본 해결 3] 앱 모델 필드명(episodes) 일치화
+        # 🟢 [근본 해결 3] 앱 모델 필드명(episodes) 일치화 (버튼 실종 방지)
         clean_main_name = nfc(series_data.get('tmdbTitle') or series_data.get('cleanedName') or series_data.get('name'))
-
-        # 더빙/자막 태그 유지
         is_dub = "더빙" in nfc(path + series_data['name']).lower()
         is_sub = "자막" in nfc(path + series_data['name']).lower()
 
         response_data = {
             **series_data,
             "name": f"{clean_main_name} {'[더빙]' if is_dub else '[자막]' if is_sub else ''}".strip(),
-            "episodes": sorted_eps,  # movies -> episodes 로 수정
+            "episodes": sorted_eps,  # movies가 아닌 episodes로 보내야 함
             "seasons": seasons_map,
             "genreIds": json.loads(series_data.get('genreIds', '[]')) if series_data.get('genreIds') else [],
             "genreNames": json.loads(series_data.get('genreNames', '[]')) if series_data.get('genreNames') else [],
@@ -1261,6 +1275,7 @@ def get_series_detail_api():
     except Exception as e:
         print(f"[DETAIL_DIAG ERROR] {traceback.format_exc()}", flush=True)
         return gzip_response({"error": str(e)})
+
 
 def pre_generate_individual_task(ep_thumb_url):
     try:
