@@ -68,7 +68,7 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
             )
             .build().apply {
                 playWhenReady = true
-                volume = 0f
+                volume = 1f // [수정] 0f(음소거) -> 1f(원래 볼륨)으로 변경하여 소리가 나게 함
                 repeatMode = Player.REPEAT_MODE_ALL
                 addListener(object : Player.Listener {
                     override fun onRenderedFirstFrame() {
