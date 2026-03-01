@@ -1725,7 +1725,7 @@ def preview_serve():
             FFMPEG_PATH, "-ss", start_time, "-i", vp,
             "-t", "30", "-vf", "scale=640:-2",
             "-vcodec", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-            "-crf", "28", "-an", "-f", "matroska", "pipe:1"
+            "-crf", "28", "-c:a", "aac", "-b:a", "128k", "-f", "matroska", "pipe:1"  # 🔴 -an(음소거) 제거 후 AAC 오디오 추가
         ]
 
         def generate():

@@ -170,7 +170,17 @@ fun SeriesDetailScreen(
                                 PremiumTvButton(text = btnLabel, icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(resumeButtonFocusRequester), onClick = { onPlay(resumeInfo.episode, allEpisodes, resumeInfo.position) })
                             }
                             PremiumTvButton(text = if (!resumeInfo.isNew) "처음부터" else "재생", icon = if (!resumeInfo.isNew) Icons.Default.Refresh else Icons.Default.PlayArrow, isPrimary = resumeInfo.isNew, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first(), allEpisodes, 0L) })
-                            if (state.seasons.isNotEmpty()) PremiumTvButton(text = "회차 정보", icon = Icons.AutoMirrored.Filled.List, isPrimary = false, modifier = Modifier.focusRequester(infoButtonFocusRequester), onClick = { state = state.copy(showEpisodeOverlay = true) })
+                            
+                            // 🔴 영화가 아닐 때만 '회차 정보' 버튼 표시
+                            if (currentSeries.category != "movies" && state.seasons.isNotEmpty()) {
+                                PremiumTvButton(
+                                    text = "회차 정보",
+                                    icon = Icons.AutoMirrored.Filled.List,
+                                    isPrimary = false,
+                                    modifier = Modifier.focusRequester(infoButtonFocusRequester),
+                                    onClick = { state = state.copy(showEpisodeOverlay = true) }
+                                )
+                            }
                         } else if (allEpisodes.isNotEmpty()) {
                              // resumeInfo가 계산되지 않았을 때의 Fallback
                              PremiumTvButton(text = "재생", icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first(), allEpisodes, 0L) })
