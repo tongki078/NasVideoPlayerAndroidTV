@@ -17,6 +17,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -26,12 +28,18 @@ import androidx.compose.ui.unit.sp
 import org.nas.videoplayerandroidtv.Screen
 
 @Composable
-fun NetflixTopBar(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
+fun NetflixTopBar(
+    currentScreen: Screen,
+    homeFocusRequester: FocusRequester? = null, // [추가] 홈 버튼 포커스 제어용
+    onFocusChanged: (Boolean) -> Unit = {},     // [추가] 상단바 포커스 여부 전달용
+    onScreenSelected: (Screen) -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
             .height(64.dp)
+            .onFocusChanged { onFocusChanged(it.hasFocus) } // 상단바 전체 포커스 감지
             .padding(horizontal = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -46,7 +54,14 @@ fun NetflixTopBar(currentScreen: Screen, onScreenSelected: (Screen) -> Unit) {
                 modifier = Modifier.padding(end = 8.dp)
             )
             
-            TopBarItem(label = "홈", icon = Icons.Default.Home, screen = Screen.HOME, currentScreen = currentScreen, onClick = onScreenSelected)
+            TopBarItem(
+                label = "홈", 
+                icon = Icons.Default.Home, 
+                screen = Screen.HOME, 
+                currentScreen = currentScreen, 
+                modifier = if (homeFocusRequester != null) Modifier.focusRequester(homeFocusRequester) else Modifier,
+                onClick = onScreenSelected
+            )
             TopBarItem(label = "검색", icon = Icons.Default.Search, screen = Screen.SEARCH, currentScreen = currentScreen, onClick = onScreenSelected)
         }
         
@@ -73,6 +88,7 @@ private fun TopBarItem(
     screen: Screen,
     currentScreen: Screen,
     onClick: (Screen) -> Unit,
+    modifier: Modifier = Modifier,
     icon: ImageVector? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
@@ -87,7 +103,7 @@ private fun TopBarItem(
     )
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .background(if (isFocused) Color.White.copy(alpha = 0.1f) else Color.Transparent)
             .onFocusChanged { isFocused = it.isFocused }

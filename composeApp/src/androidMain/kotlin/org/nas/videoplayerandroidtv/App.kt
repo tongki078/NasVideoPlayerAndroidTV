@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -72,6 +73,10 @@ fun App(driver: SqlDriver) {
     
     // 마지막으로 선택했던 시리즈의 경로를 저장하여 포커스 복구에 사용
     var lastSelectedSeriesPath by rememberSaveable { mutableStateOf<String?>(null) }
+
+    // 상단바 포커스 제어용
+    val topBarHomeFocusRequester = remember { FocusRequester() }
+    var isTopBarFocused by remember { mutableStateOf(false) }
 
     // 검색 실행 로직
     LaunchedEffect(searchQuery) {
@@ -136,11 +141,20 @@ fun App(driver: SqlDriver) {
     val allRowStates = remember { mutableStateMapOf<String, MutableMap<String, LazyListState>>() }
     val allRowFocusIndices = remember { mutableStateMapOf<String, SnapshotStateMap<String, Int>>() }
 
-    BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME) {
+    // [UX 개선] 뒤로가기 동작 정의
+    BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME || !isTopBarFocused) {
         when {
             selectedMovie != null -> { selectedMovie = null }
             selectedSeries != null -> { selectedSeries = null }
-            currentScreen != Screen.HOME -> { currentScreen = Screen.HOME }
+            currentScreen != Screen.HOME -> { 
+                currentScreen = Screen.HOME 
+                // 카테고리에서 홈으로 돌아올 때도 상단바로 포커스 이동 (선택 사항)
+                topBarHomeFocusRequester.requestFocus()
+            }
+            !isTopBarFocused -> { 
+                // 리스트 탐색 중 뒤로가기 시 상단바(홈 버튼)로 포커스 이동
+                topBarHomeFocusRequester.requestFocus() 
+            }
         }
     }
 
@@ -154,14 +168,19 @@ fun App(driver: SqlDriver) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(modifier = Modifier.fillMaxSize()) {
                 if (selectedMovie == null) {
-                    NetflixTopBar(currentScreen) { screen ->
-                        if (currentScreen != screen) {
-                            lastSelectedSeriesPath = null // 카테고리 변경 시 이전 포커스 정보 초기화
+                    NetflixTopBar(
+                        currentScreen = currentScreen,
+                        homeFocusRequester = topBarHomeFocusRequester,
+                        onFocusChanged = { isTopBarFocused = it },
+                        onScreenSelected = { screen ->
+                            if (currentScreen != screen) {
+                                lastSelectedSeriesPath = null // 카테고리 변경 시 이전 포커스 정보 초기화
+                            }
+                            currentScreen = screen
+                            selectedSeries = null 
+                            selectedMovie = null
                         }
-                        currentScreen = screen
-                        selectedSeries = null 
-                        selectedMovie = null
-                    }
+                    )
                     
                     if (subModes.isNotEmpty()) {
                         LazyRow(
