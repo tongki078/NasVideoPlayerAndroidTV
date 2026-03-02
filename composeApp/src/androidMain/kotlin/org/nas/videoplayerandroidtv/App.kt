@@ -105,7 +105,7 @@ fun App(driver: SqlDriver) {
         Screen.KOREAN_TV -> listOf("드라마", "시트콤", "예능", "교양", "다큐멘터리")
         Screen.FOREIGN_TV -> listOf("미국 드라마", "일본 드라마", "중국 드라마", "기타국가 드라마", "다큐")
         Screen.ANIMATIONS -> listOf("라프텔", "시리즈")
-        Screen.ON_AIR -> listOf("라프텔 애니메이션", "드라마")
+        Screen.ON_AIR -> listOf("라프텔 애니메이션", "드라마", "외국")
         else -> emptyList()
     }
 

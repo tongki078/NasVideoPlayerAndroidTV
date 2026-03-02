@@ -696,17 +696,24 @@ WHITELISTS = {
     "koreantv": [],
     "foreigntv": [],
     "animations_all": [],
-    "air": []
+    "air": ["드라마", "라프텔 애니메이션", "외국"]  # "외국" 폴더를 추가했습니다.
 }
 
 
 def scan_recursive_to_db(bp, prefix, category, include_only=None):
-    emit_ui_log("파일 목록을 불러오는 중입니다...", "info")
-    log("SCAN", f"📂 '{category}' 탐색 시작 (허용 폴더만: {include_only if include_only else '전체'})")
+    """
+    bp: 기준 경로 (예: /volume2/video/GDS3/GDRIVE/VIDEO/방송중)
+    prefix: URL 접두사 (예: air)
+    category: DB 카테고리 식별자 (예: air)
+    include_only: 스캔할 특정 하위 폴더 리스트 (예: ["외국"])
+    """
+    emit_ui_log(f"'{category}' 카테고리 스캔을 시작합니다...", "info")
+    log("SCAN", f"📂 '{category}' 탐색 시작 (대상: {include_only if include_only else '전체'})")
+
     base = nfc(get_real_path(bp))
     all_files = []
 
-    # 허용 목록이 있으면 해당 폴더들만 시작 지점으로 설정
+    # 1. 스캔 대상 경로 결정 (특정 폴더만 혹은 전체)
     targets = []
     if include_only:
         for folder in include_only:
@@ -718,6 +725,7 @@ def scan_recursive_to_db(bp, prefix, category, include_only=None):
     else:
         targets = [base]
 
+    # 2. 파일 시스템 탐색 (스택 방식 트리 순회)
     for start_point in targets:
         stack = [start_point]
         visited = set()
@@ -730,29 +738,30 @@ def scan_recursive_to_db(bp, prefix, category, include_only=None):
                 with os.scandir(curr) as it:
                     for entry in it:
                         if entry.is_dir():
+                            # 제외 폴더 및 숨김 폴더 필터링
                             if not any(ex in entry.name for ex in EXCLUDE_FOLDERS) and not entry.name.startswith('.'):
                                 stack.append(entry.path)
                         elif entry.is_file() and entry.name.lower().endswith(VIDEO_EXTS):
                             all_files.append(nfc(entry.path))
-                        # --- [여기에 아래 코드 추가] ---
-                        if len(all_files) % 1000 == 0:
-                            log("SCAN", f"⏳ 파일 찾는 중... 현재 {len(all_files)}개 발견")
-                        # ------------------------------
-            except:
-                pass
 
+                        if len(all_files) % 1000 == 0:
+                            log("SCAN", f"⏳ 파일 수집 중... 현재 {len(all_files)}개 발견")
+            except Exception as e:
+                log("SCAN_ERR", f"접근 오류 ({curr}): {e}")
+
+    # 3. 데이터베이스 동기화 시작
     conn = get_db()
     cursor = conn.cursor()
-    # 해당 카테고리의 기존 데이터 가져오기
+
+    # 해당 카테고리의 기존 데이터 맵핑 (삭제 판단용)
     cursor.execute('SELECT id, series_path FROM episodes WHERE series_path LIKE ?', (f"{category}/%",))
     db_data = {row['id']: row['series_path'] for row in cursor.fetchall()}
     current_ids = set()
     total = len(all_files)
 
-    set_update_state(is_running=True, task_name=f"스캔 ({category})", total=total, current=0, success=0, fail=0,
-                     clear_logs=True)
+    set_update_state(is_running=True, task_name=f"스캔 ({category})", total=total, current=0, success=0, fail=0)
 
-    # scan_recursive_to_db 함수 내부의 for문 루프 수정
+    # 4. 신규 추가 및 경로 변경 반영
     for idx, fp in enumerate(all_files):
         mid = hashlib.md5(fp.encode()).hexdigest()
         current_ids.add(mid)
@@ -760,13 +769,15 @@ def scan_recursive_to_db(bp, prefix, category, include_only=None):
         name = os.path.splitext(os.path.basename(fp))[0]
         spath = f"{category}/{rel}"
 
-        # [수정된 부분] 전체 경로(fp)와 기준 경로(base)를 전달하여 지능적 정제
+        # 제목 정제 및 메타데이터 기본형 생성
         ct, yr = clean_title_complex(name, full_path=fp, base_path=base)
 
+        # 시리즈 테이블 등록 (이미 있으면 무시)
         cursor.execute(
             'INSERT OR IGNORE INTO series (path, category, name, cleanedName, yearVal) VALUES (?, ?, ?, ?, ?)',
             (spath, category, name, ct, yr))
 
+        # 에피소드 테이블 등록/갱신
         if mid not in db_data:
             cursor.execute(
                 'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl) VALUES (?, ?, ?, ?, ?)',
@@ -776,27 +787,51 @@ def scan_recursive_to_db(bp, prefix, category, include_only=None):
             with UPDATE_LOCK:
                 UPDATE_STATE["success"] += 1
         elif db_data[mid] != spath:
+            # 파일 위치가 바뀐 경우 경로 업데이트
             cursor.execute('UPDATE episodes SET series_path = ? WHERE id = ?', (spath, mid))
-            emit_ui_log(f"경로 갱신: '{name}'", 'info')
             with UPDATE_LOCK:
                 UPDATE_STATE["success"] += 1
         else:
             with UPDATE_LOCK:
                 UPDATE_STATE["success"] += 1
 
-        if (idx + 1) % 2000 == 0:
+        # 1000개 단위로 커밋하여 안정성 확보
+        if (idx + 1) % 1000 == 0:
             conn.commit()
+            with UPDATE_LOCK: UPDATE_STATE["current"] = idx + 1
 
-    # 허용되지 않은 폴더에서 스캔되지 않은 이전 데이터 삭제
-    for rid in (set(db_data.keys()) - current_ids):
-        cursor.execute('DELETE FROM episodes WHERE id = ?', (rid,))
+    # 5. [중요] 스마트 클린업 로직 (부분 스캔 시 기존 데이터 보호)
+    delete_candidates = set(db_data.keys()) - current_ids
+    deleted_count = 0
+
+    for rid in delete_candidates:
+        old_spath = db_data[rid]  # 예: "air/드라마/제목.mp4"
+
+        should_delete = False
+        if not include_only:
+            # 전체 스캔 모드일 때는 이번에 발견 안 된 모든 항목 삭제
+            should_delete = True
+        else:
+            # 부분 스캔 모드일 때는 이번에 조사한 폴더 안에 있던 데이터만 삭제
+            for folder in include_only:
+                # 예: "air/외국/..." 경로로 시작하는 데이터만 지움
+                if old_spath.startswith(f"{category}/{folder}/"):
+                    should_delete = True
+                    break
+
+        if should_delete:
+            cursor.execute('DELETE FROM episodes WHERE id = ?', (rid,))
+            deleted_count += 1
+
+    # 에피소드가 하나도 남지 않은 시리즈(폴더) 정보 정리
     cursor.execute('DELETE FROM series WHERE path NOT IN (SELECT DISTINCT series_path FROM episodes) AND category = ?',
                    (category,))
+
     conn.commit()
     conn.close()
 
-    set_update_state(is_running=False, current_item="작업 완료")
-    log("SCAN", f"✅ '{category}' 스캔 완료 ({total}개)")
+    set_update_state(is_running=False, current_item=f"스캔 완료 (신규/갱신: {UPDATE_STATE['success']}, 삭제: {deleted_count})")
+    log("SCAN", f"✅ '{category}' 스캔 및 DB 동기화 완료")
 
 
 def perform_full_scan():
@@ -2630,137 +2665,296 @@ def updater_ui():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>NAS Player - 메타데이터 모니터링</title>
+        <title>NAS Player Pro - Admin Dashboard</title>
+        <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
         <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; color: #333; margin: 0; padding: 20px; }
-            .container { max-width: 900px; margin: 0 auto; background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 30px; }
-            h1 { font-size: 24px; color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 15px; margin-top: 0; display: flex; align-items: center; gap: 10px; }
-            .btn-group { margin-bottom: 25px; display: flex; gap: 10px; flex-wrap: wrap; }
-            button { background: #6c757d; color: white; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; transition: opacity 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            button:hover { opacity: 0.8; }
-            button.btn-primary { background: #007bff; }
-            button.btn-success { background: #28a745; }
-            button.btn-warning { background: #ffc107; color: #212529; }
-            .status-box { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
-            .status-header { font-size: 18px; font-weight: bold; margin-bottom: 15px; color: #34495e; display: flex; justify-content: space-between;}
-            .task-badge { background: #e9ecef; color: #495057; padding: 3px 10px; border-radius: 15px; font-size: 13px; font-weight: bold;}
-            .progress-container { background: #e9ecef; border-radius: 8px; height: 20px; width: 100%; overflow: hidden; margin-bottom: 15px; }
-            .progress-bar { background: #28a745; height: 100%; width: 0%; transition: width 0.3s; }
-            .stats { display: flex; justify-content: space-between; font-size: 14px; font-weight: bold; color: #495057; }
-            .stats span.success { color: #28a745; }
-            .stats span.fail { color: #dc3545; }
-            .terminal { background: #1e1e1e; border-radius: 8px; padding: 15px; height: 500px; overflow-y: auto; font-family: 'Consolas', 'Courier New', monospace; font-size: 13px; line-height: 1.6; color: #d4d4d4; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); }
-            .log-success { color: #4CAF50; }
-            .log-error { color: #F44336; }
-            .log-info { color: #9E9E9E; }
+            :root {
+                --bg-color: #0f172a;
+                --card-bg: #1e293b;
+                --text-main: #f8fafc;
+                --text-dim: #94a3b8;
+                --primary: #3b82f6;
+                --success: #10b981;
+                --warning: #f59e0b;
+                --danger: #ef4444;
+                --accent: #8b5cf6;
+            }
+
+            body {
+                font-family: 'Inter', -apple-system, sans-serif;
+                background: var(--bg-color);
+                color: var(--text-main);
+                margin: 0; padding: 0;
+                line-height: 1.5;
+            }
+
+            .dashboard {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 40px 20px;
+            }
+
+            /* Header Section */
+            header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 40px;
+                border-bottom: 1px solid #334155;
+                padding-bottom: 20px;
+            }
+
+            h1 { font-size: 28px; margin: 0; display: flex; align-items: center; gap: 12px; }
+            h1 i { color: var(--primary); }
+
+            /* Status Overview Cards */
+            .status-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                gap: 20px;
+                margin-bottom: 30px;
+            }
+
+            .stat-card {
+                background: var(--card-bg);
+                padding: 24px;
+                border-radius: 16px;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+                border: 1px solid #334155;
+                transition: transform 0.2s;
+            }
+
+            .stat-card:hover { transform: translateY(-5px); }
+            .stat-label { color: var(--text-dim); font-size: 14px; margin-bottom: 8px; font-weight: 500; }
+            .stat-value { font-size: 24px; font-weight: 700; display: flex; align-items: baseline; gap: 8px; }
+            .stat-unit { font-size: 14px; color: var(--text-dim); }
+
+            /* Main Layout: Controls & Terminal */
+            .main-grid {
+                display: grid;
+                grid-template-columns: 1fr 380px;
+                gap: 30px;
+            }
+
+            @media (max-width: 1024px) {
+                .main-grid { grid-template-columns: 1fr; }
+            }
+
+            /* Terminal Area */
+            .terminal-container {
+                background: #000;
+                border-radius: 16px;
+                padding: 20px;
+                border: 1px solid #334155;
+                display: flex;
+                flex-direction: column;
+                height: 600px;
+            }
+
+            .terminal-header {
+                display: flex;
+                justify-content: space-between;
+                color: var(--text-dim);
+                font-size: 12px;
+                margin-bottom: 15px;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }
+
+            .terminal {
+                flex-grow: 1;
+                overflow-y: auto;
+                font-family: 'Fira Code', 'Consolas', monospace;
+                font-size: 13px;
+                color: #e2e8f0;
+                line-height: 1.6;
+            }
+
+            /* Action Sidebar Cards */
+            .sidebar { display: flex; flex-direction: column; gap: 20px; }
+            .action-card {
+                background: var(--card-bg);
+                padding: 20px;
+                border-radius: 16px;
+                border: 1px solid #334155;
+            }
+
+            .card-title { font-size: 16px; font-weight: 600; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; }
+            .card-title i { color: var(--primary); }
+
+            .btn-list { display: flex; flex-direction: column; gap: 10px; }
+
+            button {
+                width: 100%;
+                padding: 12px;
+                border-radius: 8px;
+                border: none;
+                font-size: 14px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s;
+                text-align: left;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                color: white;
+            }
+
+            .btn-scan { background: #334155; }
+            .btn-scan:hover { background: #475569; }
+            .btn-meta { background: var(--primary); }
+            .btn-meta:hover { background: #2563eb; }
+            .btn-maintenance { background: #475569; }
+            .btn-maintenance:hover { background: #64748b; }
+            .btn-danger-alt { background: #7f1d1d; }
+            .btn-danger-alt:hover { background: #991b1b; }
+
+            /* Progress Bar Section */
+            .progress-section {
+                background: var(--card-bg);
+                padding: 24px;
+                border-radius: 16px;
+                margin-bottom: 30px;
+                border-left: 4px solid var(--primary);
+            }
+
+            .progress-info { display: flex; justify-content: space-between; margin-bottom: 12px; }
+            .current-task { font-weight: 600; font-size: 16px; }
+            .progress-track { background: #0f172a; height: 12px; border-radius: 6px; overflow: hidden; margin-bottom: 8px; }
+            .progress-fill { background: linear-gradient(90deg, var(--primary), var(--accent)); width: 0%; height: 100%; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1); }
+
+            /* Inputs Area */
+            .input-group { margin-top: 15px; display: flex; flex-direction: column; gap: 8px; }
+            input {
+                background: #0f172a;
+                border: 1px solid #334155;
+                padding: 10px;
+                border-radius: 8px;
+                color: white;
+                font-size: 13px;
+            }
+
+            .log-success { color: #4ade80; }
+            .log-error { color: #f87171; }
+            .log-warning { color: #fbbf24; }
+            .log-info { color: #94a3b8; }
+
         </style>
     </head>
     <body>
-        <div class="container">
-            <h1>⚙️ 메타데이터 실시간 업데이트 모니터</h1>
+        <div class="dashboard">
+            <header>
+                <h1><i class="fas fa-server"></i> NAS Player Pro Admin</h1>
+                <div style="font-size: 14px; color: var(--text-dim)">
+                    <span id="serverTime"></span>
+                </div>
+            </header>
 
-            <div class="btn-group">
-                <button class="btn-primary" onclick="triggerTask('/retry_failed_metadata')">↻ 실패 메타데이터 재매칭</button>
-                <button class="btn-success" onclick="triggerTask('/apply_tmdb_thumbnails')">🖼️ TMDB 썸네일 일괄 교체</button>
-                <button class ="btn-primary" style="background-color: #343a40;" onclick="triggerTask('/pre_extract_subtitles')"> 🎬 영화 자막 일괄 추출 </button>
-                <button class="btn-warning" onclick="triggerTask('/rematch_metadata')">⚠️ 전체 강제 재스캔</button>
-                <button class="btn-info" onclick="window.open('/admin_stills', '_blank')" style="background-color: #17a2b8;">📊 스틸컷 적용 확인</button>
-                <button class ="btn-secondary" onclick="triggerTask('/rescan_broken')" style="background-color: #6c757d;"> 🔍 로컬 폴더 스캔 </button>
-                <button class="btn-warning" style="background-color: #fd7e14;" onclick="triggerTask('/reset_episodes_metadata')">🗑️ 에피소드 회차 정보 초기화 & 재매칭</button>
-                <button class="btn-danger" style="background-color: #dc3545;" onclick="triggerTask('/reset_all_tmdb_data')">🚨 전체 TMDB 메타데이터 초기화 (19금 오류 해결)</button>
-                <button class="btn-info" style="background-color: #20c997;" onclick="triggerTask('/refresh_cleaned_names')">♻️ 제목 정제 및 그룹화 재정렬 (시즌 묶음 오류 해결)</button>
-                <button class="btn-success" style="background-color: #20c997;" onclick="triggerTask('/api/retry_all_no_poster')">🖼️ 전체 포스터 누락 재매칭</button>
+            <!-- Dashboard Stats -->
+            <div class="status-grid">
+                <div class="stat-card">
+                    <div class="stat-label">진행 상황</div>
+                    <div class="stat-value" id="progressPercent">0<span class="stat-unit">%</span></div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">성공 건수</div>
+                    <div class="stat-value" id="successCount" style="color: var(--success)">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">실패 건수</div>
+                    <div class="stat-value" id="failCount" style="color: var(--danger)">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">처리 항목</div>
+                    <div class="stat-value" id="progressCount" style="font-size: 18px;">0 / 0</div>
+                </div>
             </div>
 
-            <!-- 개별 메타데이터 수정 섹션 -->
-            <div class="status-box" style="margin-top: 10px; background: #fff3cd; border-color: #ffeeba; border-left: 5px solid #ffc107;">
-                <div class="status-header" style="color: #856404;">🚨 성인 이미지 / 오매칭 개별 수정 및 수동 매칭</div>
-                <div style="display: flex; gap: 10px; align-items: center; margin-top: 10px;">
-                    <input type="text" id="fixNameInput" placeholder="작품 제목 키워드 (예: 미공개X파일)"
-                           style="flex: 1.5; padding: 12px; border-radius: 6px; border: 1px solid #ffc107; font-size: 14px;">
-                    <input type="text" id="tmdbIdInput" placeholder="TMDB ID (예: tv:32863)"
-                           style="flex: 1; padding: 12px; border-radius: 6px; border: 1px solid #ffc107; font-size: 14px;">
-                    <button class="btn-warning" onclick="manualMatchSimple()" style="white-space: nowrap; background: #28a745; color: white;">수동 ID 매칭</button>
-                    <button class="btn-warning" onclick="fixMetadata()" style="white-space: nowrap; background: #fd7e14; color: white;">자동 재매칭</button>
+            <!-- Active Progress Bar -->
+            <div class="progress-section">
+                <div class="progress-info">
+                    <span class="current-task" id="taskName">대기 중...</span>
+                    <span id="statusText" style="color: var(--text-dim); font-size: 14px;">준비 완료</span>
                 </div>
-                <p style="font-size: 12px; color: #856404; margin-top: 8px; margin-bottom: 0;">
-                    * <b>수동 ID 매칭:</b> TMDB ID를 직접 입력하여 강제로 연결합니다. (가장 정확)<br>
-                    * <b>자동 재매칭:</b> 제목으로 다시 검색합니다. (성인물 제외 필터 적용)
-                </p>
+                <div class="progress-track">
+                    <div class="progress-fill" id="progressBar"></div>
+                </div>
+                <div style="font-size: 13px; color: var(--text-dim);" id="currentItem">현재 항목: -</div>
             </div>
 
-            <div class="status-box">
-                <div class="status-header">
-                    <span id="statusText">처리 중: 대기 중</span>
-                    <span class="task-badge" id="taskName">대기 중</span>
-                </div>
-
-                <div class="progress-container">
-                    <div class="progress-bar" id="progressBar"></div>
-                </div>
-
-                <div class="stats">
-                    <div>
-                        <span id="progressCount">0 / 0</span>
-                        <span id="progressPercent" style="margin-left: 10px; color: #007bff;">0%</span>
+            <div class="main-grid">
+                <!-- Left: Terminal -->
+                <div class="terminal-container">
+                    <div class="terminal-header">
+                        <span><i class="fas fa-terminal"></i> System Activity Logs</span>
+                        <span id="logCount">0 Logs</span>
                     </div>
-                    <div>
-                        <span class="success" id="successCount">성공: 0</span> &nbsp;|&nbsp;
-                        <span class="fail" id="failCount">실패: 0</span>
+                    <div class="terminal" id="terminalBox"></div>
+                </div>
+
+                <!-- Right: Actions Sidebar -->
+                <div class="sidebar">
+                    <div class="action-card">
+                        <div class="card-title"><i class="fas fa-search"></i> 스캔 및 매칭</div>
+                        <div class="btn-list">
+                            <button class="btn-meta" onclick="triggerTask('/api/match_air_foreign')"><i class="fas fa-bolt"></i> 외국 폴더 핀셋 매칭 (추천)</button>
+                            <button class="btn-scan" onclick="triggerTask('/api/scan_air_foreign')"><i class="fas fa-folder-open"></i> 외국 폴더 로컬 스캔</button>
+                            <button class="btn-scan" onclick="triggerTask('/rescan_broken')"><i class="fas fa-sync"></i> 전체 로컬 폴더 스캔</button>
+                            <button class="btn-meta" onclick="triggerTask('/retry_failed_metadata')"><i class="fas fa-redo"></i> 실패 메타데이터 재시도</button>
+                        </div>
+                    </div>
+
+                    <div class="action-card">
+                        <div class="card-title"><i class="fas fa-magic"></i> 개별 작품 수정</div>
+                        <div class="input-group">
+                            <input type="text" id="fixNameInput" placeholder="작품 제목 (예: 미공개X파일)">
+                            <input type="text" id="tmdbIdInput" placeholder="TMDB ID (예: tv:32863)">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 5px;">
+                                <button class="btn-meta" onclick="manualMatchSimple()" style="justify-content: center;"><i class="fas fa-link"></i> 수동 연결</button>
+                                <button class="btn-maintenance" onclick="fixMetadata()" style="justify-content: center;"><i class="fas fa-wand-magic-sparkles"></i> 자동 수정</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="action-card">
+                        <div class="card-title"><i class="fas fa-tools"></i> 고급 도구</div>
+                        <div class="btn-list">
+                            <button class="btn-maintenance" onclick="triggerTask('/apply_tmdb_thumbnails')"><i class="fas fa-image"></i> TMDB 스틸컷 일괄 교체</button>
+                            <button class="btn-maintenance" onclick="triggerTask('/pre_extract_subtitles')"><i class="fas fa-closed-captioning"></i> 영화 자막 일괄 추출</button>
+                            <button class="btn-maintenance" onclick="triggerTask('/refresh_cleaned_names')"><i class="fas fa-broom"></i> 제목 정제 및 그룹화 재정렬</button>
+                            <button class="btn-danger-alt" onclick="triggerTask('/reset_episodes_metadata')"><i class="fas fa-undo"></i> 에피소드 회차 정보 초기화</button>
+                            <button class="btn-danger-alt" onclick="triggerTask('/reset_all_tmdb_data')"><i class="fas fa-trash-alt"></i> 전체 TMDB 데이터 초기화</button>
+                        </div>
                     </div>
                 </div>
             </div>
-
-            <div class="terminal" id="terminalBox"></div>
         </div>
 
         <script>
             async function triggerTask(url) {
-                if (confirm('작업을 시작하시겠습니까? (백그라운드에서 실행되며 모니터링 창에 반영됩니다)')) {
-                    await fetch(url);
+                if (confirm('이 작업을 실행하시겠습니까?')) {
+                    const resp = await fetch(url);
+                    const data = await resp.json();
+                    alert(data.message || '작업이 시작되었습니다.');
                 }
             }
 
             async function manualMatchSimple() {
                 const name = document.getElementById('fixNameInput').value.trim();
                 const id = document.getElementById('tmdbIdInput').value.trim();
-
-                if (!name || !id) {
-                    alert('작품 제목 키워드와 TMDB ID를 모두 입력해주세요.');
-                    return;
-                }
-
-                if (confirm(`'${name}'이 포함된 모든 항목을 TMDB ID '${id}'로 강제 매칭하시겠습니까?`)) {
-                    try {
-                        const resp = await fetch(`/api/manual_match_simple?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}`);
-                        const result = await resp.text();
-                        alert(result);
-                        updateStatus();
-                    } catch (e) {
-                        alert('에러 발생: ' + e);
-                    }
+                if (!name || !id) { alert('제목과 ID를 모두 입력하세요.'); return; }
+                if (confirm('수동 매칭을 실행할까요?')) {
+                    const resp = await fetch(`/api/manual_match_simple?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}`);
+                    alert(await resp.text());
                 }
             }
 
             async function fixMetadata() {
-                const nameInput = document.getElementById('fixNameInput');
-                const name = nameInput.value.trim();
-
-                if (!name) {
-                    alert('수정할 작품의 제목을 입력해주세요.');
-                    return;
-                }
-
-                if (confirm(`'${name}'이(가) 포함된 모든 작품의 메타데이터를 삭제하고 재매칭하시겠습니까?\\n(성인물 제외 필터가 적용됩니다)`)) {
-                    try {
-                        const resp = await fetch(`/fix_wrong_match?name=${encodeURIComponent(name)}`);
-                        const result = await resp.text();
-                        alert(result);
-                        nameInput.value = '';
-                        updateStatus();
-                    } catch (e) {
-                        alert('에러가 발생했습니다: ' + e);
-                    }
+                const name = document.getElementById('fixNameInput').value.trim();
+                if (!name) { alert('제목을 입력하세요.'); return; }
+                if (confirm('자동 수정을 시도할까요?')) {
+                    const resp = await fetch(`/fix_wrong_match?name=${encodeURIComponent(name)}`);
+                    alert(await resp.text());
                 }
             }
 
@@ -2769,55 +2963,149 @@ def updater_ui():
                     const res = await fetch('/api/updater/status');
                     const data = await res.json();
 
-                    document.getElementById('statusText').innerText = data.is_running ? `처리 중: ${data.current_item}` : `완료됨: ${data.current_item}`;
+                    document.getElementById('serverTime').innerText = new Date().toLocaleTimeString();
                     document.getElementById('taskName').innerText = data.task_name;
+                    document.getElementById('statusText').innerText = data.is_running ? '실행 중' : '대기 중';
+                    document.getElementById('currentItem').innerText = '현재 항목: ' + data.current_item;
 
                     const percent = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
-                    document.getElementById('progressBar').style.width = percent + '%';
-
-                    if(!data.is_running && data.total > 0) {
-                        document.getElementById('progressBar').style.width = '100%';
-                    }
-
+                    document.getElementById('progressBar').style.width = (data.is_running ? percent : (data.total > 0 ? 100 : 0)) + '%';
+                    document.getElementById('progressPercent').innerHTML = `${percent}<span class="stat-unit">%</span>`;
                     document.getElementById('progressCount').innerText = `${data.current.toLocaleString()} / ${data.total.toLocaleString()}`;
-                    document.getElementById('progressPercent').innerText = `${percent}%`;
-                    document.getElementById('successCount').innerText = `성공: ${data.success.toLocaleString()}`;
-                    document.getElementById('failCount').innerText = `실패: ${data.fail.toLocaleString()}`;
+                    document.getElementById('successCount').innerText = data.success.toLocaleString();
+                    document.getElementById('failCount').innerText = data.fail.toLocaleString();
 
                     const term = document.getElementById('terminalBox');
+                    document.getElementById('logCount').innerText = `${data.logs.length} Logs`;
 
                     if (data.logs.length > 0) {
                         let html = '';
                         data.logs.forEach(log => {
                             let cssClass = 'log-info';
-                            let icon = 'ℹ️';
-
-                            if (log.type === 'success') { cssClass = 'log-success'; icon = '✅'; }
-                            else if (log.type === 'error') { cssClass = 'log-error'; icon = '❌'; }
-                            else if (log.type === 'warning') { cssClass = 'log-error'; icon = '⚠️'; }
-
-                            html += `<div class="${cssClass}">${log.time} ${icon} [UPDATE] ${log.msg}</div>`;
+                            if (log.type === 'success') cssClass = 'log-success';
+                            else if (log.type === 'error' || log.type === 'warning') cssClass = 'log-error';
+                            html += `<div class="${cssClass}">[${log.time}] ${log.msg}</div>`;
                         });
-
-                        const isScrolledToBottom = term.scrollHeight - term.clientHeight <= term.scrollTop + 50;
+                        const isAtBottom = term.scrollHeight - term.clientHeight <= term.scrollTop + 50;
                         term.innerHTML = html;
-
-                        if (isScrolledToBottom) {
-                            term.scrollTop = term.scrollHeight;
-                        }
+                        if (isAtBottom) term.scrollTop = term.scrollHeight;
                     }
-                } catch (e) {
-                    console.error('Failed to fetch status:', e);
-                }
+                } catch (e) { console.error(e); }
             }
 
-            setInterval(updateStatus, 500);
+            setInterval(updateStatus, 1000);
             updateStatus();
         </script>
     </body>
     </html>
     """
 
+@app.route('/api/scan_air_foreign')
+def scan_air_foreign_only():
+    if "방송중" not in PATH_MAP:
+        return "오류: PATH_MAP 설정 확인 필요", 404
+
+    path, prefix = PATH_MAP["방송중"]
+
+    # 1. 스캔 실행
+    scan_recursive_to_db(path, prefix, "air", include_only=["외국"])
+    build_all_caches()
+
+    # 2. [추가] 매칭 작업 자동 트리거 (이 부분이 추가되어야 자동으로 넘어갑니다)
+    threading.Thread(target=fetch_metadata_async, daemon=True).start()
+
+    return "성공: '방송중 > 외국' 폴더 스캔 완료 및 메타데이터 매칭 시작"
+
+@app.route('/api/match_air_foreign')
+def match_air_foreign_only():
+    """'방송중 > 외국' 폴더 내의 신규 항목만 골라서 TMDB 메타데이터를 매칭합니다."""
+    global IS_METADATA_RUNNING
+    if IS_METADATA_RUNNING:
+        return jsonify({"status": "error", "message": "이미 다른 매칭 작업이 실행 중입니다."}), 409
+
+    def run_targeted_match():
+        global IS_METADATA_RUNNING
+        IS_METADATA_RUNNING = True
+        emit_ui_log("🚀 '방송중 > 외국' 폴더 전용 핀셋 매칭을 시작합니다.", "info")
+
+        try:
+            conn = get_db()
+            # 1. 대상 선정: 'air/외국/' 경로에 있고 아직 매칭되지 않은(tmdbId나 한글제목이 없는) 작품들만 추출
+            query = """
+                SELECT cleanedName, yearVal, category, MIN(name) as sample_name, GROUP_CONCAT(name, '|') as orig_names
+                FROM series
+                WHERE category = 'air' AND path LIKE 'air/외국/%'
+                AND (tmdbId IS NULL OR tmdbTitle IS NULL)
+                AND failed = 0
+                GROUP BY cleanedName, yearVal
+            """
+            targets = conn.execute(query).fetchall()
+            conn.close()
+
+            total = len(targets)
+            set_update_state(is_running=True, task_name="외국 폴더 핀셋 매칭", total=total, current=0, success=0, fail=0,
+                             clear_logs=True)
+
+            if total == 0:
+                emit_ui_log("매칭할 신규 항목이 없습니다.", "warning")
+                IS_METADATA_RUNNING = False
+                set_update_state(is_running=False, current_item="대상 없음")
+                return
+
+            # 2. 매칭 루프 시작
+            total_success = 0
+            for idx, row in enumerate(targets):
+                orig_names = row['orig_names'].split('|')
+                with UPDATE_LOCK:
+                    UPDATE_STATE["current"] = idx + 1
+                    UPDATE_STATE["current_item"] = row['cleanedName']
+
+                # TMDB API 호출 (카테고리는 air 고정)
+                info = get_tmdb_info_server(row['sample_name'], category='air')
+
+                u_conn = get_db()
+                cursor = u_conn.cursor()
+                if info.get('failed'):
+                    # 매칭 실패 시 실패 처리 (나중에 수동 매칭 가능하도록)
+                    cursor.executemany('UPDATE series SET failed=1 WHERE name=?', [(n,) for n in orig_names])
+                else:
+                    # 매칭 성공 시 시리즈 정보 업데이트
+                    up = (
+                        info.get('posterPath'), info.get('year'), info.get('overview'),
+                        info.get('rating'), info.get('seasonCount'),
+                        json.dumps(info.get('genreIds', [])),
+                        json.dumps(info.get('genreNames', []), ensure_ascii=False),
+                        info.get('director'),
+                        json.dumps(info.get('actors', []), ensure_ascii=False),
+                        info.get('tmdbId'),
+                        info.get('title') or info.get('name')
+                    )
+                    cursor.executemany(
+                        'UPDATE series SET posterPath=?, year=?, overview=?, rating=?, seasonCount=?, genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, tmdbTitle=?, failed=0 WHERE name=?',
+                        [(*up, name) for name in orig_names])
+
+                    total_success += 1
+                    with UPDATE_LOCK:
+                        UPDATE_STATE["success"] += 1
+                    emit_ui_log(f"매칭 성공: {row['cleanedName']} -> {info.get('title')}", "success")
+
+                u_conn.commit()
+                u_conn.close()
+
+            # 3. 완료 후 메모리 캐시 빌드 (앱 화면에 즉시 반영)
+            build_all_caches()
+            emit_ui_log(f"핀셋 매칭 완료! 총 {total_success}개 작품의 정보를 가져왔습니다.", "success")
+
+        except Exception as e:
+            log("TARGETED_MATCH_ERROR", f"Error: {e}")
+            emit_ui_log(f"치명적 에러 발생: {str(e)}", "error")
+        finally:
+            IS_METADATA_RUNNING = False
+            set_update_state(is_running=False, current_item="핀셋 매칭 완료")
+
+    # 백그라운드 스레드에서 실행하여 브라우저 타임아웃 방지
+    threading.Thread(target=run_targeted_match, daemon=True).start()
+    return
 @app.route('/api/updater/status')
 def get_updater_status():
     with UPDATE_LOCK:
