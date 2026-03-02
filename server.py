@@ -27,7 +27,8 @@ def gzip_response(data):
 
 
 # --- [1. 설정 및 경로] ---
-MY_IP = "192.168.0.2"
+MY_IP = "ggommi.duckdns.org"
+# MY_IP = "192.168.0.2"
 DATA_DIR = "/volume2/video/thumbnails"
 DB_FILE = "/volume2/video/video_metadata.db"
 TMDB_CACHE_DIR = "/volume2/video/tmdb_cache"
@@ -1674,7 +1675,8 @@ def video_serve():
                 for _ in range(40):
                     if os.path.exists(video_m3u8): break
                     time.sleep(0.5)
-            return redirect(f"http://{MY_IP}:5000/hls/{sid}/video.m3u8")
+            # return redirect(f"http://{MY_IP}:5000/hls/{sid}/video.m3u8")
+            return redirect(f"https://{MY_IP}:9811/hls/{sid}/video.m3u8")
 
         # --- [안드로이드 TV/PC용 소리 및 코덱 해결 로직] ---
         # 🟢 FLAC 오디오나 고스펙 영상으로 인해 재생이 안 될 경우
@@ -3490,7 +3492,8 @@ def background_init_tasks():
     build_all_caches()
 
 
+# 수정 후 (port를 9821로 변경)
 if __name__ == '__main__':
     init_db()
     threading.Thread(target=background_init_tasks, daemon=True).start()
-    app.run(host='0.0.0.0', port=5000, threaded=True)
+    app.run(host='0.0.0.0', port=9821, threaded=True)

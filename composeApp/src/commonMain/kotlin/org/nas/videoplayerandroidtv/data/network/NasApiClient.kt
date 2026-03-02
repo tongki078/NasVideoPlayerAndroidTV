@@ -11,13 +11,14 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.json.Json
 
 object NasApiClient {
-    const val BASE_URL = "http://192.168.0.2:5000"
-
+//    const val BASE_URL = "http://192.168.0.2:5000"
+    // NasApiClient.kt
+    const val BASE_URL = "https://ggommi.duckdns.org:9811"
     val client = HttpClient {
         install(ContentNegotiation) {
-            json(Json { 
+            json(Json {
                 ignoreUnknownKeys = true
-                isLenient = true 
+                isLenient = true
             })
         }
         // [최적화] 서버의 Gzip 압축 응답을 처리하기 위해 ContentEncoding(compression) 추가
