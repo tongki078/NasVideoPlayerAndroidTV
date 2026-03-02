@@ -17,7 +17,8 @@ data class Category(
     val overview: String? = null,
     val year: String? = null,
     val rating: String? = null,
-    val tmdbTitle: String? = null
+    val tmdbTitle: String? = null,
+    val chosung: String? = null // [추가] 서버에서 계산된 초성 정보
 )
 
 @Serializable
@@ -44,7 +45,8 @@ data class Cast(
 @Serializable
 data class HomeSection(
     val title: String,
-    val items: List<Category>
+    val items: List<Category>,
+    val is_full_list: Boolean = false // [추가] 전체목록 여부 플래그
 )
 
 data class Series(

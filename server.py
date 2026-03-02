@@ -996,7 +996,13 @@ def fetch_metadata_async(force_all=False, target_name=None):
     finally:
         IS_METADATA_RUNNING = False
 
-
+def get_chosung(text):
+    CHOSUNG_LIST = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
+    if not text: return ""
+    char_code = ord(text[0])
+    if 0xAC00 <= char_code <= 0xD7A3:  # 한글인 경우
+        return CHOSUNG_LIST[(char_code - 0xAC00) // 588]
+    return text[0].upper()  # 영문/숫자는 대문자 첫글자
 
 def get_sections_for_category(cat, kw=None):
 
@@ -1077,12 +1083,19 @@ def get_sections_for_category(cat, kw=None):
                 "items": random.sample(current_genre_map[g], min(50, len(current_genre_map[g])))
             })
 
-    # [테마 3] 전체 목록 (요청하신 대로 아주 깔끔하게 고정)
-    # display_limit = 3000
-    # sections.append({
-    #     "title": "전체목록",
-    #     "items": target_list[:display_limit]
-    # })
+    # [테마 3] 전체 목록 복원 + 초성 인덱싱
+    display_limit = 3000
+    full_list = target_list[:display_limit]
+
+    # 각 아이템에 초성 정보 주입
+    for item in full_list:
+        item['chosung'] = get_chosung(item.get('name', ''))
+
+    sections.append({
+        "title": "전체목록",
+        "items": full_list,
+        "is_full_list": True  # 전체목록임을 알리는 플래그
+    })
 
     log("PERF", f"✅ {cat}>{kw} 감성 테마 섹션 구성 완료")
     _SECTION_CACHE[cache_key] = sections

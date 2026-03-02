@@ -80,8 +80,6 @@ fun HomeScreen(
     // 뒤로 가기 시 마지막으로 선택했던 항목으로 스크롤 및 포커스를 복구합니다.
     LaunchedEffect(lastFocusedPath, combinedSections, isLoading) {
         // lastFocusedPath가 있을 때만 복구 로직을 수행합니다. 
-        // 기존에 있던 'null일 때 scrollToItem(0)' 로직은 복구 완료 후 lastFocusedPath가 null이 될 때
-        // 스크롤이 최상단으로 튀는 버그를 유발하므로 제거했습니다.
         if (lastFocusedPath != null && combinedSections.isNotEmpty() && !isLoading) {
             var foundRowIndex = -1
             var foundItemIndex = -1
@@ -113,7 +111,6 @@ fun HomeScreen(
             if (foundRowIndex != -1) {
                 delay(100) 
                 try {
-                    // 이미 화면에 보이고 있다면 강제 스크롤하지 않아 미세한 점프를 방지합니다.
                     val isVisible = lazyListState.layoutInfo.visibleItemsInfo.any { it.index == foundRowIndex }
                     if (!isVisible) {
                         lazyListState.scrollToItem(foundRowIndex)
@@ -216,8 +213,10 @@ fun HomeScreen(
                             title = section.title, 
                             horizontalPadding = standardMargin,
                             items = section.items,
+                            isFullList = section.is_full_list, // [수정] 서버의 is_full_list 플래그 전달
                             onIndexClick = { targetIndex ->
                                 coroutineScope.launch {
+                                    // [수정] 가로 점프 기능 활성화
                                     sectionRowState.animateScrollToItem(targetIndex)
                                     rowFocusIndices[rowKey] = targetIndex
                                 }
@@ -269,5 +268,6 @@ private fun Category.toSeries() = Series(
     actors = this.actors ?: emptyList(),
     overview = this.overview,
     year = this.year,
-    rating = this.rating
+    rating = this.rating,
+    tmdbTitle = this.tmdbTitle
 )

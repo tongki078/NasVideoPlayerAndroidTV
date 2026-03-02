@@ -219,6 +219,7 @@ fun SectionTitle(
     title: String, 
     horizontalPadding: androidx.compose.ui.unit.Dp,
     items: List<org.nas.videoplayerandroidtv.domain.model.Category> = emptyList(),
+    isFullList: Boolean = false, // [추가] 전체 목록 여부 플래그
     onIndexClick: (Int) -> Unit = {}
 ) {
     Row(
@@ -236,8 +237,8 @@ fun SectionTitle(
             modifier = Modifier.padding(end = 16.dp)
         )
 
-        // "전체 목록"일 경우에만 초성 인덱스 칩 렌더링
-        if (title.contains("전체 목록") && items.isNotEmpty()) {
+        // "전체목록"일 경우에만 초성 인덱스 칩 렌더링
+        if ((isFullList || title.contains("전체목록") || title.contains("전체 목록")) && items.isNotEmpty()) {
             val standardOrder = listOf(
                 "ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ", "ㅂ", "ㅅ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ", "A-Z"
             )
@@ -245,7 +246,8 @@ fun SectionTitle(
             // 작품 리스트에서 첫 등장하는 초성의 인덱스를 맵핑
             val itemInitialSounds = remember(items) {
                 items.mapIndexedNotNull { index, item ->
-                    val sound = getInitialSound(item.name)
+                    // 서버에서 준 초성이 있으면 그것을 쓰고, 없으면 로컬에서 계산
+                    val sound = item.chosung ?: getInitialSound(item.name)
                     if (sound != "#") sound to index else null
                 }.distinctBy { it.first }.toMap()
             }
@@ -259,7 +261,7 @@ fun SectionTitle(
                     val hasItems = itemInitialSounds.containsKey(sound)
                     
                     var isFocused by remember { mutableStateOf(false) }
-                    val scale by animateFloatAsState(if (isFocused) 1.1f else 1.0f)
+                    val scale by animateFloatAsState(if (isFocused) 1.2f else 1.0f)
                     
                     Surface(
                         color = if (isFocused) Color.White else Color.Transparent,
@@ -277,9 +279,9 @@ fun SectionTitle(
                                 hasItems -> Color.Gray
                                 else -> Color.DarkGray.copy(alpha = 0.5f) // 비활성화된 느낌
                             },
-                            fontSize = 14.sp,
+                            fontSize = 15.sp,
                             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                         )
                     }
                 }
