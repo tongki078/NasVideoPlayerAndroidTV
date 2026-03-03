@@ -142,8 +142,6 @@ fun HomeScreen(
                             onPlayClick = { 
                                 coroutineScope.launch {
                                     if (heroHistory != null && heroHistory.lastPosition > 0) {
-                                        // 히스토리가 있어도 이제 상세페이지로 보낼 수도 있고, 원하시면 여긴 유지해도 됩니다.
-                                        // 일단 사용자님의 요청에 따라 히스토리 클릭 시 상세페이지로 가는 것으로 통일하는 것이 좋겠네요.
                                         val seriesForDetail = Series(
                                             title = heroHistory.seriesTitle ?: heroHistory.title,
                                             episodes = emptyList(),
@@ -202,7 +200,6 @@ fun HomeScreen(
                                     shouldRequestFocus = lastFocusedPath != null && history.seriesPath == lastFocusedPath,
                                     onFocusRestored = onFocusRestored,
                                     onClick = { 
-                                        // 🔴 수정: 히스토리 클릭 시 바로 재생 대신 상세 페이지로 이동
                                         if (history.seriesPath != null) {
                                             val series = Series(
                                                 title = history.seriesTitle ?: history.title,
@@ -212,7 +209,6 @@ fun HomeScreen(
                                             )
                                             onSeriesClick(series)
                                         } else {
-                                            // Fallback: 경로 정보가 없는 옛날 데이터라면 기존처럼 동작
                                             onHistoryClick(history)
                                         }
                                     }
@@ -284,6 +280,7 @@ private fun Category.toSeries() = Series(
     actors = this.actors ?: emptyList(),
     overview = this.overview,
     year = this.year,
-    rating = this.rating,
+    rating = this.rating,      // 보완
+    seasonCount = this.seasonCount, // [추가] 시즌 정보 매핑
     tmdbTitle = this.tmdbTitle
 )

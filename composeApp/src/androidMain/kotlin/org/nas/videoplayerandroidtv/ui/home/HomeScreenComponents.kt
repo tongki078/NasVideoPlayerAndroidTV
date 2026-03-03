@@ -100,20 +100,20 @@ fun HeroSection(
                     metadataComponents.add { MetadataText(text = y) }
                 }
                 
-                // 4. 시즌 정보 (시즌 개수가 1개 이상일 때만 표시하여 중복 방지)
+                // 4. 시즌 정보
                 if (series.category != "movies" && series.seasonCount != null && series.seasonCount > 0) {
                     metadataComponents.add { MetadataText(text = "시즌 ${series.seasonCount}개") }
                 }
+
+                // 5. HD 뱃지
+                metadataComponents.add { HeroBadge(text = "HD", isOutlined = true) }
                 
-                // 5. 연령 등급 뱃지
+                // 6. 연령 등급 뱃지 (가장 우측)
                 if (!series.rating.isNullOrBlank()) {
                     metadataComponents.add { RatingBadge(series.rating) }
                 }
 
-                // 6. HD 뱃지
-                metadataComponents.add { HeroBadge(text = "HD", isOutlined = true) }
-
-                // 메타데이터들을 구분점(·)과 함께 렌더링
+                // 컴포넌트들을 구분점과 함께 렌더링
                 metadataComponents.forEachIndexed { index, component ->
                     component()
                     if (index < metadataComponents.size - 1) {
@@ -150,7 +150,6 @@ fun HeroSection(
                     }
                 }
 
-                // 알약(Pill) 모양의 버튼
                 HeroButton(
                     modifier = Modifier.focusRequester(playButtonFocusRequester),
                     text = "재생",

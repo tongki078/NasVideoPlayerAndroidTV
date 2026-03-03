@@ -134,33 +134,41 @@ fun SeriesDetailScreen(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 
-                // --- 넷플릭스 스타일 메타데이터 로우 ---
+                // --- 넷플릭스 스타일 한 줄 메타데이터 로우 ---
                 Row(modifier = Modifier.height(24.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (state.isLoading) {
                         Box(modifier = Modifier.width(100.dp).fillMaxHeight().clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)))
                     } else {
-                        // 일치율 (임의의 높은 수치 표시)
-                        Text(text = "98% 일치", color = Color(0xFF46D369), fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 12.dp))
+                        val metadataItems = mutableListOf<@Composable () -> Unit>()
+
+                        // 1. 타입 (시리즈/영화)
+                        metadataItems.add { MetadataText(text = if (currentSeries.category == "movies") "영화" else "시리즈") }
+
+                        // 2. 연도
+                        currentSeries.year?.let { y -> metadataItems.add { MetadataText(text = y) } }
                         
-                        // 연도
-                        currentSeries.year?.let { MetadataText(text = it) }
-                        
-                        // 관람 등급
-                        currentSeries.rating?.let { InfoBadge(text = it) }
-                        
-                        // 시즌 수 또는 영화 태그
-                        if (currentSeries.category == "movies") {
-                            MetadataText(text = "영화")
-                        } else if (state.seasons.isNotEmpty()) {
-                            MetadataText(text = "시즌 ${state.seasons.size}개")
+                        // 3. 시즌 정보
+                        if (currentSeries.category != "movies" && state.seasons.isNotEmpty()) {
+                            metadataItems.add { MetadataText(text = "시즌 ${state.seasons.size}개") }
                         }
                         
-                        // 화질 태그 (기본 HD 표시)
-                        InfoBadge(text = "HD", isOutlined = true)
+                        // 4. 화질
+                        metadataItems.add { InfoBadge(text = "HD", isOutlined = true) }
+
+                        // 5. 연령 등급 뱃지 (가장 우측)
+                        currentSeries.rating?.let { r -> metadataItems.add { DetailRatingBadge(r) } }
+
+                        // 구분점(·)과 함께 렌더링
+                        metadataItems.forEachIndexed { index, component ->
+                            component()
+                            if (index < metadataItems.size - 1) {
+                                MetadataSeparator()
+                            }
+                        }
                     }
                 }
                 
-                // 장르 목록 (점 구분자 포함)
+                // 장르 목록
                 if (!state.isLoading && currentSeries.genreNames.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -230,10 +238,46 @@ private fun MetadataText(text: String, color: Color = Color.White.copy(alpha = 0
     Text(
         text = text,
         color = color,
-        fontSize = 14.sp,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(end = 12.dp)
+        fontSize = 15.sp,
+        fontWeight = FontWeight.Bold
     )
+}
+
+@Composable
+private fun MetadataSeparator() {
+    Text(
+        text = " · ",
+        color = Color.White.copy(alpha = 0.4f),
+        fontSize = 15.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(horizontal = 4.dp)
+    )
+}
+
+@Composable
+private fun DetailRatingBadge(rating: String) {
+    val backgroundColor = when {
+        rating.contains("19") || rating.contains("18") || rating.contains("청불") -> Color(0xFFE50914)
+        rating.contains("15") -> Color(0xFFF5A623)
+        rating.contains("12") -> Color(0xFFF8E71C)
+        rating.contains("전체") || rating.contains("All") -> Color(0xFF46D369)
+        else -> Color.Gray.copy(alpha = 0.5f)
+    }
+    
+    Surface(
+        color = backgroundColor,
+        shape = RoundedCornerShape(2.dp),
+        modifier = Modifier.padding(vertical = 1.dp)
+    ) {
+        val displayRating = rating.filter { it.isDigit() }.ifEmpty { if(rating.contains("전체")) "All" else rating.take(2) }
+        Text(
+            text = displayRating,
+            color = if (backgroundColor == Color(0xFFF8E71C)) Color.Black else Color.White,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Black,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+        )
+    }
 }
 
 @Composable
@@ -242,7 +286,7 @@ private fun InfoBadge(text: String, isOutlined: Boolean = true) {
         color = Color.Transparent,
         shape = RoundedCornerShape(2.dp),
         border = if (isOutlined) BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)) else null,
-        modifier = Modifier.padding(end = 10.dp)
+        modifier = Modifier.padding(vertical = 1.dp)
     ) {
         Text(
             text = text, 
