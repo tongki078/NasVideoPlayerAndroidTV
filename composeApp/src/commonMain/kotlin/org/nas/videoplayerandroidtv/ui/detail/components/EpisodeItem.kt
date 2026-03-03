@@ -33,11 +33,18 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
         movie.thumbnailUrl ?: seriesPosterPath ?: ""
     }
 
-    // 시청 진행률 계산
+    // 시청 진행률 및 재생 시간 계산
     val progress = remember(movie.position, movie.duration) {
         if ((movie.duration ?: 0.0) > 0) {
             (movie.position ?: 0.0) / (movie.duration ?: 1.0)
         } else 0.0
+    }
+    
+    val durationText = remember(movie.duration) {
+        if (movie.duration != null && movie.duration > 0) {
+            val minutes = (movie.duration / 60).toInt()
+            if (minutes > 0) "(${minutes}분)" else null
+        } else null
     }
 
     Row(
@@ -113,13 +120,14 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
                 }
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.Top) {
                 Text(
                     text = displayTitle,
                     color = if (isFocused) Color.White else Color.White.copy(alpha = 0.9f), 
                     fontSize = 14.sp, 
                     fontWeight = FontWeight.Bold, 
-                    maxLines = 1, 
+                    maxLines = 2, 
+                    lineHeight = 20.sp,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
                 )
@@ -129,7 +137,7 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
                         color = if (typeTag.contains("더빙")) Color.Red else Color(0xFF46D369), // 더빙은 빨강, 자막은 초록
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Black,
-                        modifier = Modifier.padding(start = 4.dp)
+                        modifier = Modifier.padding(start = 4.dp, top = 2.dp)
                     )
                 }
             }
@@ -144,6 +152,17 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
                 overflow = TextOverflow.Ellipsis, 
                 lineHeight = 16.sp
             )
+            
+            // 재생 시간 표시 (줄거리 밑)
+            if (durationText != null) {
+                Text(
+                    text = durationText,
+                    color = Color.White.copy(alpha = 0.4f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
         }
     }
 }

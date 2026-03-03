@@ -135,9 +135,9 @@ fun SeriesDetailScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 
                 // --- 넷플릭스 스타일 메타데이터 로우 (한 줄 정렬) ---
-                Row(modifier = Modifier.height(24.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     if (state.isLoading) {
-                        Box(modifier = Modifier.width(100.dp).fillMaxHeight().clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)))
+                        Box(modifier = Modifier.width(100.dp).height(24.dp).clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)))
                     } else {
                         val metadataItems = mutableListOf<@Composable () -> Unit>()
 
@@ -146,16 +146,21 @@ fun SeriesDetailScreen(
 
                         // 2. 연도
                         currentSeries.year?.let { y -> metadataItems.add { MetadataText(text = y) } }
+
+                        // 3. 장르 (통합 표시)
+                        if (currentSeries.genreNames.isNotEmpty()) {
+                            metadataItems.add { MetadataText(text = currentSeries.genreNames.take(3).joinToString(" · ")) }
+                        }
                         
-                        // 3. 시즌 정보
+                        // 4. 시즌 정보
                         if (currentSeries.category != "movies" && state.seasons.isNotEmpty()) {
                             metadataItems.add { MetadataText(text = "시즌 ${state.seasons.size}개") }
                         }
                         
-                        // 4. 화질
+                        // 5. 화질
                         metadataItems.add { InfoBadge(text = "HD", isOutlined = true) }
 
-                        // 5. 연령 등급 뱃지 (가장 우측)
+                        // 6. 연령 등급 뱃지 (가장 우측)
                         currentSeries.rating?.let { r -> metadataItems.add { DetailRatingBadge(r) } }
 
                         // 구분점(·)과 함께 렌더링
@@ -168,19 +173,6 @@ fun SeriesDetailScreen(
                     }
                 }
                 
-                // 장르 목록 (점 구분자 포함)
-                if (!state.isLoading && currentSeries.genreNames.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        currentSeries.genreNames.take(3).forEachIndexed { index, genre ->
-                            Text(text = genre, color = Color.White.copy(alpha = 0.9f), fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                            if (index < currentSeries.genreNames.take(3).size - 1) {
-                                Text(text = " • ", color = Color.White.copy(alpha = 0.4f), fontSize = 13.sp, modifier = Modifier.padding(horizontal = 4.dp))
-                            }
-                        }
-                    }
-                }
-
                 Spacer(modifier = Modifier.height(20.dp))
                 Text(text = currentSeries.overview ?: "정보가 없습니다.", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp, lineHeight = 20.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth(0.9f))
                 Spacer(modifier = Modifier.height(14.dp))
@@ -225,10 +217,20 @@ fun SeriesDetailScreen(
         }
 
         if (state.showEpisodeOverlay && state.seasons.isNotEmpty()) {
-            EpisodeOverlay(seriesTitle = currentSeries.title, state = state, seriesOverview = currentSeries.overview, seriesPosterPath = currentSeries.posterPath, focusRequester = overlayFocusRequester, onSeasonChange = { state = state.copy(selectedSeasonIndex = it) }, onEpisodeClick = { ep ->
-                val currentEpisodes = state.seasons.getOrNull(state.selectedSeasonIndex)?.episodes ?: emptyList()
-                onPlay(ep, currentEpisodes, 0L)
-            }, onClose = { state = state.copy(showEpisodeOverlay = false) })
+            EpisodeOverlay(
+                seriesTitle = currentSeries.title, 
+                seriesYear = currentSeries.year,
+                state = state, 
+                seriesOverview = currentSeries.overview, 
+                seriesPosterPath = currentSeries.posterPath, 
+                focusRequester = overlayFocusRequester, 
+                onSeasonChange = { state = state.copy(selectedSeasonIndex = it) }, 
+                onEpisodeClick = { ep ->
+                    val currentEpisodes = state.seasons.getOrNull(state.selectedSeasonIndex)?.episodes ?: emptyList()
+                    onPlay(ep, currentEpisodes, 0L)
+                }, 
+                onClose = { state = state.copy(showEpisodeOverlay = false) }
+            )
         }
     }
 }
@@ -321,7 +323,17 @@ private data class SeriesDetailState(val seasons: List<Season> = emptyList(), va
 private data class ResumeInfo(val episode: Movie, val position: Long, val isNew: Boolean = false, val isNext: Boolean = false, val isFinished: Boolean = false)
 
 @Composable
-private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, seriesOverview: String?, seriesPosterPath: String?, focusRequester: FocusRequester, onSeasonChange: (Int) -> Unit, onEpisodeClick: (Movie) -> Unit, onClose: () -> Unit) {
+private fun EpisodeOverlay(
+    seriesTitle: String, 
+    seriesYear: String?,
+    state: SeriesDetailState, 
+    seriesOverview: String?, 
+    seriesPosterPath: String?, 
+    focusRequester: FocusRequester, 
+    onSeasonChange: (Int) -> Unit, 
+    onEpisodeClick: (Movie) -> Unit, 
+    onClose: () -> Unit
+) {
     val episodeListState = rememberLazyListState()
     
     LaunchedEffect(state.selectedSeasonIndex) {
@@ -332,14 +344,58 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, series
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             Row(modifier = Modifier.fillMaxSize().padding(48.dp)) {
                 Column(modifier = Modifier.weight(0.35f)) {
-                    Text(text = seriesTitle, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                    Text(text = seriesTitle, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp)
+                    
+                    // 제목 밑에 년도 및 시즌 수 표시
+                    Row(modifier = Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        seriesYear?.let { 
+                            Text(text = it, color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            Text(text = " · ", color = Color.White.copy(alpha = 0.3f), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                        }
+                        if (state.seasons.isNotEmpty()) {
+                            Text(text = "시즌 ${state.seasons.size}개", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(24.dp))
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.weight(1f)) {
                         items(state.seasons.size) { index ->
                             val isSelected = index == state.selectedSeasonIndex
                             var isFocused by remember { mutableStateOf(false) }
-                            Surface(onClick = { onSeasonChange(index) }, color = if (isFocused) Color.White else if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth().height(44.dp).onFocusChanged { isFocused = it.isFocused }.then(if (isSelected) Modifier.focusRequester(focusRequester) else Modifier).focusable()) {
-                                Text(text = state.seasons[index].name, color = if (isFocused) Color.Black else Color.White, modifier = Modifier.padding(10.dp), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            val season = state.seasons[index]
+                            
+                            Surface(
+                                onClick = { onSeasonChange(index) }, 
+                                color = if (isFocused) Color.White else if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent, 
+                                shape = RoundedCornerShape(8.dp), 
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 44.dp)
+                                    .onFocusChanged { isFocused = it.isFocused }
+                                    .then(if (isSelected) Modifier.focusRequester(focusRequester) else Modifier)
+                                    .focusable()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = season.name, 
+                                        color = if (isFocused) Color.Black else Color.White, 
+                                        fontSize = 16.sp, 
+                                        fontWeight = FontWeight.Bold,
+                                        lineHeight = 22.sp,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        text = "에피소드 ${season.episodes.size}편",
+                                        color = if (isFocused) Color.Black.copy(alpha = 0.7f) else Color.White.copy(alpha = 0.5f),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.padding(start = 8.dp)
+                                    )
+                                }
                             }
                         }
                     }
