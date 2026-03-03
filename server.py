@@ -172,8 +172,9 @@ def get_db():
     # 동시성 향상을 위해 WAL 모드 활성화 시도
     try:
         # WAL 모드 설정 시 락이 걸려도 전체 프로세스가 중단되지 않도록 함
-        conn.execute('PRAGMA journal_mode=WAL')
+        # conn.execute('PRAGMA journal_mode=WAL')
         # conn.execute('PRAGMA journal_mode=TRUNCATE')
+        conn.execute('PRAGMA journal_mode=DELETE')
         # busy_timeout을 한번 더 명시적으로 설정 (밀리초 단위, 30000ms = 30초)
         conn.execute('PRAGMA busy_timeout = 30000')
         # [추가] temp_store를 메모리로 변경하여 디스크 I/O 최적화 및 디스크 풀림 현상 완화
@@ -1041,7 +1042,6 @@ def get_chosung(text):
     return text[0].upper()  # 영문/숫자는 대문자 첫글자
 
 def get_sections_for_category(cat, kw=None):
-
     GENRE_MAP = {
         "Sci-Fi & Fantasy": "SF & 판타지",
         "Action & Adventure": "액션 & 어드벤처",
@@ -1072,7 +1072,46 @@ def get_sections_for_category(cat, kw=None):
 
     if not target_list: return []
 
-    # 2. 카테고리/탭별 감성 테마명 설정
+    sections = []
+
+    # --- [핵심 추가: 방송중 > 외국 탭 전용 폴더별 그룹화 로직] ---
+    if cat == 'air' and kw == '외국':
+        sub_group_map = {}
+        # 폴더명 매핑 테이블 (필요시 더 추가하세요)
+        SUB_NAME_MAP = {
+            "미드": "미국 드라마",
+            "일드": "일본 드라마",
+            "중드": "중국 드라마",
+            "다큐": "다큐멘터리 영상",
+            "기타": "기타 외국 영상",
+            "영드": "영국 드라마"
+        }
+
+        for item in target_list:
+            path_parts = item['path'].split('/')
+            # path 구조: air/외국/미드/작품명/... -> 3번째 파트가 그룹명
+            if len(path_parts) > 2:
+                folder_key = path_parts[2]
+                display_title = SUB_NAME_MAP.get(folder_key, f"{folder_key} 영상")
+                sub_group_map.setdefault(display_title, []).append(item)
+
+        # 그룹화된 데이터를 섹션으로 추가
+        # 중요도 순서대로 정렬 (미드, 일드, 중드 순)
+        sorted_keys = sorted(sub_group_map.keys(), key=lambda x: ("미국" in x, "일본" in x, "중국" in x), reverse=True)
+
+        for title in sub_group_map.keys():
+            sections.append({
+                "title": title,
+                "items": sub_group_map[title]
+            })
+
+        log("PERF", f"✅ {cat}>{kw} 폴더 기반 그룹화 섹션 구성 완료")
+        _SECTION_CACHE[cache_key] = sections
+        return sections
+
+    # --- [외국 탭 전용 로직 끝] ---
+
+    # 2. 카테고리/탭별 감성 테마명 설정 (기존 로직 유지)
     def get_attractive_title(category, keyword, section_type):
         titles = {
             "recommend": {
@@ -1091,8 +1130,6 @@ def get_sections_for_category(cat, kw=None):
             return random.choice(pick_list)
         return random.choice(titles["genre"])
 
-    sections = []
-
     # [테마 1] 감성적인 추천 섹션
     if len(target_list) > 20:
         sections.append({
@@ -1100,13 +1137,11 @@ def get_sections_for_category(cat, kw=None):
             "items": random.sample(target_list, min(40, len(target_list)))
         })
 
-    # [테마 2] 장르별 베스트 (현재 리스트 기준)
+    # [테마 2] 장르별 베스트
     current_genre_map = {}
     for item in target_list:
         for g_raw in item.get('genreNames', []):
-            # 영어 이름을 한글로 변환 (맵에 없으면 그대로 사용)
             g_name = GENRE_MAP.get(g_raw, g_raw)
-
             if g_name not in ["애니메이션", "TV 영화"]:
                 current_genre_map.setdefault(g_name, []).append(item)
 
@@ -1122,20 +1157,18 @@ def get_sections_for_category(cat, kw=None):
     # [테마 3] 전체 목록 복원 + 초성 인덱싱
     display_limit = 3000
     full_list = target_list[:display_limit]
-
-    # 각 아이템에 초성 정보 주입
     for item in full_list:
         item['chosung'] = get_chosung(item.get('name', ''))
 
     sections.append({
         "title": "전체목록",
         "items": full_list,
-        "is_full_list": True  # 전체목록임을 알리는 플래그
+        "is_full_list": True
     })
 
-    log("PERF", f"✅ {cat}>{kw} 감성 테마 섹션 구성 완료")
     _SECTION_CACHE[cache_key] = sections
     return sections
+
 
 @app.route('/category_sections')
 def get_category_sections():
@@ -3016,9 +3049,10 @@ def scan_air_foreign_only():
 
     return "성공: '방송중 > 외국' 폴더 스캔 완료 및 메타데이터 매칭 시작"
 
+
 @app.route('/api/match_air_foreign')
 def match_air_foreign_only():
-    """'방송중 > 외국' 폴더 내의 신규 항목만 골라서 TMDB 메타데이터를 매칭합니다."""
+    """'방송중 > 외국' 폴더 내의 신규 항목만 골라서 상세 로그와 함께 TMDB 매칭을 진행합니다."""
     global IS_METADATA_RUNNING
     if IS_METADATA_RUNNING:
         return jsonify({"status": "error", "message": "이미 다른 매칭 작업이 실행 중입니다."}), 409
@@ -3026,13 +3060,17 @@ def match_air_foreign_only():
     def run_targeted_match():
         global IS_METADATA_RUNNING
         IS_METADATA_RUNNING = True
-        emit_ui_log("🚀 '방송중 > 외국' 폴더 전용 핀셋 매칭을 시작합니다.", "info")
+        emit_ui_log("🚀 [핀셋 매칭] '방송중 > 외국' 데이터 분석 및 매칭을 시작합니다.", "info")
 
         try:
             conn = get_db()
-            # 1. 대상 선정: 'air/외국/' 경로에 있고 아직 매칭되지 않은(tmdbId나 한글제목이 없는) 작품들만 추출
+            # 1. 대상 선정: 경로(path) 정보와 샘플 이름을 함께 가져옵니다.
             query = """
-                SELECT cleanedName, yearVal, category, MIN(name) as sample_name, GROUP_CONCAT(name, '|') as orig_names
+                SELECT
+                    cleanedName, yearVal, category,
+                    MIN(name) as sample_name,
+                    MIN(path) as sample_path,
+                    GROUP_CONCAT(name, '|') as orig_names
                 FROM series
                 WHERE category = 'air' AND path LIKE 'air/외국/%'
                 AND (tmdbId IS NULL OR tmdbTitle IS NULL)
@@ -3043,33 +3081,42 @@ def match_air_foreign_only():
             conn.close()
 
             total = len(targets)
-            set_update_state(is_running=True, task_name="외국 폴더 핀셋 매칭", total=total, current=0, success=0, fail=0,
+            set_update_state(is_running=True, task_name="외국 폴더 정밀 매칭", total=total, current=0, success=0, fail=0,
                              clear_logs=True)
 
             if total == 0:
-                emit_ui_log("매칭할 신규 항목이 없습니다.", "warning")
+                emit_ui_log("✨ 모든 항목이 이미 매칭되어 있거나 대상이 없습니다.", "success")
                 IS_METADATA_RUNNING = False
-                set_update_state(is_running=False, current_item="대상 없음")
+                set_update_state(is_running=False, current_item="작업 완료")
                 return
+
+            emit_ui_log(f"📊 총 {total}개의 작품 묶음을 발견했습니다. 매칭을 시작합니다.", "info")
 
             # 2. 매칭 루프 시작
             total_success = 0
             for idx, row in enumerate(targets):
+                c_name = row['cleanedName']
+                s_path = row['sample_path']
                 orig_names = row['orig_names'].split('|')
+
                 with UPDATE_LOCK:
                     UPDATE_STATE["current"] = idx + 1
-                    UPDATE_STATE["current_item"] = row['cleanedName']
+                    UPDATE_STATE["current_item"] = c_name
 
-                # TMDB API 호출 (카테고리는 air 고정)
+                # 상세 로그 출력 (경로 포함)
+                folder_only = "/".join(s_path.split('/')[:-1])  # 파일명 제외한 폴더 경로만 추출
+                emit_ui_log(f"🔍 매칭 시도: {c_name} (위치: {folder_only})", "info")
+
+                # TMDB API 호출
                 info = get_tmdb_info_server(row['sample_name'], category='air')
 
                 u_conn = get_db()
                 cursor = u_conn.cursor()
+
                 if info.get('failed'):
-                    # 매칭 실패 시 실패 처리 (나중에 수동 매칭 가능하도록)
+                    emit_ui_log(f"❌ 매칭 실패: '{c_name}' (TMDB에서 정보를 찾을 수 없음)", "warning")
                     cursor.executemany('UPDATE series SET failed=1 WHERE name=?', [(n,) for n in orig_names])
                 else:
-                    # 매칭 성공 시 시리즈 정보 업데이트
                     up = (
                         info.get('posterPath'), info.get('year'), info.get('overview'),
                         info.get('rating'), info.get('seasonCount'),
@@ -3087,25 +3134,28 @@ def match_air_foreign_only():
                     total_success += 1
                     with UPDATE_LOCK:
                         UPDATE_STATE["success"] += 1
-                    emit_ui_log(f"매칭 성공: {row['cleanedName']} -> {info.get('title')}", "success")
+
+                    # 성공 로그를 더 풍성하게
+                    match_res = f"✅ 매칭 성공: '{c_name}' -> '{info.get('title')}' ({info.get('year')})"
+                    emit_ui_log(match_res, "success")
 
                 u_conn.commit()
                 u_conn.close()
 
-            # 3. 완료 후 메모리 캐시 빌드 (앱 화면에 즉시 반영)
+            # 3. 마무리
             build_all_caches()
-            emit_ui_log(f"핀셋 매칭 완료! 총 {total_success}개 작품의 정보를 가져왔습니다.", "success")
+            emit_ui_log(f"🏁 핀셋 매칭 완료! 총 {total_success}/{total}개 작품 정보가 업데이트되었습니다.", "success")
 
         except Exception as e:
             log("TARGETED_MATCH_ERROR", f"Error: {e}")
-            emit_ui_log(f"치명적 에러 발생: {str(e)}", "error")
+            emit_ui_log(f"❗ 치명적 에러 발생: {str(e)}", "error")
         finally:
             IS_METADATA_RUNNING = False
-            set_update_state(is_running=False, current_item="핀셋 매칭 완료")
+            set_update_state(is_running=False, current_item="핀셋 매칭 종료")
 
-    # 백그라운드 스레드에서 실행하여 브라우저 타임아웃 방지
     threading.Thread(target=run_targeted_match, daemon=True).start()
-    return
+    return jsonify({"status": "success", "message": "상세 로그 모드로 매칭을 시작합니다."})
+
 @app.route('/api/updater/status')
 def get_updater_status():
     with UPDATE_LOCK:
