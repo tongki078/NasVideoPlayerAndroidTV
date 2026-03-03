@@ -1,27 +1,21 @@
 package org.nas.videoplayerandroidtv
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil3.ImageLoader
 import coil3.compose.setSingletonImageLoaderFactory
 import coil3.disk.DiskCache
@@ -101,7 +95,7 @@ fun App(driver: SqlDriver) {
     val selectedSubMode = subModeStates.getOrDefault(currentScreen, 0)
 
     val subModes = when(currentScreen) {
-        Screen.MOVIES -> listOf("최신", "UHD", "제목") // 순서 변경: 최신 -> UHD -> 제목
+        Screen.MOVIES -> listOf("최신", "UHD", "제목") 
         Screen.KOREAN_TV -> listOf("드라마", "시트콤", "예능", "교양", "다큐멘터리")
         Screen.FOREIGN_TV -> listOf("미국 드라마", "일본 드라마", "중국 드라마", "기타국가 드라마", "다큐")
         Screen.ANIMATIONS -> listOf("라프텔", "시리즈")
@@ -148,11 +142,9 @@ fun App(driver: SqlDriver) {
             selectedSeries != null -> { selectedSeries = null }
             currentScreen != Screen.HOME -> { 
                 currentScreen = Screen.HOME 
-                // 카테고리에서 홈으로 돌아올 때도 상단바로 포커스 이동 (선택 사항)
                 topBarHomeFocusRequester.requestFocus()
             }
             !isTopBarFocused -> { 
-                // 리스트 탐색 중 뒤로가기 시 상단바(홈 버튼)로 포커스 이동
                 topBarHomeFocusRequester.requestFocus() 
             }
         }
@@ -174,7 +166,7 @@ fun App(driver: SqlDriver) {
                         onFocusChanged = { isTopBarFocused = it },
                         onScreenSelected = { screen ->
                             if (currentScreen != screen) {
-                                lastSelectedSeriesPath = null // 카테고리 변경 시 이전 포커스 정보 초기화
+                                lastSelectedSeriesPath = null 
                             }
                             currentScreen = screen
                             selectedSeries = null 
@@ -197,7 +189,7 @@ fun App(driver: SqlDriver) {
                                     isSelected = selectedSubMode == index, 
                                     onClick = { 
                                         if (selectedSubMode != index) {
-                                            lastSelectedSeriesPath = null // 서브 카테고리 변경 시 초기화
+                                            lastSelectedSeriesPath = null
                                         }
                                         subModeStates[currentScreen] = index
                                         selectedSeries = null 
@@ -217,6 +209,7 @@ fun App(driver: SqlDriver) {
                                 movie = selectedMovie!!, 
                                 playlist = moviePlaylist, 
                                 initialPosition = lastPlaybackPosition, 
+                                repository = repository,
                                 onPositionUpdate = { pos: Long, dur: Long -> 
                                     lastPlaybackPosition = pos; 
                                     saveWatchHistory(selectedMovie!!, selectedSeries?.posterPath, pos, dur, selectedSeries?.title, selectedSeries?.fullPath)

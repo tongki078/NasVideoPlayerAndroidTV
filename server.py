@@ -172,9 +172,9 @@ def get_db():
     # 동시성 향상을 위해 WAL 모드 활성화 시도
     try:
         # WAL 모드 설정 시 락이 걸려도 전체 프로세스가 중단되지 않도록 함
-        # conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA journal_mode=WAL')
         # conn.execute('PRAGMA journal_mode=TRUNCATE')
-        conn.execute('PRAGMA journal_mode=DELETE')
+        # conn.execute('PRAGMA journal_mode=DELETE')
         # busy_timeout을 한번 더 명시적으로 설정 (밀리초 단위, 30000ms = 30초)
         conn.execute('PRAGMA busy_timeout = 30000')
         # [추가] temp_store를 메모리로 변경하여 디스크 I/O 최적화 및 디스크 풀림 현상 완화
@@ -211,6 +211,16 @@ def init_db():
 
         # 🔴 [추가] 사용자님이 요청하신 인덱스 명시적 생성
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series_path ON episodes(series_path)')
+        # 🔴 [추가] 시청한 기록 진행률표시
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS playback_progress (
+                episode_id TEXT PRIMARY KEY,
+                position REAL DEFAULT 0,
+                duration REAL DEFAULT 0,
+                last_watched TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE CASCADE
+            )
+        ''')
 
         def add_col_if_missing(table, col, type):
             cursor.execute(f"PRAGMA table_info({table})")
@@ -1270,7 +1280,13 @@ def get_series_detail_api():
         if cat == 'movies':
             # 🎥 영화 모드: 복잡한 폴더 탐색 없이 이 파일(db_path)에 매핑된 에피소드만 1:1로 가져옴
             print(f"[DETAIL_DIAG] 2. 영화 모드: 단일 파일 매칭 시도", flush=True)
-            query = "SELECT * FROM episodes WHERE series_path = ? OR series_path = ?"
+            # query = "SELECT * FROM episodes WHERE series_path = ? OR series_path = ?"
+            query = """
+                SELECT e.*, p.position, p.duration
+                FROM episodes e
+                LEFT JOIN playback_progress p ON e.id = p.episode_id
+                WHERE e.series_path = ? OR e.series_path = ?
+            """
             rows = conn.execute(query, (db_path, nfd(db_path))).fetchall()
 
             # 🚨 [긴급 패치] 만약 episodes 테이블에서 데이터가 유실되었다면, 즉석에서 가짜 에피소드를 생성해준다.
@@ -1305,7 +1321,13 @@ def get_series_detail_api():
                 parent_dir = ""
 
             print(f"[DETAIL_DIAG] 2. 시리즈 모드 루트: {parent_dir}", flush=True)
-            query = "SELECT * FROM episodes WHERE series_path LIKE ? AND series_path IN (SELECT path FROM series WHERE cleanedName = ?)"
+            # query = "SELECT * FROM episodes WHERE series_path LIKE ? AND series_path IN (SELECT path FROM series WHERE cleanedName = ?)"
+            query = """
+                SELECT e.*, p.position, p.duration
+                FROM episodes e
+                LEFT JOIN playback_progress p ON e.id = p.episode_id
+                WHERE e.series_path LIKE ? AND e.series_path IN (SELECT path FROM series WHERE cleanedName = ?)
+            """
             rows = conn.execute(query, (f"{parent_dir}%", c_name)).fetchall()
 
         print(f"[DETAIL_DIAG] 3. 에피소드 발견: {len(rows)}개", flush=True)
@@ -1338,6 +1360,7 @@ def get_series_detail_api():
                 season_display_name = "영화"
                 sn, en = 1, 1
 
+            # rows를 순회하며 데이터를 담는 부분에 추가
             all_refined_eps.append({
                 "id": str(d.get('id')),
                 "title": d.get('title'),
@@ -1348,7 +1371,11 @@ def get_series_detail_api():
                 "season_number": sn,
                 "episode_number": en,
                 "display_season": season_display_name,
-                "sort_weight": sort_weight
+                "sort_weight": sort_weight,
+                # --- 아래 두 필드 추가 ---
+                # 🔴 None(NULL)일 경우 확실하게 0을 반환하도록 수정
+                "position": d['position'] if d['position'] is not None else 0,
+                "duration": d['duration'] if d['duration'] is not None else 0
             })
 
         # 3. 정렬 및 시즌 맵 생성
@@ -3752,6 +3779,34 @@ def fix_xfile_seasons():
     except Exception as e:
         import traceback
         return f"에러 발생: {str(e)}<br><pre>{traceback.format_exc()}</pre>"
+
+
+@app.route('/api/update_progress', methods=['POST'])
+def update_progress():
+    data = request.json
+    episode_id = data.get('episode_id')
+    position = data.get('position')  # 현재 재생 위치(초)
+    duration = data.get('duration')  # 영상 전체 길이(초)
+
+    if not episode_id:
+        return jsonify({"status": "error", "message": "Missing episode_id"}), 400
+
+    try:
+        conn = get_db()
+        conn.execute('''
+            INSERT OR REPLACE INTO playback_progress (episode_id, position, duration, last_watched)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ''', (episode_id, position, duration))
+        conn.commit()
+        conn.close()
+
+        # 🔴 [추가] 시청 기록이 업데이트되면 상세 페이지 캐시를 비워야 앱에 즉시 반영됩니다.
+        global _DETAIL_MEM_CACHE
+        _DETAIL_MEM_CACHE = {}
+
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/manual_match_simple')
 def manual_match_simple():

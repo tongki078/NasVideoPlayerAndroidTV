@@ -47,8 +47,10 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
+import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractEpisode
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractSeason
@@ -83,10 +85,12 @@ fun VideoPlayerScreen(
     movie: Movie,
     playlist: List<Movie> = emptyList(),
     initialPosition: Long = 0L,
+    repository: VideoRepository,
     onPositionUpdate: (Long, Long) -> Unit = { _, _ -> },
     onBack: () -> Unit
 ) {
     var currentMovie by remember(movie) { mutableStateOf(movie) }
+    val scope = rememberCoroutineScope()
     
     var isSeeking by remember(currentMovie.id) { mutableStateOf(false) }
     var userPaused by remember { mutableStateOf(false) }
@@ -95,8 +99,10 @@ fun VideoPlayerScreen(
     var currentPosition by remember(currentMovie.id) { mutableLongStateOf(0L) }
     var totalDuration by remember(currentMovie.id) { mutableLongStateOf(0L) }
     
+    // 서버에서 받은 position이 있다면 그것을 우선 사용, 없으면 인자로 받은 initialPosition 사용
     val startPosition = remember(currentMovie.id) { 
-        if (currentMovie.id == movie.id) initialPosition else 0L 
+        val serverPos = ((currentMovie.position ?: 0.0) * 1000).toLong()
+        if (serverPos > 0) serverPos else if (currentMovie.id == movie.id) initialPosition else 0L 
     }
     
     var isControllerVisible by remember { mutableStateOf(true) }
@@ -137,9 +143,22 @@ fun VideoPlayerScreen(
         mainBoxFocusRequester.requestFocus()
     }
 
-    LaunchedEffect(currentPosition, totalDuration) {
-        if (currentPosition > 0 && totalDuration > 0) {
+    // 진행률 업데이트 (서버 및 로컬)
+    LaunchedEffect(currentPosition, totalDuration, currentMovie.id) {
+        if (currentPosition > 0 && totalDuration > 0 && !isSeeking) {
+            // 로컬 DB 및 앱 상태 업데이트
             onPositionUpdate(currentPosition, totalDuration)
+
+            // 서버 보고 (10초 단위)
+            if (currentPosition % 10000 < 1000 || currentPosition > totalDuration - 5000) {
+                scope.launch {
+                    repository.updateProgress(
+                        currentMovie.id ?: "",
+                        currentPosition / 1000.0,
+                        totalDuration / 1000.0
+                    )
+                }
+            }
         }
     }
 

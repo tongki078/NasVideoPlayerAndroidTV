@@ -50,4 +50,7 @@ interface VideoRepository {
 
     // 자막 관련
     suspend fun getSubtitleInfo(videoUrl: String): SubtitleInfo
+
+    // 시청 진행률 업데이트
+    suspend fun updateProgress(episodeId: String, position: Double, duration: Double): Boolean
 }

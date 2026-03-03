@@ -1,14 +1,11 @@
 package org.nas.videoplayerandroidtv.ui.common
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -38,13 +35,16 @@ fun MovieCard(series: Series, onClick: () -> Unit) {
             .distinct()
             .toList()
             
-        // 진단 로그 (문제 해결 확인용)
-        if (series.title.contains("코난")) {
-            println("검색 태그 체크 - 원본 제목: ${series.title}")
-            println("검색 태그 체크 - 결과: $list")
-        }
-
         list
+    }
+
+    // 시청 진행률 (전체 에피소드 중 가장 마지막으로 시청한 것의 평균 혹은 대표값)
+    // 여기서는 간단하게 첫 번째 에피소드의 진행률이 있다면 표시 (보통 단일 영화용)
+    val mainEpisode = series.episodes.firstOrNull()
+    val progress = remember(mainEpisode) {
+        if (mainEpisode != null && (mainEpisode.duration ?: 0.0) > 0) {
+            (mainEpisode.position ?: 0.0) / (mainEpisode.duration ?: 1.0)
+        } else 0.0
     }
     
     Box(
@@ -66,6 +66,24 @@ fun MovieCard(series: Series, onClick: () -> Unit) {
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop
         )
+
+        // 시청 진행률 게이지 (하단)
+        if (progress > 0.01) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .align(Alignment.BottomCenter)
+                    .background(Color.Black.copy(alpha = 0.5f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(progress.toFloat().coerceIn(0f, 1f))
+                        .fillMaxHeight()
+                        .background(Color.Red)
+                )
+            }
+        }
 
         // 뱃지 추가
         if (tags.isNotEmpty()) {

@@ -33,6 +33,13 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
         movie.thumbnailUrl ?: seriesPosterPath ?: ""
     }
 
+    // 시청 진행률 계산
+    val progress = remember(movie.position, movie.duration) {
+        if ((movie.duration ?: 0.0) > 0) {
+            (movie.position ?: 0.0) / (movie.duration ?: 1.0)
+        } else 0.0
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -71,6 +78,24 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
                     modifier = Modifier.fillMaxSize().background(shimmerBrush(showShimmer = isImageLoading)),
                     contentScale = ContentScale.Crop
                 )
+            }
+
+            // 시청 진행률 게이지 (하단)
+            if (progress > 0.01) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .align(Alignment.BottomCenter)
+                        .background(Color.Black.copy(alpha = 0.5f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress.toFloat().coerceIn(0f, 1f))
+                            .fillMaxHeight()
+                            .background(Color.Red)
+                    )
+                }
             }
         }
 

@@ -12,6 +12,7 @@ import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 import org.nas.videoplayerandroidtv.util.TitleUtils.isGenericTitle
 import org.nas.videoplayerandroidtv.toNfc
 import kotlinx.coroutines.*
+import kotlinx.serialization.json.*
 
 class VideoRepositoryImpl : VideoRepository {
     private val client = NasApiClient.client
@@ -174,5 +175,19 @@ class VideoRepositoryImpl : VideoRepository {
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         SubtitleInfo()
+    }
+
+    override suspend fun updateProgress(episodeId: String, position: Double, duration: Double): Boolean = try {
+        client.post("$baseUrl/api/update_progress") {
+            contentType(ContentType.Application.Json)
+            setBody(buildJsonObject {
+                put("episode_id", episodeId)
+                put("position", position)
+                put("duration", duration)
+            })
+        }.status == HttpStatusCode.OK
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        false
     }
 }

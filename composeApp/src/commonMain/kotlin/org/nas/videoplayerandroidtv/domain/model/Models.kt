@@ -32,7 +32,9 @@ data class Movie(
     val season_number: Int? = null,
     val episode_number: Int? = null,
     val introStart: Long? = null,
-    val introEnd: Long? = null
+    val introEnd: Long? = null,
+    val position: Double? = 0.0, // [추가] 재생 위치(초)
+    val duration: Double? = 0.0  // [추가] 전체 길이(초)
 )
 
 @Serializable
