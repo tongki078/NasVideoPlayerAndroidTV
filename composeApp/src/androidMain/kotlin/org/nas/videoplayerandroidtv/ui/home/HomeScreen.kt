@@ -119,10 +119,13 @@ fun HomeScreen(
         ) {
             item(key = "hero_section") {
                 Box(modifier = Modifier.onFocusChanged { 
-                    if (it.hasFocus) {
+                    if (it.isFocused) { 
                         coroutineScope.launch {
-                            // 히어로 섹션으로 포커스가 이동하면 부드럽게 최상단으로 스크롤
-                            lazyListState.animateScrollToItem(0)
+                            // 지연을 주어 시스템 포커스 스크롤과 충돌 방지 및 부드러운 위치 확보
+                            delay(50)
+                            if (lazyListState.firstVisibleItemIndex != 0 || lazyListState.firstVisibleItemScrollOffset != 0) {
+                                lazyListState.animateScrollToItem(0)
+                            }
                         }
                     }
                 }) {

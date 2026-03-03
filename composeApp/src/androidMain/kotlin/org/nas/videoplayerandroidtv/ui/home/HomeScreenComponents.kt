@@ -11,8 +11,6 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -57,22 +55,12 @@ fun HeroSection(
     isFirstLoad: Boolean = false
 ) {
     val title = series.title
-    val bringIntoViewRequester = remember { BringIntoViewRequester() }
-    val coroutineScope = rememberCoroutineScope()
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(440.dp)
-            .bringIntoViewRequester(bringIntoViewRequester)
             .padding(horizontal = horizontalPadding * 2, vertical = 12.dp)
-            .onFocusChanged {
-                if (it.hasFocus) {
-                    coroutineScope.launch {
-                        bringIntoViewRequester.bringIntoView()
-                    }
-                }
-            }
             .clip(RoundedCornerShape(12.dp))
             .border(
                 BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
