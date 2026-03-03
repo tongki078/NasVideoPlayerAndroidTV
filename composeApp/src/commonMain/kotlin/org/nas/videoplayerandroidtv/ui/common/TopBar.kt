@@ -2,6 +2,8 @@ package org.nas.videoplayerandroidtv.ui.common
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -21,6 +23,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -30,8 +33,8 @@ import org.nas.videoplayerandroidtv.Screen
 @Composable
 fun NetflixTopBar(
     currentScreen: Screen,
-    homeFocusRequester: FocusRequester? = null, // [추가] 홈 버튼 포커스 제어용
-    onFocusChanged: (Boolean) -> Unit = {},     // [추가] 상단바 포커스 여부 전달용
+    homeFocusRequester: FocusRequester? = null,
+    onFocusChanged: (Boolean) -> Unit = {},
     onScreenSelected: (Screen) -> Unit
 ) {
     Row(
@@ -39,12 +42,11 @@ fun NetflixTopBar(
             .fillMaxWidth()
             .statusBarsPadding()
             .height(64.dp)
-            .onFocusChanged { onFocusChanged(it.hasFocus) } // 상단바 전체 포커스 감지
+            .onFocusChanged { onFocusChanged(it.hasFocus) }
             .padding(horizontal = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // 좌측: 로고 및 홈/검색 아이콘
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(
                 text = "N",
@@ -65,7 +67,6 @@ fun NetflixTopBar(
             TopBarItem(label = "검색", icon = Icons.Default.Search, screen = Screen.SEARCH, currentScreen = currentScreen, onClick = onScreenSelected)
         }
         
-        // 우측: 카테고리 텍스트 메뉴
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val menuItems = listOf(
                 "방송중" to Screen.ON_AIR,
@@ -138,7 +139,7 @@ private fun TopBarItem(
 }
 
 /**
- * App.kt에서 사용되는 서브 카테고리 칩 컴포넌트
+ * 서브 카테고리 칩 컴포넌트 - 컴팩트한 벤토 박스 스타일
  */
 @Composable
 fun SophisticatedTabChip(
@@ -148,40 +149,45 @@ fun SophisticatedTabChip(
 ) {
     var isFocused by remember { mutableStateOf(false) }
     
+    // 애니메이션 설정 - 더욱 컴팩트하게 조정
+    val scale by animateFloatAsState(if (isFocused) 1.08f else 1.0f, label = "TabScale")
     val backgroundColor by animateColorAsState(
-        when {
-            isFocused -> Color.White
-            isSelected -> Color.Red
-            else -> Color.White.copy(alpha = 0.1f)
-        }
+        if (isFocused) Color.White else Color.White.copy(alpha = 0.05f),
+        label = "TabBgColor"
     )
-    
     val contentColor by animateColorAsState(
-        if (isFocused) Color.Black else Color.White
+        if (isFocused) Color.Black else if (isSelected) Color.Red else Color.White.copy(alpha = 0.7f),
+        label = "TabContentColor"
     )
-    
-    val elevation by animateDpAsState(if (isFocused) 8.dp else 0.dp)
+    val elevation by animateDpAsState(if (isFocused) 10.dp else 0.dp, label = "TabElevation")
 
     Surface(
         onClick = onClick,
         modifier = Modifier
-            .height(36.dp)
+            .height(34.dp) // 높이를 줄임
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .onFocusChanged { isFocused = it.isFocused }
             .focusable(),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(6.dp), // 조금 더 각진 세련된 느낌
         color = backgroundColor,
-        tonalElevation = elevation,
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (isFocused) Color.White else if (isSelected) Color.Red.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.08f)
+        ),
         shadowElevation = elevation
     ) {
         Box(
-            modifier = Modifier.padding(horizontal = 20.dp),
+            modifier = Modifier.padding(horizontal = 14.dp), // 여백을 줄임
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = title,
                 color = contentColor,
-                fontSize = 14.sp,
-                fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
+                fontSize = 13.sp, // 폰트 크기를 살짝 줄임
+                fontWeight = if (isSelected || isFocused) FontWeight.ExtraBold else FontWeight.Medium
             )
         }
     }

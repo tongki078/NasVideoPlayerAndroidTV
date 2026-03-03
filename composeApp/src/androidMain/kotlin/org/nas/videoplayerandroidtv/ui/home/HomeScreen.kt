@@ -4,29 +4,24 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.material3.*
+import androidx.compose.foundation.lazy.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.SnapshotStateMap
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.nas.videoplayerandroidtv.Screen
 import org.nas.videoplayerandroidtv.data.WatchHistory
-import org.nas.videoplayerandroidtv.data.repository.VideoRepositoryImpl
 import org.nas.videoplayerandroidtv.domain.model.Category
 import org.nas.videoplayerandroidtv.domain.model.HomeSection
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
+import org.nas.videoplayerandroidtv.data.repository.VideoRepositoryImpl
 import org.nas.videoplayerandroidtv.util.TitleUtils.isGenericTitle
-import org.nas.videoplayerandroidtv.Screen
-import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(
@@ -123,49 +118,58 @@ fun HomeScreen(
             contentPadding = PaddingValues(bottom = 60.dp)
         ) {
             item(key = "hero_section") {
-                if (heroItem != null) {
-                    AnimatedContent(
-                        targetState = heroItem,
-                        transitionSpec = {
-                            fadeIn(animationSpec = tween(1000)) togetherWith fadeOut(animationSpec = tween(1000))
-                        },
-                        label = "HeroTransition"
-                    ) { targetItem: Category ->
-                        val heroSeries = targetItem.toSeries()
-                        val heroHistory = watchHistory.find { 
-                            it.seriesPath == targetItem.path || it.title == targetItem.name 
+                Box(modifier = Modifier.onFocusChanged { 
+                    if (it.hasFocus) {
+                        coroutineScope.launch {
+                            // 히어로 섹션으로 포커스가 이동하면 부드럽게 최상단으로 스크롤
+                            lazyListState.animateScrollToItem(0)
                         }
-
-                        HeroSection(
-                            series = heroSeries,
-                            watchHistory = heroHistory,
-                            onPlayClick = { 
-                                coroutineScope.launch {
-                                    if (heroHistory != null && heroHistory.lastPosition > 0) {
-                                        val seriesForDetail = Series(
-                                            title = heroHistory.seriesTitle ?: heroHistory.title,
-                                            episodes = emptyList(),
-                                            fullPath = heroHistory.seriesPath,
-                                            posterPath = heroHistory.posterPath
-                                        )
-                                        onSeriesClick(seriesForDetail)
-                                    } else {
-                                        val seriesDetail = if (heroSeries.episodes.isEmpty()) {
-                                            heroSeries.fullPath?.let { repository.getSeriesDetail(it) }
-                                        } else heroSeries
-
-                                        val firstEpisode = seriesDetail?.episodes?.firstOrNull()
-                                        if (firstEpisode != null) onPlayClick(firstEpisode)
-                                    }
-                                }
-                            },
-                            onDetailClick = { onSeriesClick(heroSeries) },
-                            horizontalPadding = standardMargin,
-                            isFirstLoad = false
-                        )
                     }
-                } else if (isLoading) {
-                    SkeletonHero()
+                }) {
+                    if (heroItem != null) {
+                        AnimatedContent(
+                            targetState = heroItem,
+                            transitionSpec = {
+                                fadeIn(animationSpec = tween(1000)) togetherWith fadeOut(animationSpec = tween(1000))
+                            },
+                            label = "HeroTransition"
+                        ) { targetItem: Category ->
+                            val heroSeries = targetItem.toSeries()
+                            val heroHistory = watchHistory.find { 
+                                it.seriesPath == targetItem.path || it.title == targetItem.name 
+                            }
+
+                            HeroSection(
+                                series = heroSeries,
+                                watchHistory = heroHistory,
+                                onPlayClick = { 
+                                    coroutineScope.launch {
+                                        if (heroHistory != null && heroHistory.lastPosition > 0) {
+                                            val seriesForDetail = Series(
+                                                title = heroHistory.seriesTitle ?: heroHistory.title,
+                                                episodes = emptyList(),
+                                                fullPath = heroHistory.seriesPath,
+                                                posterPath = heroHistory.posterPath
+                                            )
+                                            onSeriesClick(seriesForDetail)
+                                        } else {
+                                            val seriesDetail = if (heroSeries.episodes.isEmpty()) {
+                                                heroSeries.fullPath?.let { repository.getSeriesDetail(it) }
+                                            } else heroSeries
+
+                                            val firstEpisode = seriesDetail?.episodes?.firstOrNull()
+                                            if (firstEpisode != null) onPlayClick(firstEpisode)
+                                        }
+                                    }
+                                },
+                                onDetailClick = { onSeriesClick(heroSeries) },
+                                horizontalPadding = standardMargin,
+                                isFirstLoad = false
+                            )
+                        }
+                    } else if (isLoading) {
+                        SkeletonHero()
+                    }
                 }
             }
 
@@ -275,12 +279,5 @@ private fun Category.toSeries() = Series(
     fullPath = this.path,
     posterPath = this.posterPath,
     genreIds = this.genreIds ?: emptyList(),
-    genreNames = this.genreNames ?: emptyList(),
-    director = this.director,
-    actors = this.actors ?: emptyList(),
-    overview = this.overview,
-    year = this.year,
-    rating = this.rating,      // 보완
-    seasonCount = this.seasonCount, // [추가] 시즌 정보 매핑
-    tmdbTitle = this.tmdbTitle
+    genreNames = this.genreNames ?: emptyList()
 )
