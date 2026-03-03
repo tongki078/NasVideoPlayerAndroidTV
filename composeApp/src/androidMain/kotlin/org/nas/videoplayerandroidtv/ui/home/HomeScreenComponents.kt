@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
@@ -29,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,58 +48,89 @@ fun HeroSection(
     onPlayClick: () -> Unit,
     onDetailClick: () -> Unit,
     horizontalPadding: androidx.compose.ui.unit.Dp,
-    isFirstLoad: Boolean = false // 🔴 파라미터 추가
+    isFirstLoad: Boolean = false
 ) {
     val title = series.title
-    Box(modifier = Modifier.fillMaxWidth().height(460.dp).background(Color.Black)) {
+    Box(modifier = Modifier.fillMaxWidth().height(480.dp).background(Color.Black)) {
         TmdbAsyncImage(title = title, posterPath = series.posterPath, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, isLarge = true)
         
         Box(modifier = Modifier.fillMaxSize().background(
             Brush.verticalGradient(
                 0f to Color.Transparent,
-                0.4f to Color.Black.copy(alpha = 0.2f),
-                0.7f to Color.Black.copy(alpha = 0.8f),
+                0.3f to Color.Black.copy(alpha = 0.1f),
+                0.6f to Color.Black.copy(alpha = 0.7f),
                 1f to Color.Black
             )
         ))
         
-        Column(modifier = Modifier.align(Alignment.BottomStart).padding(start = horizontalPadding, bottom = 60.dp).fillMaxWidth(0.8f)) {
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = horizontalPadding, bottom = 64.dp)
+                .fillMaxWidth(0.85f)
+        ) {
             Text(
                 text = title.cleanTitle(), 
                 color = Color.White, 
-                style = MaterialTheme.typography.headlineMedium.copy(
-                    fontWeight = FontWeight.ExtraBold, 
-                    shadow = Shadow(color = Color.Black.copy(alpha = 0.6f), blurRadius = 16f),
-                    letterSpacing = (-0.5).sp
+                style = TextStyle(
+                    fontSize = 42.sp,
+                    fontWeight = FontWeight.Black, 
+                    shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), offset = androidx.compose.ui.geometry.Offset(0f, 4f), blurRadius = 16f),
+                    letterSpacing = (-1.5).sp
                 )
             )
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(16.dp))
 
+            // 넷플릭스 스타일 메타데이터 로우 (시리즈 · 장르 · 연도 · 시즌 · 등급)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                series.year?.let { HeroBadge(text = it, isOutlined = true) }
-                series.rating?.let { HeroBadge(text = it, color = Color(0xFFE50914)) }
-                series.genreNames.take(2).forEach { HeroBadge(text = it, color = Color.White.copy(alpha = 0.15f)) }
+                val metadataComponents = mutableListOf<@Composable () -> Unit>()
+
+                // 1. 시리즈 / 영화 구분
+                metadataComponents.add { MetadataText(text = if (series.category == "movies") "영화" else "시리즈") }
+
+                // 2. 장르
+                val genre = series.genreNames.firstOrNull() ?: ""
+                if (genre.isNotEmpty()) {
+                    metadataComponents.add { MetadataText(text = "$genre 장르") }
+                }
+
+                // 3. 연도
+                series.year?.let { y ->
+                    metadataComponents.add { MetadataText(text = y) }
+                }
+                
+                // 4. 시즌 정보 (시즌 개수가 1개 이상일 때만 표시하여 중복 방지)
+                if (series.category != "movies" && series.seasonCount != null && series.seasonCount > 0) {
+                    metadataComponents.add { MetadataText(text = "시즌 ${series.seasonCount}개") }
+                }
+                
+                // 5. 연령 등급 뱃지
+                if (!series.rating.isNullOrBlank()) {
+                    metadataComponents.add { RatingBadge(series.rating) }
+                }
+
+                // 6. HD 뱃지
+                metadataComponents.add { HeroBadge(text = "HD", isOutlined = true) }
+
+                // 메타데이터들을 구분점(·)과 함께 렌더링
+                metadataComponents.forEachIndexed { index, component ->
+                    component()
+                    if (index < metadataComponents.size - 1) {
+                        MetadataSeparator()
+                    }
+                }
             }
             
             if (!series.overview.isNullOrBlank()) {
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(20.dp))
                 Text(
                     text = series.overview,
-                    color = Color.White.copy(alpha = 0.7f),
-                    fontSize = 15.sp,
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 16.sp,
                     maxLines = 2,
-                    lineHeight = 22.sp,
-                )
-            }
-
-            if (series.actors.isNotEmpty()) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    text = "출연: " + series.actors.take(3).joinToString { it.name },
-                    color = Color.White.copy(alpha = 0.4f),
-                    fontSize = 13.sp,
-                    maxLines = 1
+                    lineHeight = 24.sp,
+                    style = TextStyle(shadow = Shadow(color = Color.Black, blurRadius = 8f))
                 )
             }
 
@@ -109,18 +142,18 @@ fun HeroSection(
                     watchHistory.lastPosition.toFloat() / watchHistory.duration
                 } else null
 
-                // 🔴 [수정] 앱 시작 시 재생 버튼이 최초 포커스를 갖도록 설정 (isFirstLoad일 때만)
                 val playButtonFocusRequester = remember { FocusRequester() }
                 LaunchedEffect(isFirstLoad) {
                     if (isFirstLoad) {
-                        delay(300) // UI가 그려진 후 포커스 요청
+                        delay(300) 
                         try { playButtonFocusRequester.requestFocus() } catch (_: Exception) {}
                     }
                 }
 
+                // 알약(Pill) 모양의 버튼
                 HeroButton(
                     modifier = Modifier.focusRequester(playButtonFocusRequester),
-                    text = if (isContinuing) "계속 시청" else "재생",
+                    text = "재생",
                     icon = Icons.Default.PlayArrow,
                     isPrimary = true,
                     progress = progress,
@@ -141,14 +174,62 @@ fun HeroSection(
 }
 
 @Composable
-private fun HeroBadge(text: String, color: Color = Color.White.copy(alpha = 0.15f), isOutlined: Boolean = false) {
+private fun MetadataText(text: String) {
+    Text(
+        text = text,
+        color = Color.White.copy(alpha = 0.9f),
+        fontSize = 15.sp,
+        fontWeight = FontWeight.Bold,
+        style = TextStyle(shadow = Shadow(color = Color.Black, blurRadius = 4f))
+    )
+}
+
+@Composable
+private fun MetadataSeparator() {
+    Text(
+        text = " · ",
+        color = Color.White.copy(alpha = 0.4f),
+        fontSize = 15.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(horizontal = 4.dp)
+    )
+}
+
+@Composable
+private fun RatingBadge(rating: String) {
+    val backgroundColor = when {
+        rating.contains("19") || rating.contains("18") || rating.contains("청불") -> Color(0xFFE50914) // 빨강
+        rating.contains("15") -> Color(0xFFF5A623) // 주황
+        rating.contains("12") -> Color(0xFFF8E71C) // 노랑
+        rating.contains("전체") || rating.contains("All") -> Color(0xFF46D369) // 초록
+        else -> Color.Gray.copy(alpha = 0.5f)
+    }
+    
     Surface(
-        color = if (isOutlined) Color.Transparent else color, 
-        shape = RoundedCornerShape(4.dp), 
-        border = if (isOutlined) BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)) else null, 
-        modifier = Modifier.padding(end = 8.dp)
+        color = backgroundColor,
+        shape = RoundedCornerShape(2.dp),
+        modifier = Modifier.padding(vertical = 1.dp)
     ) {
-        Text(text = text, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+        val displayRating = rating.filter { it.isDigit() }.ifEmpty { if(rating.contains("전체")) "All" else rating.take(2) }
+        Text(
+            text = displayRating,
+            color = if (backgroundColor == Color(0xFFF8E71C)) Color.Black else Color.White,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Black,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+        )
+    }
+}
+
+@Composable
+private fun HeroBadge(text: String, isOutlined: Boolean = false) {
+    Surface(
+        color = Color.Transparent, 
+        shape = RoundedCornerShape(2.dp), 
+        border = if (isOutlined) BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)) else null,
+        modifier = Modifier.padding(vertical = 1.dp)
+    ) {
+        Text(text = text, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
     }
 }
 
@@ -162,12 +243,12 @@ private fun HeroButton(
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1.0f)
+    val scale by animateFloatAsState(if (isFocused) 1.08f else 1.0f)
     
     val backgroundColor by animateColorAsState(when { 
         isFocused -> Color.White 
-        isPrimary -> Color.White.copy(alpha = 0.9f)
-        else -> Color.White.copy(alpha = 0.2f) 
+        isPrimary -> Color.White.copy(alpha = 0.95f)
+        else -> Color.Gray.copy(alpha = 0.4f) 
     })
     val contentColor by animateColorAsState(when { 
         isFocused -> Color.Black 
@@ -177,7 +258,7 @@ private fun HeroButton(
 
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(4.dp), // 심플한 사각형 모서리
+        shape = CircleShape,
         color = backgroundColor,
         modifier = modifier
             .graphicsLayer { 
@@ -185,19 +266,19 @@ private fun HeroButton(
                 scaleY = scale
             }
             .onFocusChanged { isFocused = it.isFocused }
-            .height(36.dp) // 높이 축소
-            .widthIn(min = 120.dp) // 최소 너비 축소
-            .shadow(if (isFocused) 10.dp else 0.dp, RoundedCornerShape(4.dp), spotColor = Color.White.copy(alpha = 0.5f))
+            .height(48.dp)
+            .widthIn(min = 140.dp)
+            .shadow(if (isFocused) 15.dp else 0.dp, CircleShape, spotColor = Color.White)
     ) {
         Box(contentAlignment = Alignment.Center) {
             Row(
-                modifier = Modifier.padding(horizontal = 16.dp).fillMaxHeight(),
+                modifier = Modifier.padding(horizontal = 28.dp).fillMaxHeight(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
-                Icon(icon, null, tint = contentColor, modifier = Modifier.size(18.dp)) // 아이콘 크기 축소
-                Spacer(Modifier.width(8.dp))
-                Text(text = text, color = contentColor, fontWeight = FontWeight.Bold, fontSize = 13.sp) // 폰트 크기 축소
+                Icon(icon, null, tint = contentColor, modifier = Modifier.size(24.dp))
+                Spacer(Modifier.width(12.dp))
+                Text(text = text, color = contentColor, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
             }
             
             if (progress != null && progress > 0f) {
@@ -205,21 +286,20 @@ private fun HeroButton(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .height(3.dp)
-                        .background(if (isFocused) Color.Red else Color.Red.copy(alpha = 0.8f))
+                        .height(4.dp)
+                        .background(Color.Red)
                 )
             }
         }
     }
 }
 
-// 초성 리스트를 항상 고정으로 표시하고, 해당 초성이 없으면 비활성화
 @Composable
 fun SectionTitle(
     title: String, 
     horizontalPadding: androidx.compose.ui.unit.Dp,
     items: List<org.nas.videoplayerandroidtv.domain.model.Category> = emptyList(),
-    isFullList: Boolean = false, // [추가] 전체 목록 여부 플래그
+    isFullList: Boolean = false,
     onIndexClick: (Int) -> Unit = {}
 ) {
     Row(
@@ -237,16 +317,13 @@ fun SectionTitle(
             modifier = Modifier.padding(end = 16.dp)
         )
 
-        // "전체목록"일 경우에만 초성 인덱스 칩 렌더링
         if ((isFullList || title.contains("전체목록") || title.contains("전체 목록")) && items.isNotEmpty()) {
             val standardOrder = listOf(
                 "ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ", "ㅂ", "ㅅ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ", "A-Z"
             )
 
-            // 작품 리스트에서 첫 등장하는 초성의 인덱스를 맵핑
             val itemInitialSounds = remember(items) {
                 items.mapIndexedNotNull { index, item ->
-                    // 서버에서 준 초성이 있으면 그것을 쓰고, 없으면 로컬에서 계산
                     val sound = item.chosung ?: getInitialSound(item.name)
                     if (sound != "#") sound to index else null
                 }.distinctBy { it.first }.toMap()
@@ -269,7 +346,7 @@ fun SectionTitle(
                         modifier = Modifier
                             .scale(scale)
                             .onFocusChanged { isFocused = it.isFocused }
-                            .focusable(hasItems) // 작품이 없으면 포커스 안 가도록 설정
+                            .focusable(hasItems)
                             .clickable(enabled = hasItems) { onIndexClick(targetIndex) }
                     ) {
                         Text(
@@ -277,7 +354,7 @@ fun SectionTitle(
                             color = when {
                                 isFocused -> Color.Black
                                 hasItems -> Color.Gray
-                                else -> Color.DarkGray.copy(alpha = 0.5f) // 비활성화된 느낌
+                                else -> Color.DarkGray.copy(alpha = 0.5f)
                             },
                             fontSize = 15.sp,
                             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Medium,

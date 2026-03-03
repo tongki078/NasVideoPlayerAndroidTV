@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 data class Category(
     val name: String? = "",
     val movies: List<Movie>? = emptyList(),
-    val seasons: Map<String, List<Movie>>? = emptyMap(), // [추가] 시즌별 분류 데이터
+    val seasons: Map<String, List<Movie>>? = emptyMap(),
     val path: String? = null,
     val category: String? = null,
     val genreIds: List<Int>? = emptyList(),
@@ -16,9 +16,10 @@ data class Category(
     val posterPath: String? = null,
     val overview: String? = null,
     val year: String? = null,
-    val rating: String? = null,
+    val rating: String? = null,      // 추가
+    val seasonCount: Int? = null,    // 추가
     val tmdbTitle: String? = null,
-    val chosung: String? = null // [추가] 서버에서 계산된 초성 정보
+    val chosung: String? = null
 )
 
 @Serializable
@@ -33,8 +34,8 @@ data class Movie(
     val episode_number: Int? = null,
     val introStart: Long? = null,
     val introEnd: Long? = null,
-    val position: Double? = 0.0, // [추가] 재생 위치(초)
-    val duration: Double? = 0.0  // [추가] 전체 길이(초)
+    val position: Double? = 0.0,
+    val duration: Double? = 0.0
 )
 
 @Serializable
@@ -48,13 +49,13 @@ data class Cast(
 data class HomeSection(
     val title: String,
     val items: List<Category>,
-    val is_full_list: Boolean = false // [추가] 전체목록 여부 플래그
+    val is_full_list: Boolean = false
 )
 
 data class Series(
     val title: String,
     val episodes: List<Movie>,
-    val seasons: Map<String, List<Movie>> = emptyMap(), // [추가] 시즌별 분류 데이터
+    val seasons: Map<String, List<Movie>> = emptyMap(),
     val thumbnailUrl: String? = null,
     val fullPath: String? = null,
     val category: String? = null,

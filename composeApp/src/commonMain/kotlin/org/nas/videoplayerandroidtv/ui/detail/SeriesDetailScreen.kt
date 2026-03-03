@@ -69,13 +69,11 @@ fun SeriesDetailScreen(
     LaunchedEffect(series.fullPath) {
         state = state.copy(isLoading = true)
         
-        // 1. 초기 데이터 설정 (전달받은 데이터 활용)
         if (series.episodes.isNotEmpty() || series.seasons.isNotEmpty()) {
             val initialSeasons = withContext(Dispatchers.Default) { loadSeasons(series) }
             state = state.copy(seasons = initialSeasons, isLoading = initialSeasons.isEmpty())
         }
 
-        // 2. 서버에서 상세 데이터 로드
         val fullSeries = if (series.fullPath != null) {
             try {
                 repository.getSeriesDetail(series.fullPath) ?: series
@@ -135,16 +133,46 @@ fun SeriesDetailScreen(
                     maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(12.dp))
+                
+                // --- 넷플릭스 스타일 메타데이터 로우 ---
                 Row(modifier = Modifier.height(24.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (state.isLoading) {
                         Box(modifier = Modifier.width(100.dp).fillMaxHeight().clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)))
                     } else {
-                        currentSeries.year?.let { InfoBadge(text = it, isOutlined = true) }
-                        if (state.seasons.isNotEmpty()) InfoBadge(text = "시즌 ${state.seasons.size}개")
-                        currentSeries.rating?.let { InfoBadge(text = it, color = Color(0xFFE50914)) }
-                        currentSeries.genreNames.take(3).forEach { InfoBadge(text = it, color = Color.White.copy(alpha = 0.15f)) }
+                        // 일치율 (임의의 높은 수치 표시)
+                        Text(text = "98% 일치", color = Color(0xFF46D369), fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 12.dp))
+                        
+                        // 연도
+                        currentSeries.year?.let { MetadataText(text = it) }
+                        
+                        // 관람 등급
+                        currentSeries.rating?.let { InfoBadge(text = it) }
+                        
+                        // 시즌 수 또는 영화 태그
+                        if (currentSeries.category == "movies") {
+                            MetadataText(text = "영화")
+                        } else if (state.seasons.isNotEmpty()) {
+                            MetadataText(text = "시즌 ${state.seasons.size}개")
+                        }
+                        
+                        // 화질 태그 (기본 HD 표시)
+                        InfoBadge(text = "HD", isOutlined = true)
                     }
                 }
+                
+                // 장르 목록 (점 구분자 포함)
+                if (!state.isLoading && currentSeries.genreNames.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        currentSeries.genreNames.take(3).forEachIndexed { index, genre ->
+                            Text(text = genre, color = Color.White.copy(alpha = 0.9f), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            if (index < currentSeries.genreNames.take(3).size - 1) {
+                                Text(text = " • ", color = Color.White.copy(alpha = 0.4f), fontSize = 13.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                            }
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(20.dp))
                 Text(text = currentSeries.overview ?: "정보가 없습니다.", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp, lineHeight = 20.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth(0.9f))
                 Spacer(modifier = Modifier.height(14.dp))
@@ -153,7 +181,6 @@ fun SeriesDetailScreen(
                 }
                 Spacer(modifier = Modifier.height(32.dp))
                 
-                // 버튼 영역
                 if (!state.isLoading) {
                     Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         if (resumeInfo != null) {
@@ -171,7 +198,6 @@ fun SeriesDetailScreen(
                             }
                             PremiumTvButton(text = if (!resumeInfo.isNew) "처음부터" else "재생", icon = if (!resumeInfo.isNew) Icons.Default.Refresh else Icons.Default.PlayArrow, isPrimary = resumeInfo.isNew, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first(), allEpisodes, 0L) })
                             
-                            // 🔴 영화가 아닐 때만 '회차 정보' 버튼 표시
                             if (currentSeries.category != "movies" && state.seasons.isNotEmpty()) {
                                 PremiumTvButton(
                                     text = "회차 정보",
@@ -182,7 +208,6 @@ fun SeriesDetailScreen(
                                 )
                             }
                         } else if (allEpisodes.isNotEmpty()) {
-                             // resumeInfo가 계산되지 않았을 때의 Fallback
                              PremiumTvButton(text = "재생", icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first(), allEpisodes, 0L) })
                         }
                     }
@@ -201,23 +226,30 @@ fun SeriesDetailScreen(
 }
 
 @Composable
-private fun InfoBadge(text: String, color: Color = Color.White.copy(alpha = 0.15f), textColor: Color = Color.White, isOutlined: Boolean = false) {
-    Box(
-        modifier = Modifier
-            .padding(end = 10.dp)
-            .clip(RoundedCornerShape(4.dp))
-            .background(if (isOutlined) Color.Transparent else color)
-            .then(if (isOutlined) Modifier.border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(4.dp)) else Modifier)
-            .padding(horizontal = 8.dp, vertical = 2.dp), 
-        contentAlignment = Alignment.Center
+private fun MetadataText(text: String, color: Color = Color.White.copy(alpha = 0.9f)) {
+    Text(
+        text = text,
+        color = color,
+        fontSize = 14.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(end = 12.dp)
+    )
+}
+
+@Composable
+private fun InfoBadge(text: String, isOutlined: Boolean = true) {
+    Surface(
+        color = Color.Transparent,
+        shape = RoundedCornerShape(2.dp),
+        border = if (isOutlined) BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)) else null,
+        modifier = Modifier.padding(end = 10.dp)
     ) {
         Text(
             text = text, 
-            color = textColor, 
-            fontSize = 10.sp, 
-            fontWeight = FontWeight.Bold, 
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(bottom = 1.dp) 
+            color = Color.White.copy(alpha = 0.9f), 
+            fontSize = 11.sp, 
+            fontWeight = FontWeight.ExtraBold, 
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp) 
         )
     }
 }
@@ -286,7 +318,6 @@ private fun EpisodeOverlay(seriesTitle: String, state: SeriesDetailState, series
 }
 
 private fun loadSeasons(series: Series): List<Season> {
-    // 1. 서버에서 이미 분류해서 보내준 시즌 데이터가 있는지 확인 (가장 정확함)
     if (series.seasons.isNotEmpty()) {
         return series.seasons.entries.map { entry ->
             val seasonName = entry.key 
@@ -306,7 +337,6 @@ private fun loadSeasons(series: Series): List<Season> {
         }.sortedBy { it.number }
     }
 
-    // 2. 서버 데이터가 없는 경우 (구 버전 호환성)
     if (series.episodes.isNotEmpty()) {
         val processedMovies = series.episodes.map { movie ->
             val videoUrl = if (movie.videoUrl?.startsWith("http") == false) NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl else movie.videoUrl ?: ""
