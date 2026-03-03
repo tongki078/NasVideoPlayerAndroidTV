@@ -35,7 +35,8 @@ data class Movie(
     val introStart: Long? = null,
     val introEnd: Long? = null,
     val position: Double? = 0.0,
-    val duration: Double? = 0.0
+    val duration: Double? = 0.0,
+    val runtime: Int? = null    // 추가: TMDB에서 제공하는 분 단위 런타임 정보
 )
 
 @Serializable

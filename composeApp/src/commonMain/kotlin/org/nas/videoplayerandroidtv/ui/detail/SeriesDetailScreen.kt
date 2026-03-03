@@ -241,7 +241,9 @@ private fun MetadataText(text: String, color: Color = Color.White.copy(alpha = 0
         text = text,
         color = color,
         fontSize = 15.sp,
-        fontWeight = FontWeight.Bold
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
     )
 }
 

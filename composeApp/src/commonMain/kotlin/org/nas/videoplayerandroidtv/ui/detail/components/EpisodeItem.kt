@@ -27,24 +27,29 @@ import org.nas.videoplayerandroidtv.util.TitleUtils.prettyTitle
 @Composable
 fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String? = null, onPlay: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isFocused) 1.03f else 1f, label = "EpisodeItemScale")
+    val scale by animateFloatAsState(if (isFocused) { 1.03f } else 1f, label = "EpisodeItemScale")
 
     val imageUrl = remember(movie.thumbnailUrl, seriesPosterPath) {
         movie.thumbnailUrl ?: seriesPosterPath ?: ""
     }
 
-    // 시청 진행률 및 재생 시간 계산
+    // 재생 시간 결정 로직 (1순위: 시청기록 duration, 2순위: TMDB runtime)
+    val durationDisplay = remember(movie.duration, movie.runtime) {
+        val dur = movie.duration ?: 0.0
+        if (dur > 0) {
+            "${(dur / 60).toInt().coerceAtLeast(1)}분"
+        } else if (movie.runtime != null && movie.runtime > 0) {
+            "${movie.runtime}분"
+        } else {
+            null
+        }
+    }
+
+    // 시청 진행률 계산 (하단 게이지용)
     val progress = remember(movie.position, movie.duration) {
         if ((movie.duration ?: 0.0) > 0) {
             (movie.position ?: 0.0) / (movie.duration ?: 1.0)
         } else 0.0
-    }
-    
-    val durationText = remember(movie.duration) {
-        if (movie.duration != null && movie.duration > 0) {
-            val minutes = (movie.duration / 60).toInt()
-            if (minutes > 0) "(${minutes}분)" else null
-        } else null
     }
 
     Row(
@@ -87,7 +92,6 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
                 )
             }
 
-            // 시청 진행률 게이지 (하단)
             if (progress > 0.01) {
                 Box(
                     modifier = Modifier
@@ -111,7 +115,6 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
             val fullTitle = (movie.title ?: "")
             val displayTitle = fullTitle.prettyTitle()
             
-            // 더빙/자막 정보 추출
             val typeTag = remember(fullTitle) {
                 when {
                     fullTitle.contains("더빙") -> " [더빙]"
@@ -134,7 +137,7 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
                 if (typeTag.isNotEmpty()) {
                     Text(
                         text = typeTag,
-                        color = if (typeTag.contains("더빙")) Color.Red else Color(0xFF46D369), // 더빙은 빨강, 자막은 초록
+                        color = if (typeTag.contains("더빙")) Color.Red else Color(0xFF46D369),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Black,
                         modifier = Modifier.padding(start = 4.dp, top = 2.dp)
@@ -153,10 +156,9 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
                 lineHeight = 16.sp
             )
             
-            // 재생 시간 표시 (줄거리 밑)
-            if (durationText != null) {
+            if (durationDisplay != null) {
                 Text(
-                    text = durationText,
+                    text = "($durationDisplay)",
                     color = Color.White.copy(alpha = 0.4f),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,

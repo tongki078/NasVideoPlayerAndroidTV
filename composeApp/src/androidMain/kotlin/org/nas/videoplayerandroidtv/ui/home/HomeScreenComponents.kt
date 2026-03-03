@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
@@ -59,24 +60,22 @@ fun HeroSection(
     val bringIntoViewRequester = remember { BringIntoViewRequester() }
     val coroutineScope = rememberCoroutineScope()
 
-    // 1. 전체 여백(2배)과 테두리를 적용한 카드 스타일
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(440.dp)
-            .bringIntoViewRequester(bringIntoViewRequester) // 최외각에 배치하여 스크롤 유도
+            .bringIntoViewRequester(bringIntoViewRequester)
             .padding(horizontal = horizontalPadding * 2, vertical = 12.dp)
             .onFocusChanged {
                 if (it.hasFocus) {
                     coroutineScope.launch {
-                        // 내부 버튼에 포커스가 들어오면 카드 전체가 화면 상단에 정렬되도록 함
                         bringIntoViewRequester.bringIntoView()
                     }
                 }
             }
             .clip(RoundedCornerShape(12.dp))
             .border(
-                BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)), // 테두리 조금 더 명확하게
+                BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
                 RoundedCornerShape(12.dp)
             )
             .background(Color.Black)
@@ -98,7 +97,6 @@ fun HeroSection(
                 .padding(start = 32.dp, bottom = 48.dp)
                 .fillMaxWidth(0.85f)
         ) {
-            // 2. 제목 텍스트 크기 축소 (약 26sp)
             Text(
                 text = title.cleanTitle(), 
                 color = Color.White, 
@@ -107,37 +105,38 @@ fun HeroSection(
                     fontWeight = FontWeight.Black, 
                     shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), offset = androidx.compose.ui.geometry.Offset(0f, 4f), blurRadius = 16f),
                     letterSpacing = (-1.0).sp
-                )
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
 
             Spacer(Modifier.height(12.dp))
 
-            // 메타데이터 로우
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val metadataComponents = mutableListOf<@Composable () -> Unit>()
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                val metadataItems = mutableListOf<@Composable () -> Unit>()
 
-                metadataComponents.add { MetadataText(text = if (series.category == "movies") "영화" else "시리즈") }
+                metadataItems.add { MetadataText(text = if (series.category == "movies") "영화" else "시리즈") }
 
                 val genre = series.genreNames.firstOrNull() ?: ""
                 if (genre.isNotEmpty()) {
-                    metadataComponents.add { MetadataText(text = "$genre 장르") }
+                    metadataItems.add { MetadataText(text = "$genre 장르") }
                 }
 
-                series.year?.let { y -> metadataComponents.add { MetadataText(text = y) } }
+                series.year?.let { y -> metadataItems.add { MetadataText(text = y) } }
                 
                 if (series.category != "movies" && series.seasonCount != null && series.seasonCount > 0) {
-                    metadataComponents.add { MetadataText(text = "시즌 ${series.seasonCount}개") }
+                    metadataItems.add { MetadataText(text = "시즌 ${series.seasonCount}개") }
                 }
                 
-                metadataComponents.add { HeroBadge(text = "HD", isOutlined = true) }
+                metadataItems.add { HeroBadge(text = "HD", isOutlined = true) }
 
                 if (!series.rating.isNullOrBlank()) {
-                    metadataComponents.add { RatingBadge(series.rating) }
+                    metadataItems.add { RatingBadge(series.rating) }
                 }
 
-                metadataComponents.forEachIndexed { index, component ->
+                metadataItems.forEachIndexed { index, component ->
                     component()
-                    if (index < metadataComponents.size - 1) {
+                    if (index < metadataItems.size - 1) {
                         MetadataSeparator()
                     }
                 }
@@ -151,6 +150,7 @@ fun HeroSection(
                     fontSize = 14.sp,
                     maxLines = 2,
                     lineHeight = 22.sp,
+                    overflow = TextOverflow.Ellipsis,
                     style = TextStyle(shadow = Shadow(color = Color.Black, blurRadius = 8f))
                 )
             }
@@ -171,7 +171,6 @@ fun HeroSection(
                     }
                 }
 
-                // 3. 버튼 사이즈 축소 적용
                 HeroButton(
                     modifier = Modifier.focusRequester(playButtonFocusRequester),
                     text = "재생",
@@ -195,12 +194,39 @@ fun HeroSection(
 }
 
 @Composable
+fun SkeletonHero(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(440.dp)
+            .padding(horizontal = 40.dp, vertical = 12.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.DarkGray.copy(alpha = 0.3f))
+    )
+}
+
+@Composable
+fun SkeletonRow(margin: androidx.compose.ui.unit.Dp) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+        Box(modifier = Modifier.padding(start = margin).width(120.dp).height(20.dp).background(Color.DarkGray.copy(alpha = 0.3f), RoundedCornerShape(4.dp)))
+        Spacer(Modifier.height(12.dp))
+        Row(modifier = Modifier.padding(start = margin), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            repeat(6) {
+                Box(modifier = Modifier.width(150.dp).height(220.dp).background(Color.DarkGray.copy(alpha = 0.2f), RoundedCornerShape(8.dp)))
+            }
+        }
+    }
+}
+
+@Composable
 private fun MetadataText(text: String) {
     Text(
         text = text,
         color = Color.White.copy(alpha = 0.9f),
         fontSize = 14.sp,
         fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
         style = TextStyle(shadow = Shadow(color = Color.Black, blurRadius = 4f))
     )
 }
@@ -287,19 +313,19 @@ private fun HeroButton(
                 scaleY = scale
             }
             .onFocusChanged { isFocused = it.isFocused }
-            .height(40.dp) // 높이 축소 (44 -> 40)
-            .widthIn(min = 110.dp) // 최소 너비 축소 (130 -> 110)
+            .height(40.dp)
+            .widthIn(min = 110.dp)
             .shadow(if (isFocused) 15.dp else 0.dp, CircleShape, spotColor = Color.White)
     ) {
         Box(contentAlignment = Alignment.Center) {
             Row(
-                modifier = Modifier.padding(horizontal = 20.dp).fillMaxHeight(), // 패딩 축소
+                modifier = Modifier.padding(horizontal = 20.dp).fillMaxHeight(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
-                Icon(icon, null, tint = contentColor, modifier = Modifier.size(18.dp)) // 아이콘 사이즈 축소 (22 -> 18)
+                Icon(icon, null, tint = contentColor, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text(text = text, color = contentColor, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp) // 폰트 사이즈 축소 (15 -> 14)
+                Text(text = text, color = contentColor, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
             }
             
             if (progress != null && progress > 0f) {
@@ -327,8 +353,7 @@ fun SectionTitle(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = horizontalPadding, top = 28.dp, bottom = 14.dp, end = horizontalPadding),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+        verticalAlignment = Alignment.CenterVertically) {
         Text(
             text = title, 
             color = Color.White, 
@@ -357,49 +382,27 @@ fun SectionTitle(
                 itemsIndexed(standardOrder) { _, sound ->
                     val targetIndex = itemInitialSounds[sound] ?: 0 
                     val hasItems = itemInitialSounds.containsKey(sound)
-                    
+ 
                     var isFocused by remember { mutableStateOf(false) }
-                    val scale by animateFloatAsState(if (isFocused) 1.2f else 1.0f)
-                    
                     Surface(
-                        color = if (isFocused) Color.White else Color.Transparent,
+                        onClick = { if(hasItems) onIndexClick(targetIndex) },
+                        color = if(isFocused) Color.White else Color.White.copy(alpha = 0.1f),
                         shape = RoundedCornerShape(4.dp),
                         modifier = Modifier
-                            .scale(scale)
+                            .size(32.dp)
                             .onFocusChanged { isFocused = it.isFocused }
-                            .focusable(hasItems)
-                            .clickable(enabled = hasItems) { onIndexClick(targetIndex) }
+                            .focusable()
                     ) {
-                        Text(
-                            text = sound,
-                            color = when {
-                                isFocused -> Color.Black
-                                hasItems -> Color.Gray
-                                else -> Color.DarkGray.copy(alpha = 0.5f)
-                            },
-                            fontSize = 15.sp,
-                            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                        )
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = sound,
+                                color = if(isFocused) Color.Black else if(hasItems) Color.White else Color.White.copy(alpha = 0.2f),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-fun SkeletonHero() {
-    Box(modifier = Modifier.fillMaxWidth().height(460.dp).background(Color.Black))
-}
-
-@Composable
-fun SkeletonRow(horizontalPadding: androidx.compose.ui.unit.Dp) {
-    Column(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
-        Box(modifier = Modifier.padding(start = horizontalPadding, bottom = 12.dp).width(120.dp).height(20.dp).background(Color(0xFF1A1A1A)))
-        LazyRow(contentPadding = PaddingValues(start = horizontalPadding, end = horizontalPadding), horizontalArrangement = Arrangement.spacedBy(12.dp), userScrollEnabled = false) {
-            items(5) {
-                Box(modifier = Modifier.width(150.dp).height(210.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF1A1A1A)))
             }
         }
     }
