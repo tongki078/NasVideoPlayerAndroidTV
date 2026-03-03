@@ -3,6 +3,7 @@ package org.nas.videoplayerandroidtv.ui.home
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -10,6 +11,8 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -40,7 +43,9 @@ import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
 import org.nas.videoplayerandroidtv.data.WatchHistory
 import org.nas.videoplayerandroidtv.util.TitleUtils.getInitialSound
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HeroSection(
     series: Series, 
@@ -51,7 +56,31 @@ fun HeroSection(
     isFirstLoad: Boolean = false
 ) {
     val title = series.title
-    Box(modifier = Modifier.fillMaxWidth().height(480.dp).background(Color.Black)) {
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val coroutineScope = rememberCoroutineScope()
+
+    // 1. 전체 여백(2배)과 테두리를 적용한 카드 스타일
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(440.dp)
+            .bringIntoViewRequester(bringIntoViewRequester) // 최외각에 배치하여 스크롤 유도
+            .padding(horizontal = horizontalPadding * 2, vertical = 12.dp)
+            .onFocusChanged {
+                if (it.hasFocus) {
+                    coroutineScope.launch {
+                        // 내부 버튼에 포커스가 들어오면 카드 전체가 화면 상단에 정렬되도록 함
+                        bringIntoViewRequester.bringIntoView()
+                    }
+                }
+            }
+            .clip(RoundedCornerShape(12.dp))
+            .border(
+                BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)), // 테두리 조금 더 명확하게
+                RoundedCornerShape(12.dp)
+            )
+            .background(Color.Black)
+    ) {
         TmdbAsyncImage(title = title, posterPath = series.posterPath, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, isLarge = true)
         
         Box(modifier = Modifier.fillMaxSize().background(
@@ -66,54 +95,46 @@ fun HeroSection(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = horizontalPadding, bottom = 64.dp)
+                .padding(start = 32.dp, bottom = 48.dp)
                 .fillMaxWidth(0.85f)
         ) {
+            // 2. 제목 텍스트 크기 축소 (약 26sp)
             Text(
                 text = title.cleanTitle(), 
                 color = Color.White, 
                 style = TextStyle(
-                    fontSize = 42.sp,
+                    fontSize = 26.sp,
                     fontWeight = FontWeight.Black, 
                     shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), offset = androidx.compose.ui.geometry.Offset(0f, 4f), blurRadius = 16f),
-                    letterSpacing = (-1.5).sp
+                    letterSpacing = (-1.0).sp
                 )
             )
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
 
-            // 넷플릭스 스타일 메타데이터 로우 (시리즈 · 장르 · 연도 · 시즌 · 등급)
+            // 메타데이터 로우
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val metadataComponents = mutableListOf<@Composable () -> Unit>()
 
-                // 1. 시리즈 / 영화 구분
                 metadataComponents.add { MetadataText(text = if (series.category == "movies") "영화" else "시리즈") }
 
-                // 2. 장르
                 val genre = series.genreNames.firstOrNull() ?: ""
                 if (genre.isNotEmpty()) {
                     metadataComponents.add { MetadataText(text = "$genre 장르") }
                 }
 
-                // 3. 연도
-                series.year?.let { y ->
-                    metadataComponents.add { MetadataText(text = y) }
-                }
+                series.year?.let { y -> metadataComponents.add { MetadataText(text = y) } }
                 
-                // 4. 시즌 정보
                 if (series.category != "movies" && series.seasonCount != null && series.seasonCount > 0) {
                     metadataComponents.add { MetadataText(text = "시즌 ${series.seasonCount}개") }
                 }
-
-                // 5. HD 뱃지
-                metadataComponents.add { HeroBadge(text = "HD", isOutlined = true) }
                 
-                // 6. 연령 등급 뱃지 (가장 우측)
+                metadataComponents.add { HeroBadge(text = "HD", isOutlined = true) }
+
                 if (!series.rating.isNullOrBlank()) {
                     metadataComponents.add { RatingBadge(series.rating) }
                 }
 
-                // 컴포넌트들을 구분점과 함께 렌더링
                 metadataComponents.forEachIndexed { index, component ->
                     component()
                     if (index < metadataComponents.size - 1) {
@@ -123,18 +144,18 @@ fun HeroSection(
             }
             
             if (!series.overview.isNullOrBlank()) {
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(16.dp))
                 Text(
                     text = series.overview,
                     color = Color.White.copy(alpha = 0.85f),
-                    fontSize = 16.sp,
+                    fontSize = 14.sp,
                     maxLines = 2,
-                    lineHeight = 24.sp,
+                    lineHeight = 22.sp,
                     style = TextStyle(shadow = Shadow(color = Color.Black, blurRadius = 8f))
                 )
             }
 
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(28.dp))
             
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val isContinuing = watchHistory != null && watchHistory.lastPosition > 0
@@ -150,6 +171,7 @@ fun HeroSection(
                     }
                 }
 
+                // 3. 버튼 사이즈 축소 적용
                 HeroButton(
                     modifier = Modifier.focusRequester(playButtonFocusRequester),
                     text = "재생",
@@ -177,7 +199,7 @@ private fun MetadataText(text: String) {
     Text(
         text = text,
         color = Color.White.copy(alpha = 0.9f),
-        fontSize = 15.sp,
+        fontSize = 14.sp,
         fontWeight = FontWeight.Bold,
         style = TextStyle(shadow = Shadow(color = Color.Black, blurRadius = 4f))
     )
@@ -188,7 +210,7 @@ private fun MetadataSeparator() {
     Text(
         text = " · ",
         color = Color.White.copy(alpha = 0.4f),
-        fontSize = 15.sp,
+        fontSize = 14.sp,
         fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(horizontal = 4.dp)
     )
@@ -197,10 +219,10 @@ private fun MetadataSeparator() {
 @Composable
 private fun RatingBadge(rating: String) {
     val backgroundColor = when {
-        rating.contains("19") || rating.contains("18") || rating.contains("청불") -> Color(0xFFE50914) // 빨강
-        rating.contains("15") -> Color(0xFFF5A623) // 주황
-        rating.contains("12") -> Color(0xFFF8E71C) // 노랑
-        rating.contains("전체") || rating.contains("All") -> Color(0xFF46D369) // 초록
+        rating.contains("19") || rating.contains("18") || rating.contains("청불") -> Color(0xFFE50914)
+        rating.contains("15") -> Color(0xFFF5A623)
+        rating.contains("12") -> Color(0xFFF8E71C)
+        rating.contains("전체") || rating.contains("All") -> Color(0xFF46D369)
         else -> Color.Gray.copy(alpha = 0.5f)
     }
     
@@ -213,7 +235,7 @@ private fun RatingBadge(rating: String) {
         Text(
             text = displayRating,
             color = if (backgroundColor == Color(0xFFF8E71C)) Color.Black else Color.White,
-            fontSize = 12.sp,
+            fontSize = 11.sp,
             fontWeight = FontWeight.Black,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
         )
@@ -228,7 +250,7 @@ private fun HeroBadge(text: String, isOutlined: Boolean = false) {
         border = if (isOutlined) BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)) else null,
         modifier = Modifier.padding(vertical = 1.dp)
     ) {
-        Text(text = text, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+        Text(text = text, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
     }
 }
 
@@ -257,7 +279,7 @@ private fun HeroButton(
 
     Surface(
         onClick = onClick,
-        shape = CircleShape,
+        shape = CircleShape, 
         color = backgroundColor,
         modifier = modifier
             .graphicsLayer { 
@@ -265,19 +287,19 @@ private fun HeroButton(
                 scaleY = scale
             }
             .onFocusChanged { isFocused = it.isFocused }
-            .height(48.dp)
-            .widthIn(min = 140.dp)
+            .height(40.dp) // 높이 축소 (44 -> 40)
+            .widthIn(min = 110.dp) // 최소 너비 축소 (130 -> 110)
             .shadow(if (isFocused) 15.dp else 0.dp, CircleShape, spotColor = Color.White)
     ) {
         Box(contentAlignment = Alignment.Center) {
             Row(
-                modifier = Modifier.padding(horizontal = 28.dp).fillMaxHeight(),
+                modifier = Modifier.padding(horizontal = 20.dp).fillMaxHeight(), // 패딩 축소
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
-                Icon(icon, null, tint = contentColor, modifier = Modifier.size(24.dp))
-                Spacer(Modifier.width(12.dp))
-                Text(text = text, color = contentColor, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                Icon(icon, null, tint = contentColor, modifier = Modifier.size(18.dp)) // 아이콘 사이즈 축소 (22 -> 18)
+                Spacer(Modifier.width(8.dp))
+                Text(text = text, color = contentColor, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp) // 폰트 사이즈 축소 (15 -> 14)
             }
             
             if (progress != null && progress > 0f) {
@@ -285,7 +307,7 @@ private fun HeroButton(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .height(4.dp)
+                        .height(3.dp)
                         .background(Color.Red)
                 )
             }

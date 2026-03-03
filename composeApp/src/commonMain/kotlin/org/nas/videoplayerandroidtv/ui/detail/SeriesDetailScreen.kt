@@ -134,7 +134,7 @@ fun SeriesDetailScreen(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 
-                // --- 넷플릭스 스타일 한 줄 메타데이터 로우 ---
+                // --- 넷플릭스 스타일 메타데이터 로우 (한 줄 정렬) ---
                 Row(modifier = Modifier.height(24.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (state.isLoading) {
                         Box(modifier = Modifier.width(100.dp).fillMaxHeight().clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)))
@@ -168,7 +168,7 @@ fun SeriesDetailScreen(
                     }
                 }
                 
-                // 장르 목록
+                // 장르 목록 (점 구분자 포함)
                 if (!state.isLoading && currentSeries.genreNames.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
