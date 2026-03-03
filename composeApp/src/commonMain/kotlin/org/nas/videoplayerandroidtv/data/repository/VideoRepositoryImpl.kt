@@ -41,7 +41,6 @@ class VideoRepositoryImpl : VideoRepository {
     }
 
     private fun Category.toSeries() = Series(
-        // 서버에서 [자막], [더빙] 등 태그가 포함된 최종 이름을 'name' 필드로 보내주므로 이를 우선 사용합니다.
         title = if (!name.isNullOrBlank()) name else (tmdbTitle ?: ""),
         episodes = movies ?: emptyList(),
         seasons = seasons ?: emptyMap(),
@@ -54,7 +53,8 @@ class VideoRepositoryImpl : VideoRepository {
         actors = actors ?: emptyList(),
         overview = overview,
         year = year,
-        rating = rating,
+        rating = rating,      // 연령 정보 유지
+        seasonCount = seasonCount, // 시즌 정보 유지
         tmdbTitle = tmdbTitle
     )
 
