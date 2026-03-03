@@ -77,15 +77,12 @@ fun HomeScreen(
     val heroItem = heroPool.getOrNull(currentHeroIndex)
 
     // [포커스 복구 로직]
-    // 뒤로 가기 시 마지막으로 선택했던 항목으로 스크롤 및 포커스를 복구합니다.
     LaunchedEffect(lastFocusedPath, combinedSections, isLoading) {
-        // lastFocusedPath가 있을 때만 복구 로직을 수행합니다. 
         if (lastFocusedPath != null && combinedSections.isNotEmpty() && !isLoading) {
             var foundRowIndex = -1
             var foundItemIndex = -1
             var foundRowKey = ""
 
-            // 1. 시청 기록에서 찾기
             if (currentScreen == Screen.HOME && watchHistory.isNotEmpty()) {
                 val idx = watchHistory.indexOfFirst { it.seriesPath == lastFocusedPath }
                 if (idx != -1) {
@@ -95,7 +92,6 @@ fun HomeScreen(
                 }
             }
 
-            // 2. 각 섹션에서 찾기
             if (foundRowIndex == -1) {
                 combinedSections.forEachIndexed { sIdx, section ->
                     val iIdx = section.items.indexOfFirst { it.path == lastFocusedPath }
@@ -107,7 +103,6 @@ fun HomeScreen(
                 }
             }
 
-            // 항목을 찾으면 해당 위치로 스크롤 및 포커스 설정
             if (foundRowIndex != -1) {
                 delay(100) 
                 try {
@@ -147,7 +142,15 @@ fun HomeScreen(
                             onPlayClick = { 
                                 coroutineScope.launch {
                                     if (heroHistory != null && heroHistory.lastPosition > 0) {
-                                        onHistoryClick(heroHistory)
+                                        // 히스토리가 있어도 이제 상세페이지로 보낼 수도 있고, 원하시면 여긴 유지해도 됩니다.
+                                        // 일단 사용자님의 요청에 따라 히스토리 클릭 시 상세페이지로 가는 것으로 통일하는 것이 좋겠네요.
+                                        val seriesForDetail = Series(
+                                            title = heroHistory.seriesTitle ?: heroHistory.title,
+                                            episodes = emptyList(),
+                                            fullPath = heroHistory.seriesPath,
+                                            posterPath = heroHistory.posterPath
+                                        )
+                                        onSeriesClick(seriesForDetail)
                                     } else {
                                         val seriesDetail = if (heroSeries.episodes.isEmpty()) {
                                             heroSeries.fullPath?.let { repository.getSeriesDetail(it) }
@@ -198,7 +201,21 @@ fun HomeScreen(
                                     focusRequester = focusRequester,
                                     shouldRequestFocus = lastFocusedPath != null && history.seriesPath == lastFocusedPath,
                                     onFocusRestored = onFocusRestored,
-                                    onClick = { onHistoryClick(history) }
+                                    onClick = { 
+                                        // 🔴 수정: 히스토리 클릭 시 바로 재생 대신 상세 페이지로 이동
+                                        if (history.seriesPath != null) {
+                                            val series = Series(
+                                                title = history.seriesTitle ?: history.title,
+                                                episodes = emptyList(),
+                                                fullPath = history.seriesPath,
+                                                posterPath = history.posterPath
+                                            )
+                                            onSeriesClick(series)
+                                        } else {
+                                            // Fallback: 경로 정보가 없는 옛날 데이터라면 기존처럼 동작
+                                            onHistoryClick(history)
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -213,10 +230,9 @@ fun HomeScreen(
                             title = section.title, 
                             horizontalPadding = standardMargin,
                             items = section.items,
-                            isFullList = section.is_full_list, // [수정] 서버의 is_full_list 플래그 전달
+                            isFullList = section.is_full_list, 
                             onIndexClick = { targetIndex ->
                                 coroutineScope.launch {
-                                    // [수정] 가로 점프 기능 활성화
                                     sectionRowState.animateScrollToItem(targetIndex)
                                     rowFocusIndices[rowKey] = targetIndex
                                 }
