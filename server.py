@@ -241,6 +241,8 @@ def init_db():
         add_col_if_missing('episodes', 'season_number', 'INTEGER')
         add_col_if_missing('episodes', 'episode_number', 'INTEGER')
         add_col_if_missing('series', 'tmdbTitle', 'TEXT')
+        add_col_if_missing('series', 'runtime', 'INTEGER')
+        add_col_if_missing('episodes', 'runtime', 'INTEGER')
 
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cleanedName ON series(cleanedName)')
 
@@ -642,8 +644,8 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False):  # category 
             info = {
                 "tmdbId": f"{m_type}:{t_id}",
                 "title": d_resp.get('title') or d_resp.get('name'),
-                "genreIds": [g['id'] for g in d_resp.get('genres', [])] if d_resp.get('genres') else [],
-                "genreNames": genre_names,
+                "genreIds": [g['id'] for g in d_resp.get('genres', [])],
+                "genreNames": [g['name'] for g in d_resp.get('genres', [])],
                 "director": director,
                 "actors": actors,
                 "posterPath": d_resp.get('poster_path'),
@@ -651,6 +653,7 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False):  # category 
                 "overview": d_resp.get('overview'),
                 "rating": rating,
                 "seasonCount": d_resp.get('number_of_seasons'),
+                "runtime": d_resp.get('runtime'),  # <-- 영화 전체 런타임 추가 (분 단위)
                 "failed": False
             }
 
@@ -665,7 +668,8 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False):  # category 
                             info['seasons_data'][f"{s_num}_{ep['episode_number']}"] = {
                                 "overview": ep.get('overview'),
                                 "air_date": ep.get('air_date'),
-                                "still_path": ep.get('still_path')
+                                "still_path": ep.get('still_path'),
+                                "runtime": ep.get('runtime')  # <-- 에피소드별 런타임 추가 (분 단위)
                             }
 
             TMDB_MEMORY_CACHE[h] = info
@@ -1375,7 +1379,8 @@ def get_series_detail_api():
                 # --- 아래 두 필드 추가 ---
                 # 🔴 None(NULL)일 경우 확실하게 0을 반환하도록 수정
                 "position": d['position'] if d['position'] is not None else 0,
-                "duration": d['duration'] if d['duration'] is not None else 0
+                "duration": d['duration'] if d['duration'] is not None else 0,
+                "runtime": d.get('runtime')  # <--- 이 줄을 추가 (DB나 TMDB 데이터에서 가져온 값)
             })
 
         # 3. 정렬 및 시즌 맵 생성
@@ -1443,6 +1448,8 @@ def search_videos():
             WHERE (name LIKE ? OR name LIKE ? OR cleanedName LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ? OR tmdbTitle LIKE ?)
             AND posterPath IS NOT NULL
             AND EXISTS (SELECT 1 FROM episodes WHERE series_path = series.path)
+            -- [추가] 국내TV 내부의 애니메이션 폴더 결과 제외
+            AND path NOT LIKE 'koreantv/애니메이션/%'
         """
         params = [f"%{q_nfc}%", f"%{nfd(q)}%", f"%{q_nfc}%", f"%{nfd(q)}%", f"%{q_nfc}%", f"%{nfd(q)}%"]
 
@@ -2971,6 +2978,7 @@ def updater_ui():
                             <input type="text" id="tmdbIdInput" placeholder="TMDB ID (예: tv:32863)">
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 5px;">
                                 <button class="btn-meta" onclick="manualMatchSimple()" style="justify-content: center;"><i class="fas fa-link"></i> 수동 연결</button>
+                                    <button class="btn-meta" onclick="manualMatchV2()" style="justify-content: center; background: var(--accent);"><i class="fas fa-sync-alt"></i> 수동 연결 V2</button>
                                 <button class="btn-maintenance" onclick="fixMetadata()" style="justify-content: center;"><i class="fas fa-wand-magic-sparkles"></i> 자동 수정</button>
                             </div>
                         </div>
@@ -3005,6 +3013,16 @@ def updater_ui():
                 if (!name || !id) { alert('제목과 ID를 모두 입력하세요.'); return; }
                 if (confirm('수동 매칭을 실행할까요?')) {
                     const resp = await fetch(`/api/manual_match_simple?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}`);
+                    alert(await resp.text());
+                }
+            }
+
+            async function manualMatchV2() {
+                const name = document.getElementById('fixNameInput').value.trim();
+                const id = document.getElementById('tmdbIdInput').value.trim();
+                if (!name || !id) { alert('제목과 ID를 모두 입력하세요.'); return; }
+                if (confirm('제목까지 TMDB 공식 명칭으로 갱신할까요?')) {
+                    const resp = await fetch(`/api/manual_match_v2?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}`);
                     alert(await resp.text());
                 }
             }
@@ -3350,7 +3368,7 @@ def _rebuild_fast_memory_cache():
     CATS = ["movies", "foreigntv", "koreantv", "animations_all", "air"]
 
     for cat in CATS:
-        query = "SELECT path, name, cleanedName, tmdbTitle, tmdbId, posterPath, year, genreNames FROM series WHERE category = ? ORDER BY yearVal DESC"
+        query = "SELECT path, name, cleanedName, tmdbTitle, tmdbId, posterPath, year, genreNames, rating, seasonCount FROM series WHERE category = ? ORDER BY yearVal DESC"
         rows = conn.execute(query, (cat,)).fetchall()
 
         items = []
@@ -3384,8 +3402,14 @@ def _rebuild_fast_memory_cache():
                 display_name = f"{display_name} [{tag}]"
 
             item = {
-                "path": path, "name": display_name.strip(), "posterPath": r['posterPath'],
-                "year": r['year'], "genreNames": [], "tmdbId": tmdb_id,
+                "path": path,
+                "name": display_name.strip(),
+                "posterPath": r['posterPath'],
+                "year": r['year'],
+                "genreNames": [],
+                "tmdbId": tmdb_id,
+                "rating": r['rating'],  # 🔴 이 줄 추가
+                "seasonCount": r['seasonCount'],  # 🔴 이 줄 추가
                 "_search_name": display_name.lower()
             }
 
@@ -3838,6 +3862,7 @@ def manual_match_simple():
         actors = [{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in cast_data[:10]]
         crew_data = d_resp.get('credits', {}).get('crew', [])
         director = next((c['name'] for c in crew_data if c.get('job') == 'Director'), "")
+        runtime = d_resp.get('runtime')  # 영화의 경우
 
         # 3. DB 업데이트 (tmdbTitle은 업데이트 목록에서 제외!!)
         conn = None
@@ -3853,13 +3878,15 @@ def manual_match_simple():
                     json.dumps(genre_names, ensure_ascii=False),
                     director,
                     json.dumps(actors, ensure_ascii=False),
-                    full_id
+                    full_id,
+                    runtime
                 )
 
                 cursor.execute("""
                     UPDATE series
                     SET posterPath=?, year=?, overview=?, seasonCount=?,
-                        genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0
+                        genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
+                        runtime=?
                     WHERE name LIKE ? OR cleanedName LIKE ?
                 """, (*up, f'%{target_name}%', f'%{target_name}%'))
 
@@ -3879,6 +3906,75 @@ def manual_match_simple():
 
     except Exception as e:
         emit_ui_log(f"에러: {str(e)}", "error")
+        return f"에러 발생: {str(e)}"
+
+@app.route('/api/manual_match_v2')
+def manual_match_v2():
+    """TMDB 정보를 연결하고, 제목(tmdbTitle)까지 TMDB 공식 명칭으로 강제 업데이트하는 기능"""
+    target_name = request.args.get('name')
+    full_id = request.args.get('id')
+
+    if not target_name or not full_id or ':' not in full_id:
+        return "오류: 작품 키워드와 TMDB ID가 필요합니다.", 400
+
+    emit_ui_log(f"수동 연결 v2 시작: '{target_name}' -> {full_id} (제목 갱신 포함)", "info")
+    m_type, t_id = full_id.split(':')
+
+    try:
+        headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
+        d_resp = requests.get(
+            f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings,credits",
+            headers=headers, timeout=10).json()
+
+        if 'id' not in d_resp:
+            return f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", 404
+
+        yv = (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0]
+        genre_names = [g['name'] for g in d_resp.get('genres', [])]
+        cast_data = d_resp.get('credits', {}).get('cast', [])
+        actors = [{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in cast_data[:10]]
+        crew_data = d_resp.get('credits', {}).get('crew', [])
+        director = next((c['name'] for c in crew_data if c.get('job') == 'Director'), "")
+
+        # 런타임 정보 수집 (아까 만든 로직 적용)
+        runtime = d_resp.get('runtime')
+
+        conn = get_db()
+        cursor = conn.cursor()
+
+        # 업데이트 데이터 (tmdbTitle 추가됨!)
+        up = (
+            d_resp.get('poster_path'), yv, d_resp.get('overview'),
+            d_resp.get('number_of_seasons'),
+            json.dumps([g['id'] for g in d_resp.get('genres', [])]),
+            json.dumps(genre_names, ensure_ascii=False),
+            director,
+            json.dumps(actors, ensure_ascii=False),
+            full_id,
+            d_resp.get('title') or d_resp.get('name'),  # <-- 1. 공식 제목 추가
+            runtime,  # <-- 2. 런타임 추가
+            f'%{target_name}%', f'%{target_name}%'
+        )
+
+        cursor.execute("""
+            UPDATE series
+            SET posterPath=?, year=?, overview=?, seasonCount=?,
+                genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
+                tmdbTitle=?, runtime=?  -- <-- 3. 제목과 런타임 컬럼 갱신
+            WHERE name LIKE ? OR cleanedName LIKE ?
+        """, up)
+
+        updated_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if updated_count > 0:
+            build_all_caches()
+            emit_ui_log(f"성공! '{target_name}' 관련 {updated_count}건의 제목과 메타데이터를 모두 갱신했습니다.", "success")
+            return f"성공! {updated_count}개 항목의 제목과 정보를 교체했습니다."
+        return "대상 없음", 404
+
+    except Exception as e:
         return f"에러 발생: {str(e)}"
 
 def background_init_tasks():
