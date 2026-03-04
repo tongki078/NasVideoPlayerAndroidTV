@@ -124,7 +124,7 @@ fun NetflixPivotItem(
     var dataLoadingJob by remember { mutableStateOf<Job?>(null) }
     var previewJob by remember { mutableStateOf<Job?>(null) }
 
-    // 추가 태그 추출 (Regex 기반 개선)
+    // 추가 태그 추출 (대괄호 정보 유지)
     val tags = remember(title) {
         val tagRegex = Regex("\\[(.*?)\\]")
         val matches = tagRegex.findAll(title)
@@ -154,7 +154,6 @@ fun NetflixPivotItem(
                     try {
                         val details = repository.getSeriesDetail(categoryPath)
                         if (details != null) {
-                            // previewUrl이 없을 때만 업데이트
                             if (previewUrl == null) {
                                 previewUrl = details.episodes.find { !it.videoUrl.isNullOrEmpty() }?.videoUrl
                             }
@@ -176,7 +175,7 @@ fun NetflixPivotItem(
         previewJob?.cancel()
         if (isFocused && !previewUrl.isNullOrBlank()) {
             previewJob = coroutineScope.launch {
-                delay(800) // 미리보기 시작 지연시간을 약간 늘려 안정성 확보
+                delay(800)
                 if (isFocused) {
                     showPreview = true
                 }
@@ -234,7 +233,7 @@ fun NetflixPivotItem(
                         )
                     }
                     
-                    // 뱃지 추가
+                    // 뱃지 추가 (좌측 상단에 태그 정보 상시 노출)
                     if (tags.isNotEmpty()) {
                         Surface(
                             color = Color.Black.copy(alpha = 0.7f),
@@ -261,6 +260,7 @@ fun NetflixPivotItem(
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        // 제목 표시할 때 태그 정보(자막, 기수 등)를 명시적으로 뒤에 붙여줌
                         val tagString = if (tags.isNotEmpty()) " [${tags.joinToString("][")}]" else ""
                         Text(
                             text = "${title.cleanTitle()}$tagString",
