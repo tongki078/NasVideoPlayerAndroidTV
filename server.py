@@ -4029,11 +4029,11 @@ def view_conan_data():
                 query = """
                     SELECT path, name, cleanedName, category, posterPath, tmdbId, tmdbTitle
                     FROM series
-                    WHERE cleanedName LIKE ?
+                    WHERE name LIKE ?
                     ORDER BY path ASC
                 """
 
-                search_term = '%명탐정 코난 9기%'
+                search_term = '%본청 형사의 사랑이야기%'
                 # rows = conn.execute(query, (search_term, search_term)).fetchall()
                 rows = conn.execute(query, (search_term,)).fetchall()
 
@@ -4221,136 +4221,6 @@ def api_reset_and_refresh():
     # API 요청에는 즉시 응답하고, 무거운 작업은 백그라운드로 넘깁니다.
     threading.Thread(target=run_reset_task, daemon=True).start()
     return jsonify({"status": "success", "message": f"'{target_name}' 데이터 초기화 작업이 시작되었습니다. 로그 창을 확인하세요."})
-
-@app.route('/api/fix_season_numbers')
-def fix_season_numbers():
-    target = request.args.get('name', '명탐정 코난')
-    try:
-        conn = get_db()
-        # 1. 대상 작품의 모든 에피소드 가져오기
-        query = """
-            SELECT e.id, e.title, e.series_path
-            FROM episodes e
-            JOIN series s ON e.series_path = s.path
-            WHERE s.name LIKE ? OR s.cleanedName LIKE ?
-        """
-        episodes = conn.execute(query, (f'%{target}%', f'%{target}%')).fetchall()
-
-        if not episodes:
-            return f"대상을 찾을 수 없습니다: {target}"
-
-        update_batch = []
-        for ep in episodes:
-            # 2. 경로와 파일명을 합쳐서 정확한 시즌/회차 재계산!
-            full_name = f"{ep['series_path']}/{ep['title']}"
-            sn, en = extract_episode_numbers(full_name)
-            update_batch.append((sn, en, ep['id']))
-
-        # 3. DB에 즉시 업데이트
-        cursor = conn.cursor()
-        cursor.executemany(
-            "UPDATE episodes SET season_number = ?, episode_number = ? WHERE id = ?",
-            update_batch
-        )
-        updated_count = cursor.rowcount
-        conn.commit()
-        conn.close()
-
-        # 4. 앱에 바로 반영되도록 메모리 캐시 갱신
-        build_all_caches()
-        global _DETAIL_MEM_CACHE
-        _DETAIL_MEM_CACHE = {}
-
-        return f"🎉 성공! 재매칭 없이 '{target}'의 에피소드 {updated_count}개 시즌 번호를 즉시 교정했습니다."
-
-    except Exception as e:
-        return f"에러 발생: {str(e)}"
-
-@app.route('/api/debug_search_grouping')
-def debug_search_grouping():
-    # '명탐정 코난'으로 검색했을 때, DB에서 실제로 어떻게 그룹핑이 되고 있는지
-    # 날것의 데이터를 모두 꺼내보는 쿼리입니다.
-    q = '명탐정 코난'
-    search_term = f"%{q}%"
-
-    conn = get_db()
-
-    # 실제 /search 라우트와 동일한 로직으로 데이터를 뽑되, GROUP BY 없이 날것을 보여줍니다.
-    query_raw = """
-        SELECT
-            path, name, cleanedName, tmdbTitle, tmdbId, category
-        FROM series
-        WHERE (name LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ?)
-        AND posterPath IS NOT NULL
-        ORDER BY tmdbId, cleanedName
-    """
-
-    rows = conn.execute(query_raw, (search_term, search_term, search_term)).fetchall()
-    conn.close()
-
-    result_data = []
-    for row in rows:
-        item = dict(row)
-
-        # 1. 기존 방식대로 이름 우선순위 결정 (왜 9기 part 2가 나왔는지 시뮬레이션)
-        priority_name_old = nfc(item.get('cleanedName') or item.get('tmdbTitle') or item.get('name'))
-
-        # 3. 그룹 키 (실제 검색 쿼리에서 묶는 기준)
-        tag = ""
-        if "더빙" in nfc(item.get('path', '') + " " + item.get('name', '')).lower(): tag = "더빙"
-        elif "자막" in nfc(item.get('path', '') + " " + item.get('name', '')).lower(): tag = "자막"
-
-        group_key = f"{item['category']} | {item['tmdbId']} | {item['cleanedName']} | {tag}"
-
-        result_data.append({
-            "0_현재_노출될_이름(원인)": priority_name_old,
-            "2_원본폴더명(name)": item['name'],
-            "3_정제된이름(cleanedName)": item['cleanedName'],
-            "4_TMDB이름(tmdbTitle)": item['tmdbTitle'],
-            "5_그룹핑_기준키(이게같으면_하나로묶임)": group_key,
-            "6_경로(path)": item['path']
-        })
-
-    # 보기 좋게 그룹키 기준으로 정렬
-    result_data.sort(key=lambda x: x['5_그룹핑_기준키(이게같으면_하나로묶임)'])
-
-    return Response(json.dumps({"분석결과": result_data}, ensure_ascii=False, indent=4), mimetype='application/json')
-@app.route('/api/fix_conan_grouping')
-def fix_conan_grouping():
-    """오직 'animations_all' 카테고리의 '명탐정 코난' 관련 데이터만 핀셋 교정합니다."""
-    conn = None
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-
-        # [최적화] animations_all 카테고리에서 '명탐정 코난'이 포함된 항목만 조회
-        query = """
-            SELECT path, name, cleanedName
-            FROM series
-            WHERE category = 'animations_all'
-            AND (name LIKE '%명탐정 코난%' OR path LIKE '%명탐정 코난%')
-        """
-        rows = conn.execute(query).fetchall()
-
-        updates = []
-        for row in rows:
-            # 수정된 clean_title_complex 로직(기수 체크)으로 다시 계산
-            new_clean, _ = clean_title_complex(row['name'], full_path=row['path'])
-            if new_clean != row['cleanedName']:
-                updates.append((new_clean, row['path']))
-
-        if updates:
-            # 변경된 그룹명(cleanedName)만 업데이트
-            cursor.executemany("UPDATE series SET cleanedName = ? WHERE path = ?", updates)
-            conn.commit()
-            emit_ui_log(f"코난(애니) 그룹명 {len(updates)}건 교정 완료", "success")
-
-        build_all_caches()  # 메모리 캐시 갱신
-        return jsonify({"status": "success", "message": f"코난 관련 {len(updates)}건 교정 완료."})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-    finally:
-        if conn: conn.close()
 
 def background_init_tasks():
     build_all_caches()
