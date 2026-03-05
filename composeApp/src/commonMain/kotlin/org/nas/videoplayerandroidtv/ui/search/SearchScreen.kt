@@ -351,33 +351,9 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
             }
         }
         
-        // 포커스 시 제목 표시 (원본 제목 또는 상세 정보 표시)
+        // 포커스 시 제목 표시
         if (isFocused) {
-            // fullPath를 이용해 마지막 폴더 이름 또는 파일 이름을 가져옵니다.
-            val displayTitle = remember(series.fullPath, series.title) {
-                val path = series.fullPath
-                if (!path.isNullOrEmpty()) {
-                    val parts = path.split("/")
-                    // path의 마지막 부분이 파일명/폴더명이므로 이를 사용
-                    var rawName = parts.last()
-                    // 확장자가 있다면 제거 (예: .mp4, .mkv 등)
-                    if (rawName.contains(".")) {
-                        rawName = rawName.substringBeforeLast(".")
-                    }
-                    
-                    // 불필요한 해상도, 코덱, 날짜 및 회차(E01 등) 릴리즈 태그 정제
-                    val cleanupRegex = Regex("""(?i)[._\-\s]*([sS]\d+[eE]\d+|[eE][pP]?\d{1,4}(?=[.\s_-]|$)|1080p|720p|2160p|4k|fhd|uhd|bluray|web-dl|webrip|hdrip|x264|x265|hevc|avc|aac|ac3|dts|korean|eng|smi|srt|\d{6}|\d{8}).*$""")
-                    rawName = cleanupRegex.replace(rawName, "").trim()
-                    // 남은 특수문자나 괄호 정리
-                    rawName = rawName.trimEnd('-', '_', '.', ' ', '[', '(', '{')
-
-                    rawName
-                } else {
-                    // fullPath가 없는 경우 기존 cleanTitle 활용하되 태그를 명시적으로 붙임
-                    val tagString = if (tags.isNotEmpty()) " [${tags.joinToString("][")}]" else ""
-                    "${series.title.cleanTitle()}$tagString"
-                }
-            }
+            val displayTitle = series.title
             
             Text(
                 text = displayTitle,
