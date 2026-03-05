@@ -88,6 +88,9 @@ os.makedirs(TMDB_CACHE_DIR, exist_ok=True)
 os.makedirs(SUBTITLE_DIR, exist_ok=True)  # 자막 폴더 생성
 if os.path.exists(HLS_ROOT): shutil.rmtree(HLS_ROOT, ignore_errors=True)
 os.makedirs(HLS_ROOT, exist_ok=True)
+# [추가] 수동 업로드 포스터 저장 경로
+CUSTOM_POSTER_DIR = os.path.join(DATA_DIR, "custom_posters")
+os.makedirs(CUSTOM_POSTER_DIR, exist_ok=True)
 
 PARENT_VIDEO_DIR = "/volume2/video/GDS3/GDRIVE/VIDEO"
 PATH_MAP = {
@@ -2964,20 +2967,11 @@ def updater_ui():
                     </div>
                 </div>
                 <div class="sidebar">
-                    <div class="action-card">
-                        <div class="card-title"><i class="fas fa-search"></i> 스캔 및 매칭</div>
-                        <div class="btn-list">
-                            <button class="btn-meta" onclick="triggerTask('/api/match_air_foreign')"><i class="fas fa-bolt"></i> 외국 폴더 핀셋 매칭 (추천)</button>
-                            <button class="btn-scan" onclick="triggerTask('/api/scan_air_foreign')"><i class="fas fa-folder-open"></i> 외국 폴더 로컬 스캔</button>
-                            <button class="btn-scan" onclick="triggerTask('/rescan_broken')"><i class="fas fa-sync"></i> 전체 로컬 폴더 스캔</button>
-                            <button class="btn-meta" onclick="triggerTask('/retry_failed_metadata')"><i class="fas fa-redo"></i> 실패 메타데이터 재시도</button>
-                        </div>
-                    </div>
-
+                    <!--1. 개별 작품 수정 (통합 버전) -->
                     <div class="action-card">
                         <div class="card-title"><i class="fas fa-magic"></i> 개별 작품 수정</div>
                         <div class="input-group">
-                            <select id="fixCategorySelect" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 10px;">
+                            <select id="fixCategorySelect" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
                                 <option value="전체">전체 카테고리</option>
                                 <option value="영화">영화</option>
                                 <option value="국내TV">국내TV</option>
@@ -2989,12 +2983,34 @@ def updater_ui():
                             <input type="text" id="tmdbIdInput" placeholder="TMDB ID (예: tv:32863)">
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 5px;">
                                 <button class="btn-meta" onclick="manualMatchSimple()" style="justify-content: center;"><i class="fas fa-link"></i> 수동 연결</button>
-                                    <button class="btn-meta" onclick="manualMatchV2()" style="justify-content: center; background: var(--accent);"><i class="fas fa-sync-alt"></i> 수동 연결 V2</button>
+                                <button class="btn-meta" onclick="manualMatchV2()" style="justify-content: center; background: var(--accent);"><i class="fas fa-sync-alt"></i> 수동 연결 V2</button>
                                 <button class="btn-maintenance" onclick="fixMetadata()" style="justify-content: center;"><i class="fas fa-wand-magic-sparkles"></i> 자동 수정</button>
+                                <button class="btn-maintenance" onclick="resetAndRefresh()" style="justify-content: center; background: var(--danger);"><i class="fas fa-trash-alt"></i> 캐시삭제 & 재매칭</button>
                             </div>
                         </div>
                     </div>
 
+                    <!-- 2. 수동 포스터 변경 -->
+                    <div class="action-card">
+                        <div class="card-title"><i class="fas fa-image"></i> 수동 포스터 변경</div>
+                        <div class="input-group">
+                            <select id="posterCategorySelect" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
+                                <option value="전체">전체 카테고리</option>
+                                <option value="영화">영화</option>
+                                <option value="국내TV">국내TV</option>
+                                <option value="외국TV">외국TV</option>
+                                <option value="애니메이션">애니메이션</option>
+                                <option value="방송중">방송중</option>
+                            </select>
+                            <input type="text" id="posterNameInput" placeholder="작품 제목 (예: 미공개X파일)">
+                            <input type="file" id="posterFileInput" accept="image/*" style="background: #1e293b; padding: 8px;">
+                            <button class="btn-meta" onclick="uploadCustomPoster(this)" style="justify-content: center; margin-top: 5px; background: #10b981;">
+                                <i class="fas fa-upload"></i> 포스터 이미지 변경
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 3. 고급 도구 -->
                     <div class="action-card">
                         <div class="card-title"><i class="fas fa-tools"></i> 고급 도구</div>
                         <div class="btn-list">
@@ -3056,6 +3072,53 @@ def updater_ui():
                 if (confirm('자동 수정을 시도할까요?')) {
                     const resp = await fetch(`/fix_wrong_match?name=${encodeURIComponent(name)}`);
                     alert(await resp.text());
+                }
+            }
+
+            async function uploadCustomPoster(btn) {
+                try {
+                    const category = document.getElementById('posterCategorySelect').value;
+                    const name = document.getElementById('posterNameInput').value.trim();
+                    const fileInput = document.getElementById('posterFileInput');
+
+                    if (!name) { alert('작품 제목을 입력하세요.'); return; }
+                    if (!fileInput.files || fileInput.files.length === 0) { alert('변경할 이미지를 선택하세요.'); return; }
+
+                    if (!confirm(`'${name}'의 포스터를 외부 서버에 업로드하여 변경하시겠습니까?`)) return;
+
+                    const formData = new FormData();
+                    formData.append('category', category);
+                    formData.append('name', name);
+                    formData.append('file', fileInput.files[0]);
+
+                    // 버튼 상태 표시
+                    const originalText = btn.innerHTML;
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 업로드 중...';
+
+                    const resp = await fetch('/api/upload_custom_poster', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const data = await resp.json();
+                    if (data.status === 'success') {
+                        alert('성공적으로 변경되었습니다!');
+                        fileInput.value = '';
+                    } else {
+                        alert('실패: ' + data.message);
+                    }
+
+                    // 버튼 복구
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                    btn.innerHTML = originalText;
+
+                } catch (e) {
+                    alert('에러 발생: ' + e);
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
                 }
             }
 
@@ -3942,14 +4005,14 @@ def manual_match_simple():
 
 @app.route('/api/manual_match_v2')
 def manual_match_v2():
-    """TMDB 정보를 연결하고, 제목(tmdbTitle)까지 TMDB 공식 명칭으로 강제 업데이트하는 기능"""
+    """TMDB 정보를 연결하고, 제목(tmdbTitle)과 그룹명(cleanedName)까지 TMDB 공식 명칭으로 강제 업데이트하는 기능"""
     target_name = request.args.get('name')
     full_id = request.args.get('id')
 
     if not target_name or not full_id or ':' not in full_id:
         return "오류: 작품 키워드와 TMDB ID가 필요합니다.", 400
 
-    emit_ui_log(f"수동 연결 v2 시작: '{target_name}' -> {full_id} (제목 갱신 포함)", "info")
+    emit_ui_log(f"수동 연결 v2 시작: '{target_name}' -> {full_id} (제목 및 그룹명 갱신 포함)", "info")
     m_type, t_id = full_id.split(':')
 
     try:
@@ -3971,10 +4034,13 @@ def manual_match_v2():
         # 런타임 정보 수집 (아까 만든 로직 적용)
         runtime = d_resp.get('runtime')
 
+        # 공식 제목(TMDB)
+        tmdb_title = d_resp.get('title') or d_resp.get('name')
+
         conn = get_db()
         cursor = conn.cursor()
 
-        # 업데이트 데이터 (tmdbTitle 추가됨!)
+        # 업데이트 데이터 (tmdbTitle과 cleanedName 동시 갱신)
         up = (
             d_resp.get('poster_path'), yv, d_resp.get('overview'),
             d_resp.get('number_of_seasons'),
@@ -3983,8 +4049,9 @@ def manual_match_v2():
             director,
             json.dumps(actors, ensure_ascii=False),
             full_id,
-            d_resp.get('title') or d_resp.get('name'),  # <-- 1. 공식 제목 추가
-            runtime,  # <-- 2. 런타임 추가
+            tmdb_title,  # <-- 1. 공식 제목 (tmdbTitle)
+            runtime,  # <-- 2. 런타임
+            tmdb_title,  # <-- 3. [추가] cleanedName도 TMDB 이름으로 덮어씀
             f'%{target_name}%', f'%{target_name}%'
         )
 
@@ -3992,7 +4059,7 @@ def manual_match_v2():
             UPDATE series
             SET posterPath=?, year=?, overview=?, seasonCount=?,
                 genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
-                tmdbTitle=?, runtime=?  -- <-- 3. 제목과 런타임 컬럼 갱신
+                tmdbTitle=?, runtime=?, cleanedName=?  -- <-- cleanedName 추가됨
             WHERE name LIKE ? OR cleanedName LIKE ?
         """, up)
 
@@ -4019,23 +4086,23 @@ def view_conan_data():
                 conn = get_db()
                 # 쿼리 파라미터 방식을 사용하여 SQL 인젝션을 방지하고 안정성을 높입니다.
 
-                # query = """
-                #     SELECT path, name, cleanedName, category, posterPath, tmdbId, tmdbTitle
-                #     FROM series
-                #     WHERE (name LIKE ? OR (path LIKE ? AND category='animations_all'))
-                #     ORDER BY path ASC
-                # """
-
                 query = """
                     SELECT path, name, cleanedName, category, posterPath, tmdbId, tmdbTitle
                     FROM series
-                    WHERE name LIKE ?
+                    WHERE (name LIKE ? OR (path LIKE ? AND category='animations_all'))
                     ORDER BY path ASC
                 """
 
-                search_term = '%본청 형사의 사랑이야기%'
-                # rows = conn.execute(query, (search_term, search_term)).fetchall()
-                rows = conn.execute(query, (search_term,)).fetchall()
+                # query = """
+                #     SELECT path, name, cleanedName, category, posterPath, tmdbId, tmdbTitle
+                #     FROM series
+                #     WHERE name LIKE ? AND category='animations_all'
+                #     ORDER BY path ASC
+                # """
+
+                search_term = '%명탐정 코난%'
+                rows = conn.execute(query, (search_term, search_term)).fetchall()
+                # rows = conn.execute(query, (search_term,)).fetchall()
 
                 data_list = []
                 for row in rows:
@@ -4221,6 +4288,83 @@ def api_reset_and_refresh():
     # API 요청에는 즉시 응답하고, 무거운 작업은 백그라운드로 넘깁니다.
     threading.Thread(target=run_reset_task, daemon=True).start()
     return jsonify({"status": "success", "message": f"'{target_name}' 데이터 초기화 작업이 시작되었습니다. 로그 창을 확인하세요."})
+
+@app.route('/api/upload_custom_poster', methods=['POST'])
+def upload_custom_poster():
+    """ImgBB를 사용하여 이미지를 외부 서버에 업로드하고 DB를 업데이트합니다."""
+    try:
+        # 무료 API 키 (직접 발급받아 교체하는 것을 권장합니다: https://api.imgbb.com/)
+        IMGBB_API_KEY = "785b021132b54c5f3191d4f48ee3093d"
+
+        if 'file' not in request.files:
+            return jsonify({"status": "error", "message": "파일이 없습니다."}), 400
+
+        file = request.files['file']
+        category = request.form.get('category', '전체')
+        name = request.form.get('name', '').strip()
+
+        if not name:
+            return jsonify({"status": "error", "message": "작품 제목을 입력하세요."}), 400
+
+        # 1. ImgBB API로 이미지 전송
+        img_data = file.read()
+        files = {'image': img_data}
+        params = {'key': IMGBB_API_KEY}
+
+        log("UPLOAD", f"외부 서버(ImgBB) 업로드 시작: {name}")
+        response = requests.post("https://api.imgbb.com/1/upload", params=params, files=files, timeout=30)
+        res_json = response.json()
+
+        if response.status_code != 200 or not res_json.get('success'):
+            error_msg = res_json.get('error', {}).get('message', '알 수 없는 오류')
+            return jsonify({"status": "error", "message": f"외부 서버 업로드 실패: {error_msg}"}), 500
+
+        # 2. 업로드된 이미지의 URL 추출
+        poster_url = res_json['data']['url']
+        log("UPLOAD", f"업로드 완료 URL: {poster_url}")
+
+        # 3. DB 업데이트
+        conn = get_db()
+        cursor = conn.cursor()
+        search_pattern = f"%{name}%"
+
+        cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
+        internal_cat = cat_map.get(category)
+
+        if internal_cat:
+            cursor.execute("""
+                UPDATE series
+                SET posterPath = ?
+                WHERE category = ? AND (name LIKE ? OR cleanedName LIKE ?)
+            """, (poster_url, internal_cat, search_pattern, search_pattern))
+        else:
+            cursor.execute("""
+                UPDATE series
+                SET posterPath = ?
+                WHERE name LIKE ? OR cleanedName LIKE ?
+            """, (poster_url, search_pattern, search_pattern))
+
+        updated_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if updated_count > 0:
+            build_all_caches()
+            emit_ui_log(f"수동 포스터(외부) 적용 완료: '{name}'", "success")
+            return jsonify({"status": "success", "message": "포스터가 성공적으로 변경되었습니다.", "url": poster_url})
+        else:
+            return jsonify({"status": "error", "message": "DB에서 대상을 찾을 수 없습니다."}), 404
+
+    except Exception as e:
+        log("UPLOAD_ERROR", str(e))
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# --- [추가] 수동 포스터 변경 라우트 ---
+@app.route('/custom_poster/<filename>')
+def serve_custom_poster(filename):
+    """업로드된 수동 포스터 이미지를 서빙합니다."""
+    return send_from_directory(CUSTOM_POSTER_DIR, filename)
+
 
 def background_init_tasks():
     build_all_caches()
