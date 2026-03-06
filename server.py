@@ -1291,7 +1291,6 @@ def get_series_detail_api():
             query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path = ? OR e.series_path = ?"
             rows = conn.execute(query, (db_path, nfd(db_path))).fetchall()
         else:
-            # [수정] TMDB ID가 같더라도 cleanedName이 다른 경우(극장판 등)는 제외합니다.
             if t_id:
                 query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE tmdbId = ? AND cleanedName = ?)"
                 q_params = [t_id, c_name]
@@ -1318,26 +1317,32 @@ def get_series_detail_api():
                 s_weight = 1
                 en = 1
 
-                # 🔥 [시즌 분리 핵심 로직] 🔥
-                # DB 구조상 ep_path는 '전체 파일 경로'이므로, 부모 폴더는 [-2]입니다!
                 path_parts = ep_path.split('/')
                 parent_folder = path_parts[-2] if len(path_parts) >= 2 else ""
 
-                # 극장판/스페셜 판단용 전체 이름
                 full_name_upper = f"{ep_path}/{ep_title}".upper()
+                combined_name_nfc = nfc(parent_folder + " " + ep_title)
 
-                # 1. 극장판 / 스페셜 / OVA 판단 (0순위 가로채기)
-                if any(kw in full_name_upper for kw in ["극장판", "MOVIE"]):
+                # --- [엄격한 특별 분기: 애니메이션 카테고리 + 코난 미공개X파일 한정] ---
+                if cat == 'animations_all' and "코난" in combined_name_nfc and "미공개X파일" in combined_name_nfc:
+                    # 파일명 또는 폴더명에서 '미공개X파일 1', '미공개X파일3' 등의 숫자 추출
+                    xfile_match = re.search(r'(?i)미공개\s*X\s*파일\s*(\d+)', combined_name_nfc)
+                    if xfile_match:
+                        season_num = int(xfile_match.group(1))
+                        s_disp = f"미공개X파일 {season_num}"
+                        s_weight = 800 + season_num  # 일반 시즌(1~100)과 스페셜(999) 사이에 배치
+                    else:
+                        s_disp = "미공개X파일"
+                        s_weight = 800
+                # ------------------------------------------------------------------------
+                elif any(kw in full_name_upper for kw in ["극장판", "MOVIE"]):
                     s_disp = "극장판"
                     s_weight = 1000
-                elif any(kw in full_name_upper for kw in ["스페셜", "OVA", "OAD", "미공개", "대괴수", "수학여행", "실종사건", "에피소드 원"]):
+                elif any(kw in full_name_upper for kw in ["스페셜", "OVA", "OAD", "대괴수", "수학여행", "실종사건", "에피소드 원"]):
                     s_disp = "스페셜"
                     s_weight = 999
                 else:
-                    # 2. 정규 시즌 판단 (부모 폴더명 기준)
                     clean_folder = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', parent_folder).strip()
-
-                    # 폴더명에서 "11기", "시즌1" 등의 마커 찾기
                     season_match = re.search(r'(?i)(?:시즌|Season|S)\s*(\d+)|(\d+)\s*(?:기|시즌)', clean_folder)
 
                     if season_match:
@@ -1345,14 +1350,12 @@ def get_series_detail_api():
                         s_disp = f"{season_num}시즌"
                         s_weight = season_num
                     else:
-                        # 폴더명 자체가 숫자일 때
                         folder_num_match = re.search(r'^(\d+)$', clean_folder)
                         if folder_num_match:
                             season_num = int(folder_num_match.group(1))
                             s_disp = f"{season_num}시즌"
                             s_weight = season_num
                         else:
-                            # 마커가 없다면 작품명을 지우고 남은 텍스트(예: 미공개X파일)를 사용
                             base_c_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', c_name).strip()
                             short_name = clean_folder.replace(base_c_name, '').strip()
 
@@ -1364,12 +1367,10 @@ def get_series_detail_api():
                                 s_disp = "1시즌"
                                 s_weight = 1
 
-                # 3. 고화질 버전 적용
                 if any(k in ep_path.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"]):
                     s_disp = f"고화질 ({s_disp})"
                     s_weight += 900
 
-                # 4. 에피소드(회차) 번호 추출
                 ep_match = re.search(r'(?i)(?:[.\s_-]E|EP)\s*(\d+)|(\d+)\s*(?:화|회)', ep_title)
                 if ep_match:
                     en = int(ep_match.group(1) or ep_match.group(2))
@@ -1385,10 +1386,16 @@ def get_series_detail_api():
                 "position": d.get('position') or 0, "duration": d.get('duration') or 0, "runtime": d.get('runtime')
             })
 
-        # 가중치(s_weight) 정렬 후 회차 정렬
         sorted_eps = sorted(all_refined_eps, key=lambda x: (x['sort_weight'], x['episode_number'] or 0))
-        seasons_map = {}
+
+        # 중복 에피소드 방어 로직 (id 기준 고유값만 남김)
+        unique_eps_dict = {}
         for ep in sorted_eps:
+            unique_eps_dict[ep['id']] = ep
+        final_sorted_eps = list(unique_eps_dict.values())
+
+        seasons_map = {}
+        for ep in final_sorted_eps:
             seasons_map.setdefault(ep['display_season'], []).append(ep)
 
         final_season_count = len(seasons_map)
@@ -1400,7 +1407,7 @@ def get_series_detail_api():
             **series_data,
             "name": f"{display_name}{tag_str}".strip(),
             "seasonCount": final_season_count,
-            "episodes": sorted_eps, "movies": sorted_eps, "seasons": seasons_map,
+            "episodes": final_sorted_eps, "movies": final_sorted_eps, "seasons": seasons_map,
             "genreIds": json.loads(series_data.get('genreIds', '[]')) if series_data.get('genreIds') else [],
             "genreNames": json.loads(series_data.get('genreNames', '[]')) if series_data.get('genreNames') else [],
             "actors": json.loads(series_data.get('actors', '[]')) if series_data.get('actors') else []
