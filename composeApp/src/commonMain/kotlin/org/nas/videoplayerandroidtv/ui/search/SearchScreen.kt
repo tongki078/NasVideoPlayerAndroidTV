@@ -316,8 +316,7 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
                     val excludeSubCats = listOf("영화", "제목", "기타", "새 폴더")
                     
                     if (subCat.isNotEmpty() && !excludeSubCats.contains(subCat)) {
-                        val displaySubCat = if (subCat == "라프텔 애니메이션") "애니" else subCat
-                        "$mainCat > $displaySubCat"
+                        "$mainCat > $subCat"
                     } else {
                         mainCat
                     }
