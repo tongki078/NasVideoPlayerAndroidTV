@@ -366,11 +366,18 @@ def clean_title_complex(title, full_path=None, base_path=None):
     extracted_year = year_match.group().strip('()') if year_match else None
 
     t_low = t_orig.lower().replace(" ", "")
-    is_movie = any(x in t_low for x in ['극장판', 'movie', 'themovie'])
+    is_movie = any(x in t_low for x in ['극장판', 'movie', 'themovie', '劇場版', 'thelast'])
 
     series_name = ""
     if full_path:
         parts = [p.strip() for p in full_path.replace('\\', '/').split('/') if p.strip()]
+
+        # [수정] Specials 폴더 감지 로직
+        is_in_special = any(x in full_path.lower() for x in ['specials', 'special', '특전'])
+
+        # 1. Specials 폴더 안의 '극장판' 키워드가 있는 파일은 파일명 자체를 시리즈명으로!
+        if is_in_special and is_movie:
+            series_name = os.path.splitext(t_orig)[0]
         SKIP_DIRS = {
             '애니메이션', '일본애니메이션', '라프텔', '시리즈', '기타', 'video', 'volume1', 'volume2',
             'movies', 'animations_all', 'koreantv', 'foreigntv', 'air', 'gdrive', 'nas', 'share',
@@ -380,14 +387,17 @@ def clean_title_complex(title, full_path=None, base_path=None):
             'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u',
             'v', 'w', 'x', 'y', 'z'
         }
+        # [수정] Specials 폴더 안에 있다면 폴더명 대신 파일명을 시리즈명으로 사용 (극장판 개별 분리용)
+        is_in_special = any(x in full_path.lower() for x in ['specials', 'special', '특전'])
 
-        for p in reversed(parts[:-1]):
-            p_clean = p.lower().replace(" ", "")
-            if p_clean in SKIP_DIRS or len(p_clean) <= 1: continue
-            if any(p_clean.endswith(ext) for ext in VIDEO_EXTS): continue
-            if re.search(r'(?i)season\s*\d+|시즌\s*\d+|part\s*\d+|s\d+', p_clean): continue
-            series_name = p
-            break
+        if not series_name:
+            for p in reversed(parts[:-1]):
+                p_clean = p.lower().replace(" ", "")
+                if p_clean in SKIP_DIRS or len(p_clean) <= 1: continue
+                if any(p_clean.endswith(ext) for ext in VIDEO_EXTS): continue
+                if re.search(r'(?i)season\s*\d+|시즌\s*\d+|part\s*\d+|s\d+', p_clean): continue
+                series_name = p
+                break
 
     if not series_name:
         series_name = os.path.splitext(t_orig)[0]
@@ -409,6 +419,82 @@ def clean_title_complex(title, full_path=None, base_path=None):
 
     return series_name.strip(), extracted_year  # [수정] 추출된 연도 반환
 
+@app.route('/api/repair/naruto_movie_liberation')
+def naruto_movie_liberation():
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        # 1. Specials 폴더 안에 있는 나루토 에피소드들을 모두 찾습니다.
+        query = "SELECT id, title, series_path FROM episodes WHERE series_path LIKE '%나루토%질풍전%Specials%'"
+        eps = conn.execute(query).fetchall()
+
+        count = 0
+        for ep in eps:
+            ep_id = ep['id']
+            # 파일명을 기반으로 새로운 독립적인 시리즈 경로를 생성합니다.
+            # 예: animations_all/나루토_극장판_파일명.mkv
+            new_series_path = f"animations_all/극장판_{ep['title']}"
+
+            # 2. series 테이블에 새로운 독립 레코드를 생성합니다.
+            # 제목은 파일명에서 일본어/영문을 최대한 활용합니다.
+            cursor.execute("""
+                INSERT OR REPLACE INTO series (path, category, name, cleanedName)
+                VALUES (?, 'animations_all', ?, ?)
+            """, (new_series_path, ep['title'], ep['title']))
+
+            # 3. 에피소드 테이블의 series_path를 새로운 독립 경로로 업데이트합니다.
+            # 이제 본편 '나루토 질풍전' 그룹과의 연결고리가 완전히 끊어집니다.
+            cursor.execute("UPDATE episodes SET series_path = ? WHERE id = ?", (new_series_path, ep_id))
+            count += 1
+
+        conn.commit()
+        conn.close()
+
+        # 메모리 캐시 강제 갱신 (앱에 즉시 반영)
+        build_all_caches()
+
+        return f"성공! {count}개의 나루토 극장판을 본편 그룹에서 분리하여 독립시켰습니다. 이제 검색 화면에 각각 나타날 것입니다."
+    except Exception as e:
+        return f"에러 발생: {str(e)}"
+
+@app.route('/api/repair/naruto_metadata_recovery')
+def naruto_metadata_recovery():
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        # 1. 에피소드가 연결되지 않은(고립된) 나루토 시리즈 중 매칭 정보가 있는 것을 찾습니다.
+        # (이것이 사용자님이 이전에 수동 매칭했던 그 데이터입니다)
+        query = """
+            SELECT tmdbId, tmdbTitle, posterPath, year, overview, director, actors, genreNames, name
+            FROM series
+            WHERE (name LIKE '%나루토%' OR tmdbTitle LIKE '%나루토%')
+              AND tmdbId IS NOT NULL
+              AND path NOT IN (SELECT DISTINCT series_path FROM episodes)
+        """
+        orphans = conn.execute(query).fetchall()
+
+        recovered_count = 0
+        for old in orphans:
+            # 2. 현재 에피소드가 연결되어 있는 '독립된' 나루토 극장판 시리즈를 찾아서
+            #    기존 정보를 덮어씌웁니다. (이름이 유사한 것을 매칭)
+            cursor.execute("""
+                UPDATE series
+                SET tmdbId=?, tmdbTitle=?, posterPath=?, year=?, overview=?, director=?, actors=?, genreNames=?, failed=0
+                WHERE (name LIKE ? OR cleanedName LIKE ?)
+                  AND tmdbId IS NULL
+            """, (old['tmdbId'], old['tmdbTitle'], old['posterPath'], old['year'],
+                  old['overview'], old['director'], old['actors'], old['genreNames'],
+                  f"%{old['tmdbTitle']}%", f"%{old['tmdbTitle']}%"))
+
+            recovered_count += cursor.rowcount
+
+        conn.commit()
+        conn.close()
+        build_all_caches()
+
+        return f"복구 성공! 고립되었던 {recovered_count}건의 나루토 메타데이터를 새로운 독립 경로로 이전 완료했습니다."
+    except Exception as e:
+        return f"복구 중 에러: {str(e)}"
 
 def extract_episode_numbers(full_path):
     n = nfc(full_path)
@@ -1044,14 +1130,14 @@ def fetch_metadata_async(force_all=False, target_name=None):
                             if EN:
                                 ei = info['seasons_data'].get(f"{sn}_{EN}")
                                 if ei:
-                                    still_url = f"https://image.tmdb.org/t/p/original{ei.get('still_path')}" if ei.get(
+                                    still_url = f"https://image.tmdb.org/t/p/w500{ei.get('still_path')}" if ei.get(
                                         'still_path') else None
                                     ep_batch.append(
                                         (ei.get('overview'), ei.get('air_date'), sn, EN, still_url, ep_row['id']))
                         if ep_batch:
-                            # COALESCE를 제거하여 새로운 정보(NULL 포함)로 강제 갱신합니다.
+                            # COALESCE를 사용하여, 새로운 이미지(still_url)가 NULL이면 기존의 추출 주소를 유지하도록 합니다.
                             cursor.executemany(
-                                'UPDATE episodes SET overview=?, air_date=?, season_number=?, episode_number=?, thumbnailUrl=? WHERE id=?',
+                                'UPDATE episodes SET overview=?, air_date=?, season_number=?, episode_number=?, thumbnailUrl=COALESCE(?, thumbnailUrl) WHERE id=?',
                                 ep_batch)
 
                     # [추가] 매칭 성공 로그 출력 (상세 정보 포함)
@@ -1381,23 +1467,29 @@ def get_series_detail_api():
                         season_num = int(season_match.group(1) or season_match.group(2))
                         s_disp = f"{season_num}시즌"
                         s_weight = season_num
+                    # 2. 폴더명이 그냥 숫자인 경우 (예: "01", "04")
+                    elif re.search(r'^\d{1,2}$', clean_folder):
+                        season_num = int(clean_folder)
+                        s_disp = f"{season_num}시즌"
+                        s_weight = season_num
+                    # 3. 그 다음 특수 키워드를 체크합니다 (범위를 파일명+폴더명으로 축소)
+                    elif any(kw in (parent_folder + ep_title).upper() for kw in ["극장판", "MOVIE"]):
+                        s_disp = "극장판"
+                        s_weight = 1000
+                    elif any(kw in (parent_folder + ep_title).upper() for kw in ["스페셜", "OVA", "OAD", "특전"]):
+                        s_disp = "스페셜"
+                        s_weight = 999
                     else:
-                        folder_num_match = re.search(r'^(\d+)$', clean_folder)
-                        if folder_num_match:
-                            season_num = int(folder_num_match.group(1))
-                            s_disp = f"{season_num}시즌"
-                            s_weight = season_num
+                        # 기존의 부제 처리 로직 유지
+                        base_c_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', c_name).strip()
+                        short_name = clean_folder.replace(base_c_name, '').strip()
+                        if short_name:
+                            s_disp = short_name
+                            num_match = re.search(r'\d+', short_name)
+                            s_weight = int(num_match.group(0)) if num_match else 900
                         else:
-                            base_c_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', c_name).strip()
-                            short_name = clean_folder.replace(base_c_name, '').strip()
-
-                            if short_name:
-                                s_disp = short_name
-                                num_match = re.search(r'\d+', short_name)
-                                s_weight = int(num_match.group(0)) if num_match else 900
-                            else:
-                                s_disp = "1시즌"
-                                s_weight = 1
+                            s_disp = "1시즌"
+                            s_weight = 1
 
                 if any(k in ep_path.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"]):
                     s_disp = f"고화질 ({s_disp})"
@@ -1432,12 +1524,36 @@ def get_series_detail_api():
 
         final_season_count = len(seasons_map)
 
-        display_name = c_name if c_name else nfc(series_data.get('tmdbTitle') or series_data.get('name'))
-        tag_str = " [더빙]" if is_dub and "[더빙]" not in display_name else " [자막]" if is_sub and "[자막]" not in display_name and "(자막)" not in display_name else ""
+        # --- [수정 후: 제목 일관성 유지 로직] ---
+        # 1. 원본 파일명/폴더명에서 태그를 먼저 추출하여 보존합니다.
+        orig_raw_name = nfc(series_data.get('name', ''))
+        tag = ""
+        if "더빙" in nfc(db_path + orig_raw_name).lower():
+            tag = "더빙"
+        elif "자막" in nfc(db_path + orig_raw_name).lower():
+            tag = "자막"
+
+        # 2. 기본 제목을 결정합니다.
+        base_title = c_name if c_name else nfc(series_data.get('tmdbTitle') or series_data.get('name'))
+
+        # 3. 특수 대작(나루토 등)의 경우 폴더명 정보를 포함합니다. (리스트와 동일한 로직)
+        is_special = any(k in base_title for k in SPECIAL_GRANULAR_GROUPS)
+        sub_folder = ""
+        if is_special:
+            parts = db_path.split('/')
+            sub_folder = parts[1] if len(parts) > 2 else ""
+            if sub_folder and sub_folder not in base_title:
+                base_title = f"{sub_folder} > {base_title}"
+
+        # 4. 최종 이름을 조립합니다. (이미 태그가 있다면 중복 방지)
+        if tag and f"[{tag}]" not in base_title:
+            final_display_name = f"{base_title} [{tag}]"
+        else:
+            final_display_name = base_title
 
         response_data = {
             **series_data,
-            "name": f"{display_name}{tag_str}".strip(),
+            "name": final_display_name.strip(), # 이 값이 앱의 제목이 됩니다.
             "seasonCount": final_season_count,
             "episodes": final_sorted_eps, "movies": final_sorted_eps, "seasons": seasons_map,
             "genreIds": json.loads(series_data.get('genreIds', '[]')) if series_data.get('genreIds') else [],
@@ -1492,7 +1608,7 @@ def search_videos():
         # 4. 그룹화 및 정렬 (특수 대상만 폴더별로 묶음)
         query += """
             GROUP BY category, tmdbId, cleanedName,
-                (CASE WHEN (cleanedName LIKE '%원피스%' OR cleanedName LIKE '%명탐정 코난%')
+                (CASE WHEN (cleanedName LIKE '%원피스%' OR cleanedName LIKE '%명탐정 코난%' OR cleanedName LIKE '%나루토%')
                       THEN (CASE WHEN path LIKE '%/%/%' THEN SUBSTR(path, INSTR(path, '/') + 1, INSTR(SUBSTR(path, INSTR(path, '/') + 1), '/') - 1) ELSE '' END)
                       ELSE '' END),
                 CASE WHEN (path LIKE '%더빙%' OR name LIKE '%더빙%') THEN '더빙' WHEN (path LIKE '%자막%' OR name LIKE '%자막%') THEN '자막' ELSE '' END
@@ -1732,7 +1848,7 @@ def run_apply_thumbnails():
                                     still = info['seasons_data'][key].get('still_path')
                                     if still:
                                         # 최상의 화질을 위해 original 사용
-                                        new_url = f"https://image.tmdb.org/t/p/original{still}"
+                                        new_url = f"https://image.tmdb.org/t/p/w500{still}"
                                         ep_batch.append((new_url, ep['id']))
 
                     # --- [CASE 2: 영화] 영화 배경(Backdrop) 이미지 적용 ---
@@ -3184,6 +3300,24 @@ def updater_ui():
                 </div>
                 <div class="action-card">
                 <div class="sidebar">
+                <!-- 특정 폴더 정밀 스캔 및 갱신 -->
+<div class="action-card">
+    <div class="card-title"><i class="fas fa-folder-search"></i> 특정 폴더 정밀 스캔</div>
+    <div class="input-group">
+        <select id="scanTargetCategory" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
+            <option value="movies">영화 (movies)</option>
+            <option value="koreantv">국내TV (koreantv)</option>
+            <option value="foreigntv">외국TV (foreigntv)</option>
+            <option value="animations_all" selected>애니메이션 (animations_all)</option>
+            <option value="air">방송중 (air)</option>
+        </select>
+        <input type="text" id="scanTargetFolder" placeholder="스캔할 폴더명 (예: 원피스)">
+        <button class="btn-meta" onclick="scanTargetedFolder()" style="justify-content: center; background: var(--primary); margin-top: 5px;">
+            <i class="fas fa-search-plus"></i> 폴더 스캔 & 메타데이터 갱신
+        </button>
+        <p style="font-size: 11px; color: var(--text-dim); margin-top: 5px;">* 서버의 실제 폴더명을 입력하세요. 해당 폴더만 다시 읽고 정보를 가져옵니다.</p>
+    </div>
+</div>
                     <!--1. 개별 작품 수정 (통합 버전) -->
                     <div class="action-card">
                         <div class="card-title"><i class="fas fa-magic"></i> 개별 작품 수정</div>
@@ -3249,6 +3383,27 @@ def updater_ui():
         </div>
 
         <script>
+            async function scanTargetedFolder() {
+                const category = document.getElementById('scanTargetCategory').value;
+                const folder = document.getElementById('scanTargetFolder').value.trim();
+
+                if (!folder) {
+                    alert('스캔할 폴더명을 입력하세요.');
+                    return;
+                }
+
+                if (confirm(`'${category}' 카테고리의 '${folder}' 폴더를 정밀 스캔하고 메타데이터를 갱신하시겠습니까?`)) {
+                    try {
+                        const resp = await fetch(`/api/admin/scan_targeted?category=${category}&folder=${encodeURIComponent(folder)}`);
+                        const data = await resp.json();
+                        alert(data.message);
+                        // 상단 로그 창으로 이동
+                        document.getElementById('terminalBox').scrollIntoView({ behavior: 'smooth' });
+                    } catch (e) {
+                        alert('요청 중 오류 발생: ' + e);
+                    }
+                }
+            }
             async function manualMatchTargeted() {
                 const name = document.getElementById('fixNameInput').value.trim();
                 const id = document.getElementById('tmdbIdInput').value.trim();
@@ -5241,162 +5396,334 @@ def force_clear_one_piece_stills():
     return jsonify({"status": "success", "message": "원피스 썸네일 제거 작업이 백그라운드에서 시작되었습니다."})
 
 
-@app.route('/api/debug/one_piece_raw_list')
-def debug_one_piece_raw_list():
-    """폴더 내 모든 데이터를 가공 없이 조회 (번호 파싱 오류 확인용)"""
-    try:
-        conn = get_db()
-        # JOIN과 번호 제한을 빼고 해당 경로의 모든 에피소드 조회
-        query = """
-            SELECT id, series_path, title, episode_number, thumbnailUrl
-            FROM episodes
-            WHERE series_path LIKE '%(더빙) 원피스 1기%'
-            ORDER BY title ASC
-        """
-        rows = conn.execute(query).fetchall()
-        conn.close()
-        return jsonify({
-            "total_found": len(rows),
-            "data": [dict(row) for row in rows]
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
+@app.route('/api/repair/naruto_fix')
+def repair_naruto_fix():
+    # 나루토 질풍전의 실제 절대 경로 (쿼리 결과의 경로를 기반으로 설정)
+    base_video_path = "/volume2/video/GDS3/GDRIVE/VIDEO/일본 애니메이션"
+    target_dir = os.path.join(base_video_path, "시리즈/나/나루토 질풍전 (2007)")
 
-@app.route('/api/debug/one_piece_1_to_8')
-def debug_one_piece_1_to_8():
-    """일본 애니메이션 > 라프텔 > (더빙) 원피스 1기 중 1~8화만 정밀 조회합니다."""
+    if not os.path.exists(nfc(target_dir)):
+        return f"경로를 찾을 수 없습니다: {target_dir}"
+
+    conn = get_db()
+    cursor = conn.cursor()
+    added_count = 0
+
+    # os.walk로 나루토 폴더만 정밀 탐색
+    for root, dirs, files in os.walk(nfc(target_dir)):
+        for file in files:
+            if file.lower().endswith(VIDEO_EXTS):
+                full_path = nfc(os.path.join(root, file))
+                mid = hashlib.md5(full_path.encode()).hexdigest()
+
+                # DB에 있는지 확인
+                exists = conn.execute("SELECT 1 FROM episodes WHERE id = ?", (mid,)).fetchone()
+                if not exists:
+                    rel = nfc(os.path.relpath(full_path, base_video_path))
+                    spath = f"animations_all/{rel}"
+                    name = os.path.splitext(file)[0]
+
+                    # 제목 정제 및 시리즈/에피소드 추가
+                    ct, yr = clean_title_complex(name, full_path=full_path, base_path=base_video_path)
+                    cursor.execute(
+                        'INSERT OR IGNORE INTO series (path, category, name, cleanedName, yearVal) VALUES (?, ?, ?, ?, ?)',
+                        (spath, "animations_all", name, ct, yr))
+
+                    sn, en = extract_episode_numbers(full_path)
+                    cursor.execute(
+                        'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl, season_number, episode_number) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                        (mid, spath, file, f"/video_serve?type=anim_all&path={urllib.parse.quote(rel)}",
+                         f"/thumb_serve?type=anim_all&id={mid}&path={urllib.parse.quote(rel)}", sn, en))
+                    added_count += 1
+
+    conn.commit()
+    conn.close()
+    build_all_caches()  # 메모리 캐시 갱신
+    return f"나루토 복구 완료: {added_count}개의 에피소드가 새로 추가되었습니다."
+
+
+@app.route('/api/debug/naruto_check')
+def debug_naruto_check():
+    conn = get_db()
+    # 1. '나루토' 키워드가 들어간 모든 시리즈와 해당 에피소드 개수 파악
+    rows = conn.execute("""
+        SELECT s.path, s.name, s.cleanedName, s.category,
+               (SELECT COUNT(*) FROM episodes WHERE series_path = s.path) as ep_count
+        FROM series s
+        WHERE s.name LIKE '%나루토%' OR s.cleanedName LIKE '%나루토%'
+    """).fetchall()
+
+    # 2. 에피소드 테이블에서 '나루토' 파일들이 어떤 경로로 잡혀있는지 샘플링
+    eps = conn.execute("""
+        SELECT series_path, title, season_number, episode_number
+        FROM episodes
+        WHERE title LIKE '%나루토%' OR series_path LIKE '%나루토%'
+        LIMIT 100
+    """).fetchall()
+
+    conn.close()
+    return jsonify({
+        "series_list": [dict(r) for r in rows],
+        "episode_samples": [dict(e) for e in eps]
+    })
+
+@app.route('/api/debug/naruto_full_scan')
+def debug_naruto_full_scan():
     try:
         conn = get_db()
-        # 정확히 '(더빙) 원피스 1기' 폴더 경로를 포함하고 에피소드가 1~10번인 것을 찾습니다.
+        # 1. episodes 테이블에서 '나루토' 관련 모든 파일 찾기
         query = """
             SELECT
-                e.id,
-                s.name,
-                e.series_path,
-                e.title,
-                e.thumbnailUrl,
+                e.title as file_name,
+                e.series_path as db_series_path,
+                e.season_number,
                 e.episode_number,
-                s.tmdbId,
-                s.tmdbTitle,
                 s.cleanedName,
-                s.yearVal
+                s.tmdbId,
+                s.category
             FROM episodes e
-            JOIN series s ON e.series_path = s.path
-            WHERE e.series_path LIKE 'animations_all/라프텔/%'
-              AND e.series_path LIKE '%(더빙) 원피스 1기%'
-              AND e.episode_number BETWEEN 1 AND 10
-            ORDER BY e.episode_number ASC
+            LEFT JOIN series s ON e.series_path = s.path
+            WHERE e.title LIKE '%나루토%'
+               OR e.series_path LIKE '%나루토%'
+            ORDER BY e.series_path ASC
         """
         rows = conn.execute(query).fetchall()
         conn.close()
 
         result = [dict(row) for row in rows]
+
+        # 통계 요약
+        summary = {}
+        for r in result:
+            path = r['db_series_path']
+            summary[path] = summary.get(path, 0) + 1
+
         return jsonify({
-            "target": "원피스 더빙 1기 1-10화",
-            "count": len(result),
+            "total_count": len(result),
+            "paths_summary": summary,  # 어떤 경로에 몇 개씩 묶여 있는지 요약
             "data": result
         })
     except Exception as e:
         return jsonify({"error": str(e)})
 
-@app.route('/api/debug/one_piece_1_to_8_null_thumb')
-def debug_one_piece_1_to_8_null_thumb():
-    """원피스 1~8화의 썸네일을 DB에서 NULL로 강제 초기화합니다."""
+
+@app.route('/api/debug/trace_naruto_path')
+def debug_trace_naruto_path():
     try:
         conn = get_db()
-        cursor = conn.cursor()
-        # 동일한 필터 조건을 사용하여 썸네일 URL을 NULL로 업데이트
+        # 1, 2, 4 시즌 경로 패턴이 있는 에피소드를 찾고, 현재 어떤 그룹(series)에 속해있는지 확인
         query = """
-            UPDATE episodes
-            SET thumbnailUrl = NULL
-            WHERE series_path LIKE 'animations_all/라프텔/%'
-              AND series_path LIKE '%(더빙) 원피스 1기%'
-              AND episode_number BETWEEN 1 AND 8
-        """
-        cursor.execute(query)
-        updated_count = cursor.rowcount
-        conn.commit()
-        conn.close()
-
-        # 변경사항 반영을 위해 캐시 갱신
-        build_all_caches()
-
-        return jsonify({
-            "status": "success",
-            "message": f"원피스 1~8화 총 {updated_count}건의 썸네일이 초기화되었습니다.",
-            "target": "원피스 더빙 1기 1-8화"
-        })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
-@app.route('/api/debug/fix_one_piece_dub_numbers')
-def fix_one_piece_dub_numbers():
-    """
-    일본 애니메이션 > 라프텔 폴더 내의 '(더빙) 원피스' 시리즈만 대상으로
-    null인 에피소드 번호를 파일명에서 분석해 강제로 채워줍니다.
-    """
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-
-        # 1. 대상 조회: 라프텔 폴더 내의 (더빙) 원피스 항목 중 번호가 없는 것들
-        # series_path에 파일의 전체 경로가 포함되어 있으므로 이를 활용합니다.
-        query = """
-            SELECT id, title, series_path
-            FROM episodes
-            WHERE series_path LIKE 'animations_all/라프텔/%'
-              AND (series_path LIKE '%(더빙) 원피스%' OR title LIKE '%(더빙) 원피스%')
-              AND episode_number IS NULL
+            SELECT e.series_path, s.cleanedName, s.category, COUNT(*) as file_count,
+                   MIN(e.title) as sample_file, MIN(e.videoUrl) as sample_url
+            FROM episodes e
+            LEFT JOIN series s ON e.series_path = s.path
+            WHERE e.videoUrl LIKE '%Season%01%'
+               OR e.videoUrl LIKE '%Season%02%'
+               OR e.videoUrl LIKE '%Season%04%'
+               OR e.title LIKE '%Naruto%'
+            GROUP BY e.series_path, s.cleanedName, s.category
         """
         rows = conn.execute(query).fetchall()
-
-        update_batch = []
-        for r in rows:
-            # DB에 저장된 정보를 조합해 가상의 전체 경로 생성
-            full_path_context = f"{r['series_path']}"
-
-            # 서버에 이미 정의된 extract_episode_numbers 함수를 그대로 재사용합니다.
-            # 이 함수는 '.E09.' 같은 패턴을 인식하여 시즌(sn)과 회차(en)를 반환합니다.
-            sn, en = extract_episode_numbers(full_path_context)
-
-            if en is not None:
-                # 추출된 번호가 있다면 업데이트 목록에 추가
-                update_batch.append((sn, en, r['id']))
-
-        # 2. DB에 일괄 반영
-        if update_batch:
-            cursor.executemany(
-                "UPDATE episodes SET season_number = ?, episode_number = ? WHERE id = ?",
-                update_batch
-            )
-            conn.commit()
-
         conn.close()
 
-        # 변경된 데이터를 앱에 반영하기 위해 캐시 갱신 함수 호출
-        build_all_caches()
+        analysis = []
+        for r in rows:
+            # 나루토와 관련된 파일인 경우만 필터링 (결과가 너무 많을까봐)
+            if 'Naruto' in (r['sample_url'] or '') or '나루토' in (r['sample_url'] or ''):
+                analysis.append({
+                    "현재_DB_그룹경로": r['series_path'],
+                    "매칭된_그룹명(cleanedName)": r['cleanedName'] or "[미지정]",
+                    "카테고리": r['category'] or "[미지정]",
+                    "파일_개수": r['file_count'],
+                    "샘플_파일명": r['sample_file']
+                })
 
         return jsonify({
-            "status": "success",
-            "message": f"원피스 더빙판 총 {len(update_batch)}건의 회차 번호를 성공적으로 복구했습니다.",
-            "details": {
-                "target_found": len(rows),
-                "fixed_count": len(update_batch)
-            }
+            "description": "DB에 이미 존재하는 나루토 파일들의 그룹화 상태입니다.",
+            "summary": analysis
         })
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+        return jsonify({"error": str(e)})
 
-@app.route('/api/debug/check_one_piece_movies')
-def check_one_piece_movies():
-    """DB에 있는 원피스 관련 모든 시리즈의 상태를 점검합니다."""
+
+@app.route('/api/repair/naruto_root_merge')
+def repair_naruto_root_merge():
     try:
         conn = get_db()
-        # 검색 필터 없이 '원피스'가 들어간 모든 시리즈 조회
-        query = """
-            SELECT path, name, cleanedName, posterPath, tmdbId, category
+        cursor = conn.cursor()
+
+        # 1. '나루토 질풍전'의 기준이 될 깨끗한 대표 경로를 직접 생성 (파일 경로가 아닌 폴더 형식으로)
+        # 쿼리에서 확인하신 'Season 03'의 부모 경로를 기준으로 잡습니다.
+        target_path = "animations_all/시리즈/나/나루토 질풍전 (2007)"
+
+        # 만약 series 테이블에 이 경로가 없다면 하나 만들어줍니다.
+        cursor.execute("INSERT OR IGNORE INTO series (path, category, name, cleanedName) VALUES (?, ?, ?, ?)",
+                       (target_path, "animations_all", "나루토 질풍전", "나루토 질풍전"))
+
+        # 2. [핵심] episodes 테이블에서 '나루토'와 '질풍전'이 경로에 포함된 모든 데이터를 수거합니다.
+        # 기존에 엉뚱한 series_path를 가지고 있던 1, 2, 4시즌 데이터들이 여기서 다 잡힙니다.
+        cursor.execute("""
+            UPDATE episodes
+            SET series_path = ?
+            WHERE videoUrl LIKE '%나루토%질풍전%'
+               OR series_path LIKE '%나루토%질풍전%'
+        """, (target_path,))
+
+        merged_count = cursor.rowcount
+
+        # 3. 통합된 에피소드들의 시즌/회차 번호 정밀 재설정 (S01E01 등 분석)
+        cursor.execute("SELECT id, title FROM episodes WHERE series_path = ?", (target_path,))
+        eps = cursor.fetchall()
+
+        update_batch = []
+        for ep in eps:
+            # 파일명(NARUTO...S01E01...)에서 번호를 파싱합니다.
+            sn, en = extract_episode_numbers(ep['title'])
+            if sn is not None:
+                update_batch.append((sn, en, ep['id']))
+
+        if update_batch:
+            cursor.executemany("UPDATE episodes SET season_number = ?, episode_number = ? WHERE id = ?", update_batch)
+
+        conn.commit()
+        conn.close()
+        build_all_caches()
+
+        return f"성공: {merged_count}개의 파일을 '{target_path}' 그룹으로 통합하고 시즌 정보를 교정했습니다."
+    except Exception as e:
+        return f"에러 발생: {str(e)}"
+
+
+@app.route('/api/repair/naruto_super_injection')
+def naruto_super_injection():
+    import os, hashlib, urllib.parse, unicodedata
+
+    def nfc(text):
+        return unicodedata.normalize('NFC', text) if text else ""
+
+    # 1. 스샷을 바탕으로 한 실제 절대 경로 (가장 중요한 부분입니다)
+    # NAS 환경이므로 NFC 정규화를 강제로 적용하여 경로 인식을 보장합니다.
+    base_dir = nfc("/volume2/video/GDS3/GDRIVE/VIDEO/일본 애니메이션/시리즈/나/나루토 질풍전 (2007)")
+
+    # 2. 기준이 될 애니메이션 카테고리 루트 경로 (상대 경로 계산용)
+    anim_root = nfc("/volume2/video/GDS3/GDRIVE/VIDEO/일본 애니메이션")
+
+    target_seasons = ["Season 01", "Season 02", "Season 04"]
+
+    conn = get_db()
+    cursor = conn.cursor()
+    added_count = 0
+    skipped_count = 0
+    logs = []
+
+    if not os.path.exists(base_dir):
+        return jsonify({"error": f"나루토 메인 폴더를 찾을 수 없습니다: {base_dir}"})
+
+    for sn_folder in target_seasons:
+        full_path = os.path.join(base_dir, sn_folder)
+
+        if not os.path.exists(full_path):
+            logs.append(f"폴더 없음: {sn_folder}")
+            continue
+
+        for file in os.listdir(full_path):
+            if file.lower().endswith(VIDEO_EXTS):
+                file_full_path = nfc(os.path.join(full_path, file))
+                mid = hashlib.md5(file_full_path.encode()).hexdigest()
+
+                # DB 등록을 위한 경로 계산
+                rel_path = nfc(os.path.relpath(file_full_path, anim_root))
+                # 앱에서 사용할 series_path 형식: animations_all/상대경로
+                spath = f"animations_all/{rel_path}"
+
+                # 3. 시리즈 테이블 등록 (무조건 '나루토 질풍전'으로 그룹화)
+                cursor.execute("""
+                    INSERT OR IGNORE INTO series (path, category, name, cleanedName)
+                    VALUES (?, 'animations_all', '나루토 질풍전', '나루토 질풍전')
+                """, (spath,))
+
+                # 4. 에피소드 테이블 강제 주입
+                # 파일명에서 시즌/회차 번호 추출 (NARUTO...S01E05...)
+                sn, en = extract_episode_numbers(file)
+
+                cursor.execute("""
+                    INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl, season_number, episode_number)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (mid, spath, file,
+                      f"/video_serve?type=anim_all&path={urllib.parse.quote(rel_path)}",
+                      f"/thumb_serve?type=anim_all&id={mid}&path={urllib.parse.quote(rel_path)}",
+                      sn, en))
+                added_count += 1
+            else:
+                skipped_count += 1
+
+    conn.commit()
+    conn.close()
+    build_all_caches()  # 캐시 즉시 갱신
+
+    return jsonify({
+        "status": "success",
+        "added": added_count,
+        "skipped": skipped_count,
+        "not_found_folders": logs,
+        "message": "나루토 1, 2, 4시즌 데이터가 DB에 강제 주입되었습니다. 앱에서 확인하세요."
+    })
+
+@app.route('/api/debug/naruto_check_all')
+def naruto_check_all():
+    try:
+        conn = get_db()
+        # 나루토 관련 모든 시리즈의 현재 상태를 봅니다.
+        rows = conn.execute("""
+            SELECT path, name, cleanedName, tmdbId,
+                   (SELECT COUNT(*) FROM episodes WHERE series_path = series.path) as ep_count
             FROM series
-            WHERE name LIKE '%원피스%' OR cleanedName LIKE '%원피스%'
+            WHERE name LIKE '%나루토%' OR cleanedName LIKE '%나루토%'
+        """).fetchall()
+        conn.close()
+        return jsonify([dict(r) for r in rows])
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+@app.route('/api/debug/naruto_files_raw')
+def debug_naruto_files_raw():
+    import os, unicodedata
+    def nfc(text):
+        return unicodedata.normalize('NFC', text) if text else ""
+
+    base_dir = nfc("/volume2/video/GDS3/GDRIVE/VIDEO/일본 애니메이션/시리즈/나/나루토 질풍전 (2007)")
+    target_seasons = ["Season 01", "Season 02", "Season 04"]
+
+    report = {}
+    for sn in target_seasons:
+        p = os.path.join(base_dir, sn)
+        if os.path.exists(p):
+            report[sn] = os.listdir(p)
+        else:
+            report[sn] = "폴더 없음"
+
+    return jsonify({
+        "video_exts_configured": VIDEO_EXTS,
+        "files_found": report
+    })
+
+
+@app.route('/api/debug/check_naruto_movies')
+def check_naruto_movies():
+    try:
+        conn = get_db()
+        # 나루토 극장판 관련 데이터의 검색 필수 조건들을 체크합니다.
+        query = """
+            SELECT
+                name,
+                cleanedName,
+                posterPath,
+                tmdbId,
+                category,
+                (SELECT COUNT(*) FROM episodes WHERE series_path = series.path) as file_count
+            FROM series
+            WHERE (name LIKE '%나루토%' OR cleanedName LIKE '%나루토%')
+              AND (name LIKE '%극장판%' OR cleanedName LIKE '%극장판%')
         """
         rows = conn.execute(query).fetchall()
         conn.close()
@@ -5404,20 +5731,161 @@ def check_one_piece_movies():
         results = []
         for r in rows:
             item = dict(r)
-            # 제외 원인 분석
             reasons = []
-            if not item['posterPath']: reasons.append("포스터 없음 (검색 제외 대상)")
-            if item['category'] not in ['movies', 'animations_all']: reasons.append(f"카테고리 주의: {item['category']}")
+            # 검색 엔진이 거르는 조건들 체크
+            if not item['posterPath']: reasons.append("포스터 없음 (검색 제외)")
+            if item['file_count'] == 0: reasons.append("연결된 영상 파일 없음")
 
-            item['status_note'] = ", ".join(reasons) if reasons else "정상 (검색 노출되어야 함)"
+            item['status_check'] = "정상" if not reasons else ", ".join(reasons)
             results.append(item)
 
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@app.route('/api/debug/naruto_final_check')
+def debug_naruto_final_check():
+    try:
+        conn = get_db()
+        # 나루토 질풍전 그룹의 시즌별 에피소드 수 확인
+        stats = conn.execute("""
+            SELECT season_number, COUNT(*) as ep_count, MIN(title) as sample
+            FROM episodes
+            WHERE series_path LIKE '%나루토 질풍전%'
+            GROUP BY season_number
+            ORDER BY season_number ASC
+        """).fetchall()
+        conn.close()
+        return jsonify([dict(s) for s in stats])
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+@app.route('/api/debug/naruto_merge_result')
+def debug_naruto_merge_result():
+    try:
+        conn = get_db()
+
+        # 1. '나루토 질풍전' 그룹에 현재 몇 개의 에피소드가 있는지 확인
+        # (cleanedName 기준)
+        target_info = conn.execute("""
+            SELECT path, cleanedName, (SELECT COUNT(*) FROM episodes WHERE series_path = s.path) as total_eps
+            FROM series s
+            WHERE cleanedName = '나루토 질풍전'
+            LIMIT 1
+        """).fetchone()
+
+        if not target_info:
+            return jsonify({"status": "error", "message": "'나루토 질풍전' 시리즈를 찾을 수 없습니다."})
+
+        # 2. 시즌별로 에피소드가 몇 개씩 배정되었는지 통계 확인
+        # (시즌 1, 2, 4가 0이 아닌지 확인하는 것이 핵심!)
+        season_stats = conn.execute("""
+            SELECT season_number, COUNT(*) as ep_count
+            FROM episodes
+            WHERE series_path = ?
+            GROUP BY season_number
+            ORDER BY season_number ASC
+        """, (target_info['path'],)).fetchall()
+
+        # 3. 누락되었던 시즌 1, 2, 4의 샘플 데이터 확인
+        samples = conn.execute("""
+            SELECT season_number, episode_number, title, series_path
+            FROM episodes
+            WHERE series_path = ? AND season_number IN (1, 2, 4)
+            ORDER BY season_number ASC, episode_number ASC
+            LIMIT 20
+        """, (target_info['path'],)).fetchall()
+
+        conn.close()
+
         return jsonify({
-            "total_count": len(results),
-            "data": results
+            "target_series": dict(target_info),
+            "season_distribution": [dict(s) for s in season_stats],
+            "missing_seasons_samples": [dict(m) for m in samples]
         })
     except Exception as e:
         return jsonify({"error": str(e)})
+
+
+@app.route('/api/repair/naruto_revert')
+def naruto_revert():
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+
+        # 1. '나루토' 관련 에피소드들을 찾아서 원래의 개별 경로로 되돌립니다.
+        # videoUrl에 저장된 실제 파일 경로를 기반으로 series_path를 복구합니다.
+        cursor.execute(
+            "SELECT id, videoUrl FROM episodes WHERE videoUrl LIKE '%나루토%질풍전%' OR series_path LIKE '%나루토%질풍전%'")
+        eps = cursor.fetchall()
+
+        revert_batch = []
+        for ep in eps:
+            # videoUrl에서 path 매개변수 값을 추출합니다.
+            parsed_url = urllib.parse.urlparse(ep['videoUrl'])
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+            if 'path' in query_params:
+                rel_path = query_params['path'][0]
+                # 원래 스캐너가 저장하던 방식인 "animations_all/상대경로"로 되돌립니다.
+                original_spath = f"animations_all/{rel_path}"
+                revert_batch.append((original_spath, ep['id']))
+
+        if revert_batch:
+            # series_path를 원복하고, 수동으로 넣었던 시즌/회차 번호도 초기화합니다.
+            cursor.executemany(
+                "UPDATE episodes SET series_path = ?, season_number = NULL, episode_number = NULL WHERE id = ?",
+                revert_batch)
+
+        # 2. 통합용으로 만들었던 '나루토 질풍전' 시리즈 레코드를 삭제합니다.
+        cursor.execute("DELETE FROM series WHERE path = 'animations_all/시리즈/나/나루토 질풍전 (2007)'")
+        # 혹은 cleanedName이 '나루토 질풍전'인 대표 레코드 삭제
+        cursor.execute(
+            "DELETE FROM series WHERE cleanedName = '나루토 질풍전' AND path NOT LIKE '%.mkv' AND path NOT LIKE '%.mp4'")
+
+        conn.commit()
+        conn.close()
+        build_all_caches()
+
+        return f"나루토 원복 완료: {len(revert_batch)}개의 에피소드를 이전 상태(개별 경로)로 되돌렸습니다."
+    except Exception as e:
+        return f"원복 중 에러 발생: {str(e)}"
+
+
+# --- [특정 폴더 타겟 스캔 API] ---
+@app.route('/api/admin/scan_targeted')
+def api_scan_targeted():
+    cat_key = request.args.get('category')  # 'animations_all', 'movies' 등
+    folder_name = request.args.get('folder')  # '원피스' 등 실제 폴더명
+
+    if not cat_key or not folder_name:
+        return jsonify({"status": "error", "message": "카테고리와 폴더명을 입력하세요."}), 400
+
+    # 내부 카테고리 키를 PATH_MAP 라벨로 매핑
+    cat_map = {
+        "movies": "영화",
+        "foreigntv": "외국TV",
+        "koreantv": "국내TV",
+        "animations_all": "애니메이션",
+        "air": "방송중"
+    }
+
+    if cat_key not in cat_map:
+        return jsonify({"status": "error", "message": "잘못된 카테고리입니다."}), 400
+
+    label = cat_map[cat_key]
+    base_path, prefix = PATH_MAP[label]
+
+    def run_targeted_task():
+        # 1. 파일 시스템 스캔 (지정한 폴더만)
+        scan_recursive_to_db(base_path, prefix, cat_key, include_only=[folder_name])
+        # 2. 캐시 갱신
+        build_all_caches()
+        # 3. 메타데이터 매칭 실행 (폴더명 키워드로 타겟팅)
+        fetch_metadata_async(target_name=folder_name)
+
+    threading.Thread(target=run_targeted_task, daemon=True).start()
+    return jsonify({"status": "success", "message": f"[{label}] 카테고리의 '{folder_name}' 폴더 스캔 및 매칭을 시작했습니다."})
 
 # --- [추가] 수동 포스터 변경 라우트 ---
 @app.route('/custom_poster/<filename>')
