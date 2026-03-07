@@ -427,7 +427,10 @@ private fun loadSeasons(series: Series): List<Season> {
             
             val processedEpisodes = entry.value.map { movie ->
                 val videoUrl = if (movie.videoUrl?.startsWith("http") == false) NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl else movie.videoUrl ?: ""
-                val rawThumb = if (!movie.thumbnailUrl.isNullOrEmpty() && !movie.thumbnailUrl.contains("thumb_serve")) movie.thumbnailUrl else series.posterPath
+                
+                // [수정] 서버 썸네일(thumb_serve)을 포스터보다 우선시하도록 변경
+                val rawThumb = movie.thumbnailUrl ?: series.posterPath
+                
                 val thumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
                     if (rawThumb.startsWith("/")) "https://image.tmdb.org/t/p/w500$rawThumb"
                     else NasApiClient.BASE_URL + "/" + rawThumb
@@ -442,7 +445,10 @@ private fun loadSeasons(series: Series): List<Season> {
     if (series.episodes.isNotEmpty()) {
         val processedMovies = series.episodes.map { movie ->
             val videoUrl = if (movie.videoUrl?.startsWith("http") == false) NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl else movie.videoUrl ?: ""
-            val rawThumb = if (!movie.thumbnailUrl.isNullOrEmpty() && !movie.thumbnailUrl.contains("thumb_serve")) movie.thumbnailUrl else series.posterPath
+            
+            // [수정] 서버 썸네일(thumb_serve)을 포스터보다 우선시하도록 변경
+            val rawThumb = movie.thumbnailUrl ?: series.posterPath
+
             val thumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
                 if (rawThumb.startsWith("/")) "https://image.tmdb.org/t/p/w500$rawThumb"
                 else NasApiClient.BASE_URL + "/" + rawThumb

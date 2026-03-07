@@ -29,8 +29,10 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) { 1.03f } else 1f, label = "EpisodeItemScale")
 
-    val imageUrl = remember(movie.thumbnailUrl, seriesPosterPath) {
-        movie.thumbnailUrl ?: seriesPosterPath ?: ""
+    // [수정] 회차 썸네일이 없을 때 무작정 포스터를 보여주던 로직을 제거합니다.
+    // 이렇게 하면 서버에서 생성한 thumb_serve 이미지가 더 잘 보이게 됩니다.
+    val imageUrl = remember(movie.thumbnailUrl) {
+        movie.thumbnailUrl ?: ""
     }
 
     // 재생 시간 결정 로직 (1순위: 시청기록 duration, 2순위: TMDB runtime)
