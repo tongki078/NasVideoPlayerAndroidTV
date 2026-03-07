@@ -254,7 +254,7 @@ private fun MetadataSeparator() {
         color = Color.White.copy(alpha = 0.4f),
         fontSize = 15.sp,
         fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(horizontal = 4.dp)
+        modifier = Modifier.padding(horizontal = 6.dp)
     )
 }
 
@@ -268,19 +268,28 @@ private fun DetailRatingBadge(rating: String) {
         else -> Color.Gray.copy(alpha = 0.5f)
     }
     
+    val displayRating = rating.filter { it.isDigit() }.ifEmpty { if(rating.contains("전체")) "All" else rating.take(2) }
+    
     Surface(
         color = backgroundColor,
         shape = RoundedCornerShape(2.dp),
-        modifier = Modifier.padding(vertical = 1.dp)
+        modifier = Modifier.padding(horizontal = 2.dp)
     ) {
-        val displayRating = rating.filter { it.isDigit() }.ifEmpty { if(rating.contains("전체")) "All" else rating.take(2) }
-        Text(
-            text = displayRating,
-            color = if (backgroundColor == Color(0xFFF8E71C)) Color.Black else Color.White,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Black,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-        )
+        Box(
+            modifier = Modifier
+                .height(20.dp)
+                .widthIn(min = 24.dp)
+                .padding(horizontal = 6.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = displayRating,
+                color = if (backgroundColor == Color(0xFFF8E71C)) Color.Black else Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Black,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 
@@ -290,15 +299,21 @@ private fun InfoBadge(text: String, isOutlined: Boolean = true) {
         color = Color.Transparent,
         shape = RoundedCornerShape(2.dp),
         border = if (isOutlined) BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)) else null,
-        modifier = Modifier.padding(vertical = 1.dp)
+        modifier = Modifier.padding(horizontal = 2.dp)
     ) {
-        Text(
-            text = text, 
-            color = Color.White.copy(alpha = 0.9f), 
-            fontSize = 11.sp, 
-            fontWeight = FontWeight.ExtraBold, 
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp) 
-        )
+        Box(
+            modifier = Modifier
+                .height(20.dp)
+                .padding(horizontal = 6.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = text, 
+                color = Color.White.copy(alpha = 0.9f), 
+                fontSize = 11.sp, 
+                fontWeight = FontWeight.ExtraBold
+            )
+        }
     }
 }
 
@@ -432,7 +447,7 @@ private fun loadSeasons(series: Series): List<Season> {
                 val rawThumb = movie.thumbnailUrl ?: series.posterPath
                 
                 val thumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
-                    if (rawThumb.startsWith("/")) "https://image.tmdb.org/t/p/w500$rawThumb"
+                    if (rawThumb.startsWith("/")) "https://image.tmdb.org/t/p/original$rawThumb"
                     else NasApiClient.BASE_URL + "/" + rawThumb
                 } else rawThumb
                 movie.copy(videoUrl = videoUrl, thumbnailUrl = thumbUrl)
@@ -450,7 +465,7 @@ private fun loadSeasons(series: Series): List<Season> {
             val rawThumb = movie.thumbnailUrl ?: series.posterPath
 
             val thumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
-                if (rawThumb.startsWith("/")) "https://image.tmdb.org/t/p/w500$rawThumb"
+                if (rawThumb.startsWith("/")) "https://image.tmdb.org/t/p/original$rawThumb"
                 else NasApiClient.BASE_URL + "/" + rawThumb
             } else rawThumb
             movie.copy(videoUrl = videoUrl, thumbnailUrl = thumbUrl)
