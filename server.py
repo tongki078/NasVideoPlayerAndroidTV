@@ -801,11 +801,12 @@ def scan_recursive_to_db(bp, prefix, category, include_only=None):
 
         # 에피소드 테이블 등록/갱신
         if mid not in db_data:
+            sn, en = extract_episode_numbers(fp)  # 번호 추출 로직 호출
             cursor.execute(
-                'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl) VALUES (?, ?, ?, ?, ?)',
+                'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl, season_number, episode_number) VALUES (?, ?, ?, ?, ?, ?, ?)',
                 (mid, spath, os.path.basename(fp), f"/video_serve?type={prefix}&path={urllib.parse.quote(rel)}",
-                 f"/thumb_serve?type={prefix}&id={mid}&path={urllib.parse.quote(rel)}"))
-            emit_ui_log(f"신규 추가: '{name}'", 'success')
+                 f"/thumb_serve?type={prefix}&id={mid}&path={urllib.parse.quote(rel)}", sn, en))
+            emit_ui_log(f"신규 추가: '{name}' (S{sn}E{en})", 'success')
             with UPDATE_LOCK:
                 UPDATE_STATE["success"] += 1
         elif db_data[mid] != spath:
@@ -5327,6 +5328,96 @@ def debug_one_piece_1_to_8_null_thumb():
         })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/debug/fix_one_piece_dub_numbers')
+def fix_one_piece_dub_numbers():
+    """
+    일본 애니메이션 > 라프텔 폴더 내의 '(더빙) 원피스' 시리즈만 대상으로
+    null인 에피소드 번호를 파일명에서 분석해 강제로 채워줍니다.
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+
+        # 1. 대상 조회: 라프텔 폴더 내의 (더빙) 원피스 항목 중 번호가 없는 것들
+        # series_path에 파일의 전체 경로가 포함되어 있으므로 이를 활용합니다.
+        query = """
+            SELECT id, title, series_path
+            FROM episodes
+            WHERE series_path LIKE 'animations_all/라프텔/%'
+              AND (series_path LIKE '%(더빙) 원피스%' OR title LIKE '%(더빙) 원피스%')
+              AND episode_number IS NULL
+        """
+        rows = conn.execute(query).fetchall()
+
+        update_batch = []
+        for r in rows:
+            # DB에 저장된 정보를 조합해 가상의 전체 경로 생성
+            full_path_context = f"{r['series_path']}"
+
+            # 서버에 이미 정의된 extract_episode_numbers 함수를 그대로 재사용합니다.
+            # 이 함수는 '.E09.' 같은 패턴을 인식하여 시즌(sn)과 회차(en)를 반환합니다.
+            sn, en = extract_episode_numbers(full_path_context)
+
+            if en is not None:
+                # 추출된 번호가 있다면 업데이트 목록에 추가
+                update_batch.append((sn, en, r['id']))
+
+        # 2. DB에 일괄 반영
+        if update_batch:
+            cursor.executemany(
+                "UPDATE episodes SET season_number = ?, episode_number = ? WHERE id = ?",
+                update_batch
+            )
+            conn.commit()
+
+        conn.close()
+
+        # 변경된 데이터를 앱에 반영하기 위해 캐시 갱신 함수 호출
+        build_all_caches()
+
+        return jsonify({
+            "status": "success",
+            "message": f"원피스 더빙판 총 {len(update_batch)}건의 회차 번호를 성공적으로 복구했습니다.",
+            "details": {
+                "target_found": len(rows),
+                "fixed_count": len(update_batch)
+            }
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/debug/check_one_piece_movies')
+def check_one_piece_movies():
+    """DB에 있는 원피스 관련 모든 시리즈의 상태를 점검합니다."""
+    try:
+        conn = get_db()
+        # 검색 필터 없이 '원피스'가 들어간 모든 시리즈 조회
+        query = """
+            SELECT path, name, cleanedName, posterPath, tmdbId, category
+            FROM series
+            WHERE name LIKE '%원피스%' OR cleanedName LIKE '%원피스%'
+        """
+        rows = conn.execute(query).fetchall()
+        conn.close()
+
+        results = []
+        for r in rows:
+            item = dict(r)
+            # 제외 원인 분석
+            reasons = []
+            if not item['posterPath']: reasons.append("포스터 없음 (검색 제외 대상)")
+            if item['category'] not in ['movies', 'animations_all']: reasons.append(f"카테고리 주의: {item['category']}")
+
+            item['status_note'] = ", ".join(reasons) if reasons else "정상 (검색 노출되어야 함)"
+            results.append(item)
+
+        return jsonify({
+            "total_count": len(results),
+            "data": results
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 # --- [추가] 수동 포스터 변경 라우트 ---
 @app.route('/custom_poster/<filename>')
