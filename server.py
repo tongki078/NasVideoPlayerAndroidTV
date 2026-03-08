@@ -84,6 +84,11 @@ def emit_ui_log(msg, log_type='info'):
     with UPDATE_LOCK:
         UPDATE_STATE["logs"].append({"time": timestamp, "msg": msg, "type": log_type})
 
+    # [추가] 터미널에도 즉시 출력하여 실시간성 강화
+    # 현재 상태 변수들과 합쳐서 더 명확하게 출력합니다.
+    with UPDATE_LOCK:
+        status = f"[{UPDATE_STATE['current']}/{UPDATE_STATE['total']}]" if UPDATE_STATE['total'] > 0 else ""
+        print(f"[{timestamp}] {status} {msg}", flush=True)
 
 # -----------------------------------------------------------
 
@@ -100,7 +105,7 @@ PARENT_VIDEO_DIR = "/volume2/video/GDS3/GDRIVE/VIDEO"
 PATH_MAP = {
     "외국TV": (os.path.join(PARENT_VIDEO_DIR, "외국TV"), "ftv"),
     "국내TV": (os.path.join(PARENT_VIDEO_DIR, "국내TV"), "ktv"),
-    "영화": (os.path.join(PARENT_VIDEO_DIR, "영화"), "movie"),
+    "영화": (os.path.join(PARENT_VIDEO_DIR, "영화"), "movies"), # 'movie' -> 'movies'로 수정
     "애니메이션": (os.path.join(PARENT_VIDEO_DIR, "일본 애니메이션"), "anim_all"),
     "방송중": (os.path.join(PARENT_VIDEO_DIR, "방송중"), "air")
 }
@@ -366,7 +371,7 @@ def clean_title_complex(title, full_path=None, base_path=None):
     extracted_year = year_match.group().strip('()') if year_match else None
 
     t_low = t_orig.lower().replace(" ", "")
-    is_movie = any(x in t_low for x in ['극장판', 'movie', 'themovie', '劇場版', 'thelast'])
+    is_movie = any(x in t_low for x in ['극장판', 'themovie', '劇場版', 'thelast'])
 
     series_name = ""
     if full_path:
@@ -385,14 +390,16 @@ def clean_title_complex(title, full_path=None, base_path=None):
             '가', '나', '다', '라', '마', '바', '사', '아', '자', '차', '카', '타', '파', '하',
             'ㄱ', 'ㄴ', 'ㄷ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅅ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ',
             'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u',
-            'v', 'w', 'x', 'y', 'z'
+            'v', 'w', 'x', 'y', 'z',
+            '극장판', '극장', 'movie', 'themovie'
         }
         # [수정] Specials 폴더 안에 있다면 폴더명 대신 파일명을 시리즈명으로 사용 (극장판 개별 분리용)
         is_in_special = any(x in full_path.lower() for x in ['specials', 'special', '특전'])
 
         if not series_name:
             for p in reversed(parts[:-1]):
-                p_clean = p.lower().replace(" ", "")
+                # [중요] nfc()를 적용하여 NFD(자음모음분리) 환경에서도 정확히 매칭되게 수정
+                p_clean = nfc(p.lower().replace(" ", ""))
                 if p_clean in SKIP_DIRS or len(p_clean) <= 1: continue
                 if any(p_clean.endswith(ext) for ext in VIDEO_EXTS): continue
                 if re.search(r'(?i)season\s*\d+|시즌\s*\d+|part\s*\d+|s\d+', p_clean): continue
@@ -839,6 +846,9 @@ def scan_recursive_to_db(bp, prefix, category, include_only=None):
         visited = set()
         while stack:
             curr = stack.pop()
+            # [여기에 넣어주세요!]
+            print(f"DEBUG: 현재 탐색 중인 폴더 -> {curr}", flush=True)
+            emit_ui_log(f"탐색 중: {os.path.basename(curr)}", "info")
             real_curr = os.path.realpath(curr)
             if real_curr in visited: continue
             visited.add(real_curr)
@@ -938,6 +948,10 @@ def scan_recursive_to_db(bp, prefix, category, include_only=None):
 
     conn.commit()
     conn.close()
+
+    # [수정] 아래 문구 추가!
+    log("SCAN", f"✅ 모든 파일 탐색 완료. 메타데이터 매칭 스레드를 가동합니다...")
+    emit_ui_log(f"✅ 파일 탐색 완료. 지금부터 메타데이터 매칭을 시작합니다.", "success")
 
     set_update_state(is_running=False, current_item=f"스캔 완료 (신규/갱신: {UPDATE_STATE['success']}, 삭제: {deleted_count})")
     log("SCAN", f"✅ '{category}' 스캔 및 DB 동기화 완료")
@@ -1606,9 +1620,23 @@ def search_videos():
             params.append(f"{exclude_path}%")
 
         # 4. 그룹화 및 정렬 (특수 대상만 폴더별로 묶음)
-        query += """
+        # query += """
+        #     GROUP BY category, tmdbId, cleanedName,
+        #         (CASE WHEN (cleanedName LIKE '%원피스%' OR cleanedName LIKE '%명탐정 코난%' OR cleanedName LIKE '%나루토%')
+        #               THEN (CASE WHEN path LIKE '%/%/%' THEN SUBSTR(path, INSTR(path, '/') + 1, INSTR(SUBSTR(path, INSTR(path, '/') + 1), '/') - 1) ELSE '' END)
+        #               ELSE '' END),
+        #         CASE WHEN (path LIKE '%더빙%' OR name LIKE '%더빙%') THEN '더빙' WHEN (path LIKE '%자막%' OR name LIKE '%자막%') THEN '자막' ELSE '' END
+        #     ORDER BY
+        #         CASE WHEN tmdbTitle = ? OR cleanedName = ? THEN 1 WHEN tmdbTitle LIKE ? THEN 2 WHEN cleanedName LIKE ? THEN 3 ELSE 4 END ASC,
+        #         seasonCount DESC, name ASC
+        # """
+
+        # [개선] 하드코딩 대신 상단의 SPECIAL_GRANULAR_GROUPS 리스트를 동적으로 반영
+        special_names_cond = " OR ".join([f"cleanedName LIKE '%{g}%'" for g in SPECIAL_GRANULAR_GROUPS])
+
+        query += f"""
             GROUP BY category, tmdbId, cleanedName,
-                (CASE WHEN (cleanedName LIKE '%원피스%' OR cleanedName LIKE '%명탐정 코난%' OR cleanedName LIKE '%나루토%')
+                (CASE WHEN ({special_names_cond})
                       THEN (CASE WHEN path LIKE '%/%/%' THEN SUBSTR(path, INSTR(path, '/') + 1, INSTR(SUBSTR(path, INSTR(path, '/') + 1), '/') - 1) ELSE '' END)
                       ELSE '' END),
                 CASE WHEN (path LIKE '%더빙%' OR name LIKE '%더빙%') THEN '더빙' WHEN (path LIKE '%자막%' OR name LIKE '%자막%') THEN '자막' ELSE '' END
@@ -1616,6 +1644,7 @@ def search_videos():
                 CASE WHEN tmdbTitle = ? OR cleanedName = ? THEN 1 WHEN tmdbTitle LIKE ? THEN 2 WHEN cleanedName LIKE ? THEN 3 ELSE 4 END ASC,
                 seasonCount DESC, name ASC
         """
+
         # 정렬을 위한 파라미터 4개 추가
         params.extend([q_nfc, q_nfc, f'{q_nfc}%', f'{q_nfc}%'])
 
@@ -3179,6 +3208,7 @@ def updater_ui():
                 <a href="/admin/ghost" class="nav-tab"><i class="fas fa-ghost"></i> 유령 데이터 관리</a>
                 <a href="/admin" class="nav-tab"><i class="fas fa-search"></i> 매칭 진단</a>
                 <a href="/admin_stills" class="nav-tab"><i class="fas fa-image"></i> 스틸컷 현황</a>
+                <a href="/admin/db_pro" class="nav-tab active" style="background: var(--accent); color: white;"><i class="fas fa-database"></i> DB Pro (데이터 관리)</a>
             </div>
 
             <!-- Dashboard Stats -->
@@ -3225,16 +3255,25 @@ def updater_ui():
 
                 <!-- Right: Actions Sidebar -->
                 <!-- 특정 작품 그룹화 재정렬 -->
-                <div class="action-card">
-                    <div class="card-title"><i class="fas fa-layer-group"></i> 특정 작품 그룹화 재정렬</div>
-                    <div class="input-group">
-                        <input type="text" id="regroupKeyword" placeholder="정렬할 키워드 (예: 원피스)">
-                        <button class="btn-meta" onclick="regroupByKeyword()" style="justify-content: center; background: var(--accent);">
-                            <i class="fas fa-sync-alt"></i> 그룹화 재정렬 실행
-                        </button>
-                        <p style="font-size: 11px; color: var(--text-dim); margin-top: 5px;">* 파일명/경로에 키워드가 포함된 항목만 다시 정제합니다.</p>
-                    </div>
+            <div class="action-card">
+                <div class="card-title"><i class="fas fa-layer-group"></i> 특정 작품 그룹화 재정렬</div>
+                <div class="input-group">
+                    <select id="regroupCategory" onchange="fetchPathHints()" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
+                        <option value="전체">전체 카테고리</option>
+                        <option value="movies">영화</option>
+                        <option value="koreantv">국내TV</option>
+                        <option value="foreigntv">외국TV</option>
+                        <option value="animations_all">애니메이션</option>
+                        <option value="air">방송중</option>
+                    </select>
+                    <input type="text" id="regroupKeyword" placeholder="검색 키워드 (예: 블리치)">
+                    <input type="text" id="regroupPath" list="pathHints" placeholder="포함할 경로 (선택 또는 직접 입력)">
+                    <datalist id="pathHints"></datalist>
+                    <button class="btn-meta" onclick="regroupByKeyword()" style="justify-content: center; background: var(--accent); margin-top: 5px;">
+                        <i class="fas fa-sync-alt"></i> 지정 범위 재정렬 실행
+                    </button>
                 </div>
+            </div>
                 <!-- 수동 메타데이터 정보 수정 -->
                 <div class="action-card">
                     <div class="card-title"><i class="fas fa-edit"></i> 수동 텍스트 정보 수정</div>
@@ -3383,6 +3422,55 @@ def updater_ui():
         </div>
 
         <script>
+    // 카테고리별 하위 폴더 힌트 가져오기
+    // 힌트 가져오기
+    async function fetchPathHints() {
+        const cat = document.getElementById('regroupCategory').value;
+        const datalist = document.getElementById('pathHints');
+        const pathInput = document.getElementById('regroupPath');
+
+        datalist.innerHTML = '';
+        if (cat === '전체') return;
+
+        try {
+            const resp = await fetch(`/api/admin/get_path_hints?category=${cat}`);
+            const hints = await resp.json();
+            hints.forEach(h => {
+                const opt = document.createElement('option');
+                opt.value = h;
+                datalist.appendChild(opt);
+            });
+            console.log(`[HINTS] ${hints.length}개 로드 완료`);
+        } catch (e) { console.error("힌트 로딩 실패:", e); }
+    }
+
+    // 그룹화 재정렬
+    async function regroupByKeyword() {
+        const keyword = document.getElementById('regroupKeyword').value.trim();
+        const category = document.getElementById('regroupCategory').value;
+        const path = document.getElementById('regroupPath').value.trim();
+
+        if (!keyword) { alert('키워드를 입력하세요.'); return; }
+
+        if (confirm(`'${keyword}' 관련 데이터를 재분석하시겠습니까?\n범위: ${category}${path ? ' > ' + path : ''}`)) {
+            let url = `/api/refresh_by_keyword?name=${encodeURIComponent(keyword)}`;
+            if (category !== '전체') url += `&category=${encodeURIComponent(category)}`;
+            if (path) url += `&path=${encodeURIComponent(path)}`;
+
+            try {
+                const resp = await fetch(url);
+                const data = await resp.json();
+                if (data.status === 'success') {
+                    alert('재정렬 시작! 로그 창을 확인하세요.');
+                    document.getElementById('terminalBox').scrollIntoView({ behavior: 'smooth' });
+                } else {
+                    alert('에러: ' + data.message);
+                }
+            } catch (e) { alert('요청 오류: ' + e); }
+        }
+    }
+
+
             async function scanTargetedFolder() {
                 const category = document.getElementById('scanTargetCategory').value;
                 const folder = document.getElementById('scanTargetFolder').value.trim();
@@ -3952,24 +4040,23 @@ def build_all_caches():
 
 def _rebuild_fast_memory_cache():
     global _FAST_CATEGORY_CACHE, _SECTION_CACHE, _DETAIL_MEM_CACHE
-    log("SYSTEM", "⚡ 메모리 캐시 최적화 빌드 시작 (이름 표시 우선순위 교정)...")
+    log("SYSTEM", "⚡ 메모리 캐시 최적화 빌드 시작 (영화 데이터 강제 복구 모드)...")
     _SECTION_CACHE = {}
     _DETAIL_MEM_CACHE = {}
     temp_cache = {}
     conn = get_db()
 
+    # 스캐너에서 사용하는 정확한 카테고리 목록
     CATS = ["movies", "foreigntv", "koreantv", "animations_all", "air"]
 
     for cat in CATS:
-        query = """
-            SELECT s.*,
-            (SELECT COUNT(DISTINCT season_number) FROM episodes WHERE series_path = s.path) as actual_seasons
-            FROM series s
-            WHERE s.category = ?
-            ORDER BY s.yearVal DESC
-        """
-        rows = conn.execute(query, (cat,)).fetchall()
-
+        if cat == 'movies':
+            # DB에 movies 또는 movie로 저장된 모든 데이터를 긁어옴
+            query = "SELECT s.*, (SELECT COUNT(DISTINCT season_number) FROM episodes WHERE series_path = s.path) as actual_seasons FROM series s WHERE (s.category = 'movies' OR s.category = 'movie') ORDER BY s.yearVal DESC"
+            rows = conn.execute(query).fetchall()
+        else:
+            query = "SELECT s.*, (SELECT COUNT(DISTINCT season_number) FROM episodes WHERE series_path = s.path) as actual_seasons FROM series s WHERE s.category = ? ORDER BY s.yearVal DESC"
+            rows = conn.execute(query, (cat,)).fetchall()
         items = []
         seen_keys = set()
         folder_precalc = {}
@@ -3977,43 +4064,39 @@ def _rebuild_fast_memory_cache():
         for r in rows:
             path = nfc(r['path'])
             name = nfc(r['name'])
-            path_lower, name_lower = path.lower(), name.lower()
-            tag = "더빙" if "더빙" in path_lower or "더빙" in name_lower else "자막" if "자막" in path_lower or "자막" in name_lower else ""
 
-            tmdb_id = r['tmdbId']
-            # [수정된 부분] 특수 대상인지 확인하고 폴더명을 그룹 키에 포함
-            c_name = nfc(r['cleanedName'] or r['name'])
-            is_special = any(k in c_name for k in SPECIAL_GRANULAR_GROUPS)
-
-            sub_folder = ""
-            if is_special:
-                parts = path.split('/')
-                # path가 'animations_all/라프텔/...' 형태라면 '라프텔'을 추출
-                sub_folder = parts[1] if len(parts) > 2 else ""
-
-            # 특수 대상은 'ID + 이름 + 태그 + 폴더명'까지 같아야 같은 그룹으로 묶음
-            group_key = f"{tmdb_id}_{c_name}_{tag}_{sub_folder}" if tmdb_id else f"{c_name}_{tag}_{sub_folder}"
+            # [수정] 영화 카테고리는 중복 제거를 하지 않음 (모든 영화 노출 보장)
+            if cat == 'movies':
+                group_key = path
+            else:
+                path_lower, name_lower = path.lower(), name.lower()
+                tag = "더빙" if "더빙" in path_lower or "더빙" in name_lower else "자막" if "자막" in path_lower or "자막" in name_lower else ""
+                tmdb_id = r['tmdbId']
+                c_name = nfc(r['cleanedName'] or r['name'])
+                is_special = any(k in c_name for k in SPECIAL_GRANULAR_GROUPS)
+                sub_folder = ""
+                if is_special:
+                    parts = path.split('/')
+                    sub_folder = parts[1] if len(parts) > 2 else ""
+                group_key = f"{tmdb_id}_{c_name}_{tag}_{sub_folder}" if tmdb_id else f"{c_name}_{tag}_{sub_folder}"
 
             if not group_key or group_key in seen_keys: continue
             if not r['posterPath']: continue
             seen_keys.add(group_key)
 
-            display_name = c_name if c_name else nfc(r['tmdbTitle'] or r['name'])
+            # 영화는 TMDB 제목이나 파일명을 우선 노출
+            display_name = nfc(r['tmdbTitle'] or r['name']) if cat == 'movies' else (
+                c_name if c_name else nfc(r['tmdbTitle'] or r['name']))
 
-            # [추가] 특수 대상은 이름 앞에 출처 폴더를 표시 (예: 라프텔 > 원피스)
-            if is_special and sub_folder:
-                display_name = f"{sub_folder} > {display_name}"
-
-            if tag and f"[{tag}]" not in display_name:
-                display_name = f"{display_name} [{tag}]"
-
-            final_sc = r['actual_seasons'] if r['actual_seasons'] and r['actual_seasons'] > 0 else (
-                        r['seasonCount'] or 1)
+            if cat != 'movies' and 'is_special' in locals():
+                if is_special and sub_folder: display_name = f"{sub_folder} > {display_name}"
+                if tag and f"[{tag}]" not in display_name: display_name = f"{display_name} [{tag}]"
 
             item = {
                 "path": path, "name": display_name.strip(), "posterPath": r['posterPath'],
-                "year": r['year'], "genreNames": [], "tmdbId": tmdb_id, "rating": r['rating'],
-                "seasonCount": final_sc,
+                "year": r['year'], "genreNames": [], "tmdbId": r['tmdbId'], "rating": r['rating'],
+                "seasonCount": r['actual_seasons'] if r['actual_seasons'] and r['actual_seasons'] > 0 else (
+                            r['seasonCount'] or 1),
                 "_search_name": display_name.lower()
             }
             try:
@@ -4028,11 +4111,12 @@ def _rebuild_fast_memory_cache():
                 folder_precalc.setdefault(folder_name, []).append(item)
 
         temp_cache[cat] = {"all": items, "folders": folder_precalc}
-        log("SYSTEM", f"✅ {cat} 캐시 빌드 완료")
+        log("SYSTEM", f"✅ {cat} 캐시 빌드 완료 (아이템 수: {len(items)})")
 
     conn.close()
     _FAST_CATEGORY_CACHE = temp_cache
     build_home_recommend()
+
 
 def clean_title_for_retry(title):
     if not title: return ""
@@ -5050,24 +5134,44 @@ def save_manual_metadata():
         return jsonify({"status": "success", "message": f"성공적으로 {updated}개 항목이 수정되었습니다."})
     return jsonify({"status": "error", "message": "수정할 대상을 찾을 수 없습니다."}), 404
 
+
+@app.route('/api/admin/get_path_hints')
+def get_path_hints():
+    """카테고리별 하위 폴더 힌트 API"""
+    cat = request.args.get('category')
+    if not cat or cat == '전체' or cat not in _FAST_CATEGORY_CACHE:
+        return jsonify([])
+    # 폴더 구조에서 힌트 가져오기
+    hints = sorted(list(_FAST_CATEGORY_CACHE[cat].get('folders', {}).keys()))
+    return jsonify(hints)
+
 @app.route('/api/refresh_by_keyword')
 def refresh_by_keyword():
-    """입력받은 키워드(name)를 기준으로 관련 시리즈만 그룹명(cleanedName)을 재정제합니다."""
+    """입력받은 키워드, 카테고리, 경로를 기준으로 대상을 한정하여 재정제합니다."""
     target_keyword = request.args.get('name')
+    target_cat = request.args.get('category')
+    target_path = request.args.get('path')
+
     if not target_keyword:
         return jsonify({"status": "error", "message": "키워드가 없습니다."}), 400
 
     def run_refresh():
-        set_update_state(is_running=True, task_name=f"[{target_keyword}] 그룹화 재정렬",
-                         total=0, current=0, success=0, fail=0, clear_logs=True)
-        emit_ui_log(f"'{target_keyword}' 관련 데이터 분석 및 그룹화 재정렬 시작...", "info")
-
+        set_update_state(is_running=True, task_name=f"[{target_keyword}] 정밀 재정렬", total=0, current=0, success=0, fail=0,
+                         clear_logs=True)
+        emit_ui_log(f"분석 시작: 키워드='{target_keyword}', 카테고리='{target_cat}', 경로='{target_path}'", "info")
         try:
             conn = get_db()
-            # 원본 name과 path(경로)를 기준으로 대상 필터링
-            query = "SELECT path, name, cleanedName FROM series WHERE name LIKE ? OR path LIKE ?"
-            rows = conn.execute(query, (f'%{target_keyword}%', f'%{target_keyword}%')).fetchall()
+            query = "SELECT path, name, cleanedName FROM series WHERE (name LIKE ? OR path LIKE ?)"
+            params = [f'%{target_keyword}%', f'%{target_keyword}%']
 
+            if target_cat and target_cat != '전체':
+                query += " AND category = ?"
+                params.append(target_cat)
+            if target_path:
+                query += " AND path LIKE ?"
+                params.append(f'%{target_path}%')
+
+            rows = conn.execute(query, params).fetchall()
             total = len(rows)
             set_update_state(total=total)
             emit_ui_log(f"총 {total}개의 관련 데이터를 분석합니다.", "info")
@@ -5669,223 +5773,372 @@ def naruto_super_injection():
         "message": "나루토 1, 2, 4시즌 데이터가 DB에 강제 주입되었습니다. 앱에서 확인하세요."
     })
 
-@app.route('/api/debug/naruto_check_all')
-def naruto_check_all():
-    try:
-        conn = get_db()
-        # 나루토 관련 모든 시리즈의 현재 상태를 봅니다.
-        rows = conn.execute("""
-            SELECT path, name, cleanedName, tmdbId,
-                   (SELECT COUNT(*) FROM episodes WHERE series_path = series.path) as ep_count
-            FROM series
-            WHERE name LIKE '%나루토%' OR cleanedName LIKE '%나루토%'
-        """).fetchall()
-        conn.close()
-        return jsonify([dict(r) for r in rows])
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-@app.route('/api/debug/naruto_files_raw')
-def debug_naruto_files_raw():
+@app.route('/api/debug/bleach_files_raw')
+def debug_bleach_files_raw():
     import os, unicodedata
     def nfc(text):
         return unicodedata.normalize('NFC', text) if text else ""
 
-    base_dir = nfc("/volume2/video/GDS3/GDRIVE/VIDEO/일본 애니메이션/시리즈/나/나루토 질풍전 (2007)")
-    target_seasons = ["Season 01", "Season 02", "Season 04"]
+    # 스샷에서 확인된 경로를 기준으로 설정 (경로를 정확히 맞추는 것이 중요합니다)
+    # NAS 환경이므로 실제 경로를 확인하여 수정해 주세요.
+    base_dir = nfc("/volume2/video/GDS3/GDRIVE/VIDEO/일본 애니메이션/라프텔/가/극장판 블리치 1~4기 (2006)")
+    # 혹시 다른 경로라면 아래처럼 스샷의 경로에 맞춰 수정하세요.
+    # base_dir = nfc("/volume2/video/GDS3/GDRIVE/VIDEO/일본 애니메이션/라프텔/극장판 블리치 1~4기")
 
     report = {}
-    for sn in target_seasons:
-        p = os.path.join(base_dir, sn)
-        if os.path.exists(p):
-            report[sn] = os.listdir(p)
-        else:
-            report[sn] = "폴더 없음"
+
+    # 해당 디렉토리가 존재하는지 확인 후 리스트업
+    if os.path.exists(base_dir):
+        report["target_dir"] = base_dir
+        report["files_found"] = os.listdir(base_dir)
+    else:
+        report["error"] = f"폴더를 찾을 수 없습니다: {base_dir}"
 
     return jsonify({
         "video_exts_configured": VIDEO_EXTS,
-        "files_found": report
+        "debug_report": report
+    })
+
+@app.route('/api/admin/scan_targeted')
+def scan_targeted():
+    cat = request.args.get('category')
+    folder = request.args.get('folder', '').strip()
+
+    path, prefix = PATH_MAP.get(next((k for k, v in PATH_MAP.items() if v[1] == cat), ""), (None, None))
+    if not path:
+        return jsonify({"status": "error", "message": "카테고리 경로 없음"})
+
+    def run_scan_and_match():
+        # 1. 스캔 실행
+        scan_recursive_to_db(path, prefix, cat, include_only=[folder] if folder else None)
+
+        # 2. 매칭 실행 (핵심: category를 명시적으로 전달)
+        # 기존 fetch_metadata_async 함수에 category 필터링 로직이 없다면
+        # 아래처럼 직접 쿼리를 호출하는 게 훨씬 확실합니다.
+        log("METADATA", f"🎬 [{cat}/{folder}] 폴더 타겟 매칭 시작")
+
+        # 카테고리 필터링이 적용된 매칭 로직을 바로 실행
+        # 기존 fetch_metadata_async를 수정하기 어렵다면 아래 로직을 바로 수행합니다.
+        conn = get_db()
+        # 해당 카테고리 & 폴더 경로에 포함된 놈들만 콕 집어서 매칭
+        targets = conn.execute("""
+            SELECT cleanedName, yearVal FROM series
+            WHERE category = ? AND path LIKE ?
+            AND (tmdbId IS NULL OR tmdbTitle IS NULL)
+            GROUP BY cleanedName, yearVal
+        """, (cat, f'%{folder}%')).fetchall()
+        conn.close()
+
+        for row in targets:
+            info = get_tmdb_info_server(row['cleanedName'], category=cat, ignore_cache=True)
+            if not info.get('failed'):
+                # (이후 DB 업데이트 로직은 기존 fetch_metadata_async와 동일하게 작성)
+                pass
+
+        build_all_caches()
+        emit_ui_log(f"🏁 [{cat}/{folder}] 전체 작업 완료.", "success")
+
+    threading.Thread(target=run_scan_and_match, daemon=True).start()
+    return jsonify({"status": "success", "message": f"[{cat}/{folder}] 스캔 및 전용 매칭 시작"})
+
+@app.route('/api/admin/fix_bleach_episodes')
+def fix_bleach_episodes():
+    """파일명의 E01~E04를 읽어 에피소드 번호를 강제 고정합니다."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 1. '극장판 블리치 1~4기' 폴더의 모든 에피소드 조회
+    eps = conn.execute("SELECT id, title FROM episodes WHERE series_path LIKE '%극장판 블리치 1~4기%'").fetchall()
+
+    updates = []
+    for ep in eps:
+        # 파일명에서 E0x 숫자를 추출 (E01 -> 1, E02 -> 2...)
+        match = re.search(r'\.E(\d+)\.', ep['title'], re.I)
+        if match:
+            ep_num = int(match.group(1))
+            updates.append((1, ep_num, ep['id']))  # 시즌1, 에피소드 번호, ID
+
+    if updates:
+        cursor.executemany("UPDATE episodes SET season_number=?, episode_number=? WHERE id=?", updates)
+        conn.commit()
+
+    conn.close()
+    build_all_caches()
+    return f"성공! {len(updates)}개의 에피소드 번호를 파일명에서 추출하여 고정했습니다."
+
+@app.route('/admin/db_pro')
+def admin_db_pro():
+    return """
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+        <meta charset="UTF-8">
+        <title>NAS PRO ADMIN - DB Management</title>
+        <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+        <style>
+            :root { --bg-dark: #0f172a; --bg-card: #1e293b; --accent: #3b82f6; --accent-hover: #2563eb; --text-main: #f8fafc; --text-dim: #94a3b8; --border: #334155; }
+            body { font-family: 'Inter', sans-serif; background: var(--bg-dark); color: var(--text-main); margin: 0; display: flex; height: 100vh; }
+            .sidebar { width: 240px; background: var(--bg-card); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+            .sidebar-header { padding: 25px 20px; font-size: 18px; font-weight: 800; color: var(--accent); border-bottom: 1px solid var(--border); }
+            .nav-menu { padding: 15px; flex: 1; }
+            .nav-item { padding: 12px 15px; border-radius: 8px; cursor: pointer; color: var(--text-dim); display: flex; align-items: center; gap: 12px; margin-bottom: 5px; transition: 0.2s; }
+            .nav-item:hover { background: #334155; color: white; }
+            .nav-item.active { background: var(--accent); color: white; }
+            .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+            .top-bar { padding: 15px 30px; background: var(--bg-card); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 15px; }
+            select, input { background: var(--bg-dark); color: white; border: 1px solid var(--border); padding: 10px; border-radius: 8px; outline: none; font-size: 14px; }
+            .btn { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
+            .btn-primary { background: var(--accent); color: white; }
+            .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+            .grid-container { flex: 1; overflow: auto; padding: 20px 30px; }
+            table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border); }
+            th { position: sticky; top: 0; z-index: 10; background: #334155; color: var(--text-dim); padding: 12px 15px; text-align: left; font-size: 12px; border-bottom: 1px solid var(--border); cursor: pointer; white-space: nowrap; }
+            td { padding: 12px 15px; border-bottom: 1px solid var(--border); font-size: 13px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            tr:hover { background: #2d3748; }
+            .pagination { padding: 15px 30px; background: var(--bg-card); border-top: 1px solid var(--border); display: flex; justify-content: center; align-items: center; gap: 15px; }
+            .poster-thumb { width: 35px; height: 50px; border-radius: 4px; object-fit: cover; }
+        </style>
+    </head>
+    <body>
+        <div class="sidebar">
+            <div class="sidebar-header"><i class="fas fa-terminal"></i> DB PRO ADMIN</div>
+            <div class="nav-menu">
+                <div class="nav-item active" onclick="switchTable('series', this)"><i class="fas fa-layer-group"></i> 작품 (Series)</div>
+                <div class="nav-item" onclick="switchTable('episodes', this)"><i class="fas fa-film"></i> 에피소드 (Episodes)</div>
+                <div class="nav-item" onclick="switchTable('playback_progress', this)"><i class="fas fa-history"></i> 시청 기록</div>
+                <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border);">
+                    <a href="/updater" style="text-decoration:none;"><div class="nav-item"><i class="fas fa-arrow-left"></i> 대시보드 복귀</div></a>
+                </div>
+            </div>
+        </div>
+        <div class="main-content">
+            <div class="top-bar">
+                <select id="categorySelect" onchange="triggerSearch()">
+                    <option value="전체">전체 카테고리</option>
+                    <option value="movies">영화</option>
+                    <option value="koreantv">국내TV</option>
+                    <option value="foreigntv">외국TV</option>
+                    <option value="animations_all">애니메이션</option>
+                    <option value="air">방송중</option>
+                </select>
+                <input type="text" id="searchInput" style="flex:1;" placeholder="키워드 검색..." onkeyup="if(event.key==='Enter') triggerSearch()">
+                <button class="btn btn-primary" onclick="triggerSearch()"><i class="fas fa-search"></i> 검색</button>
+                <span id="rowCount" style="color: var(--text-dim); font-size: 13px; white-space:nowrap;">0 items</span>
+            </div>
+            <div class="grid-container" id="gridArea"></div>
+            <div class="pagination">
+                <button class="btn btn-ghost" id="prevBtn" onclick="changePage(-1)"><i class="fas fa-chevron-left"></i></button>
+                <span id="pageDisplay" style="font-weight:bold; color:var(--accent);">Page 1 / 1</span>
+                <button class="btn btn-ghost" id="nextBtn" onclick="changePage(1)"><i class="fas fa-chevron-right"></i></button>
+                <select id="pageSize" onchange="changeSize(this.value)">
+                    <option value="50">50개씩</option><option value="100">100개씩</option><option value="200">200개씩</option>
+                </select>
+            </div>
+        </div>
+        <script>
+            let currentTable = 'series', currentPage = 0, pageSize = 50, sortCol = '', sortDir = 'ASC';
+            function switchTable(table, el) {
+                document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                el.classList.add('active');
+                currentTable = table; triggerSearch();
+            }
+            function triggerSearch() { currentPage = 0; loadData(); }
+            async function loadData() {
+                const q = document.getElementById('searchInput').value;
+                const cat = document.getElementById('categorySelect').value;
+                const grid = document.getElementById('gridArea');
+                grid.innerHTML = '<div style="text-align:center; padding:100px;"><i class="fas fa-spinner fa-spin fa-3x"></i></div>';
+                try {
+                    const res = await (await fetch(`/api/admin/db_pro_data?table=${currentTable}&q=${encodeURIComponent(q)}&cat=${cat}&limit=${pageSize}&offset=${currentPage*pageSize}&sort=${sortCol}&dir=${sortDir}`)).json();
+                    document.getElementById('rowCount').innerText = `${res.total.toLocaleString()} items found`;
+                    document.getElementById('pageDisplay').innerText = `Page ${currentPage + 1} / ${Math.ceil(res.total / pageSize) || 1}`;
+                    document.getElementById('prevBtn').disabled = currentPage === 0;
+                    document.getElementById('nextBtn').disabled = (currentPage + 1) * pageSize >= res.total;
+                    let html = '<table><thead><tr>' + res.columns.map(c => `<th onclick="handleSort('${c}')">${c} ${sortCol===c?(sortDir==='ASC'?'▲':'▼'):''}</th>`).join('') + '</tr></thead><tbody>';
+                    res.data.forEach(row => {
+                        html += '<tr>' + res.columns.map(c => {
+                            let val = row[c], display = val === null ? '<span style="color:#475569">null</span>' : val;
+                            if (c === 'posterPath' && val) display = `<img src="${val.startsWith('http') ? val : 'https://image.tmdb.org/t/p/w200' + val}" class="poster-thumb">`;
+                            return `<td title="${String(val).replace(/"/g, '&quot;')}">${display}</td>`;
+                        }).join('') + '</tr>';
+                    });
+                    grid.innerHTML = html + '</tbody></table>';
+                } catch (e) { grid.innerHTML = `<div style="color:#ef4444; padding:50px;">Error: ${e}</div>`; }
+            }
+            function changePage(delta) { currentPage += delta; loadData(); document.getElementById('gridArea').scrollTop = 0; }
+            function changeSize(size) { pageSize = parseInt(size); triggerSearch(); }
+            function handleSort(col) { if (sortCol === col) sortDir = sortDir === 'ASC' ? 'DESC' : 'ASC'; else { sortCol = col; sortDir = 'ASC'; } loadData(); }
+            window.onload = loadData;
+        </script>
+    </body>
+    </html>
+    """
+@app.route('/api/admin/db_pro_data')
+def api_db_pro_data():
+    table = request.args.get('table', 'series')
+    kw = request.args.get('q', '').strip()
+    cat_filter = request.args.get('cat', '전체')
+    limit = int(request.args.get('limit', 50))
+    offset = int(request.args.get('offset', 0))
+    sort = request.args.get('sort', '')
+    direction = request.args.get('dir', 'ASC')
+
+    if table not in ['series', 'episodes', 'playback_progress', 'tmdb_cache']:
+        return jsonify({"error": "Invalid table"}), 400
+
+    conn = get_db()
+    where_clauses = []
+    params = []
+
+    # 1. 키워드 검색 (테이블별 컬럼 대응)
+    if kw:
+        if table == 'series':
+            where_clauses.append("(name LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ? OR path LIKE ?)")
+            params.extend([f'%{kw}%', f'%{kw}%', f'%{kw}%', f'%{kw}%'])
+        elif table == 'episodes':
+            where_clauses.append("(title LIKE ? OR series_path LIKE ?)")
+            params.extend([f'%{kw}%', f'%{kw}%'])
+        elif table == 'playback_progress':
+            where_clauses.append("(episode_id LIKE ?)")
+            params.append(f'%{kw}%')
+
+    # 2. 카테고리 필터
+    if cat_filter and cat_filter != '전체':
+        if table == 'series':
+            where_clauses.append("category = ?")
+            params.append(cat_filter)
+        elif table == 'episodes':
+            where_clauses.append("series_path LIKE ?")
+            params.append(f"{cat_filter}/%")
+
+    where_stmt = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+    try:
+        # 전체 개수 확인
+        total_count = conn.execute(f"SELECT COUNT(*) FROM {table} {where_stmt}", params).fetchone()[0]
+
+        # 정렬 및 쿼리 실행
+        order_by = ""
+        if sort:
+            order_by = f" ORDER BY {sort} {direction}"
+        elif table == 'series':
+            order_by = " ORDER BY path ASC"
+        elif table == 'episodes':
+            order_by = " ORDER BY series_path ASC, episode_number ASC"
+
+        query = f"SELECT * FROM {table} {where_stmt} {order_by} LIMIT ? OFFSET ?"
+        cursor = conn.execute(query, params + [limit, offset])
+
+        # 컬럼 추출 및 정렬 (중복 방지 및 우선순위 정렬)
+        columns = [d[0] for d in cursor.description]
+        prio = ['posterPath', 'path', 'series_path', 'name', 'title', 'cleanedName', 'season_number', 'episode_number']
+        columns = sorted(list(dict.fromkeys(columns)), key=lambda x: prio.index(x) if x in prio else 999)
+
+        data = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+
+        return jsonify({"columns": columns, "data": data, "total": total_count, "offset": offset, "limit": limit})
+    except Exception as e:
+        if conn: conn.close()
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/debug/test_movies')
+def test_movies():
+    """DB에 저장된 영화 데이터의 원본 상태를 조회합니다."""
+    conn = get_db()
+    rows = conn.execute("SELECT path, name, cleanedName, category, posterPath FROM series WHERE category = 'movies' LIMIT 50").fetchall()
+    total = conn.execute("SELECT COUNT(*) FROM series WHERE category = 'movies'").fetchone()[0]
+    conn.close()
+    return jsonify({
+        "total_in_db": total,
+        "sample_rows": [dict(r) for r in rows]
     })
 
 
-@app.route('/api/debug/check_naruto_movies')
-def check_naruto_movies():
+@app.route('/api/debug/movie_status')
+def debug_movie_status():
+    """영화 데이터의 카테고리별 분류 및 포스터 누락 상태를 정밀 진단합니다."""
+    conn = get_db()
     try:
-        conn = get_db()
-        # 나루토 극장판 관련 데이터의 검색 필수 조건들을 체크합니다.
-        query = """
+        # 1. 전체 카테고리 분포 확인
+        cat_dist = conn.execute("SELECT category, COUNT(*) as cnt FROM series GROUP BY category").fetchall()
+
+        # 2. 'movies' 카테고리로 분류된 것 중 실제 데이터 상황
+        movie_data = conn.execute("""
             SELECT
-                name,
-                cleanedName,
-                posterPath,
-                tmdbId,
-                category,
-                (SELECT COUNT(*) FROM episodes WHERE series_path = series.path) as file_count
+                COUNT(*) as total,
+                SUM(CASE WHEN posterPath IS NULL THEN 1 ELSE 0 END) as no_poster,
+                SUM(CASE WHEN tmdbId IS NULL THEN 1 ELSE 0 END) as no_tmdbid
             FROM series
-            WHERE (name LIKE '%나루토%' OR cleanedName LIKE '%나루토%')
-              AND (name LIKE '%극장판%' OR cleanedName LIKE '%극장판%')
-        """
-        rows = conn.execute(query).fetchall()
-        conn.close()
-
-        results = []
-        for r in rows:
-            item = dict(r)
-            reasons = []
-            # 검색 엔진이 거르는 조건들 체크
-            if not item['posterPath']: reasons.append("포스터 없음 (검색 제외)")
-            if item['file_count'] == 0: reasons.append("연결된 영상 파일 없음")
-
-            item['status_check'] = "정상" if not reasons else ", ".join(reasons)
-            results.append(item)
-
-        return jsonify(results)
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-
-@app.route('/api/debug/naruto_final_check')
-def debug_naruto_final_check():
-    try:
-        conn = get_db()
-        # 나루토 질풍전 그룹의 시즌별 에피소드 수 확인
-        stats = conn.execute("""
-            SELECT season_number, COUNT(*) as ep_count, MIN(title) as sample
-            FROM episodes
-            WHERE series_path LIKE '%나루토 질풍전%'
-            GROUP BY season_number
-            ORDER BY season_number ASC
-        """).fetchall()
-        conn.close()
-        return jsonify([dict(s) for s in stats])
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-@app.route('/api/debug/naruto_merge_result')
-def debug_naruto_merge_result():
-    try:
-        conn = get_db()
-
-        # 1. '나루토 질풍전' 그룹에 현재 몇 개의 에피소드가 있는지 확인
-        # (cleanedName 기준)
-        target_info = conn.execute("""
-            SELECT path, cleanedName, (SELECT COUNT(*) FROM episodes WHERE series_path = s.path) as total_eps
-            FROM series s
-            WHERE cleanedName = '나루토 질풍전'
-            LIMIT 1
+            WHERE category IN ('movies', 'movie')
         """).fetchone()
 
-        if not target_info:
-            return jsonify({"status": "error", "message": "'나루토 질풍전' 시리즈를 찾을 수 없습니다."})
-
-        # 2. 시즌별로 에피소드가 몇 개씩 배정되었는지 통계 확인
-        # (시즌 1, 2, 4가 0이 아닌지 확인하는 것이 핵심!)
-        season_stats = conn.execute("""
-            SELECT season_number, COUNT(*) as ep_count
-            FROM episodes
-            WHERE series_path = ?
-            GROUP BY season_number
-            ORDER BY season_number ASC
-        """, (target_info['path'],)).fetchall()
-
-        # 3. 누락되었던 시즌 1, 2, 4의 샘플 데이터 확인
-        samples = conn.execute("""
-            SELECT season_number, episode_number, title, series_path
-            FROM episodes
-            WHERE series_path = ? AND season_number IN (1, 2, 4)
-            ORDER BY season_number ASC, episode_number ASC
-            LIMIT 20
-        """, (target_info['path'],)).fetchall()
-
-        conn.close()
+        # 3. 샘플 데이터 (movies 카테고리 중 5개)
+        samples = conn.execute(
+            "SELECT name, path, category, posterPath FROM series WHERE category IN ('movies', 'movie') LIMIT 5").fetchall()
 
         return jsonify({
-            "target_series": dict(target_info),
-            "season_distribution": [dict(s) for s in season_stats],
-            "missing_seasons_samples": [dict(m) for m in samples]
+            "category_distribution": [dict(r) for r in cat_dist],
+            "movie_stats": dict(movie_data),
+            "samples": [dict(r) for r in samples]
         })
     except Exception as e:
         return jsonify({"error": str(e)})
-
-
-@app.route('/api/repair/naruto_revert')
-def naruto_revert():
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-
-        # 1. '나루토' 관련 에피소드들을 찾아서 원래의 개별 경로로 되돌립니다.
-        # videoUrl에 저장된 실제 파일 경로를 기반으로 series_path를 복구합니다.
-        cursor.execute(
-            "SELECT id, videoUrl FROM episodes WHERE videoUrl LIKE '%나루토%질풍전%' OR series_path LIKE '%나루토%질풍전%'")
-        eps = cursor.fetchall()
-
-        revert_batch = []
-        for ep in eps:
-            # videoUrl에서 path 매개변수 값을 추출합니다.
-            parsed_url = urllib.parse.urlparse(ep['videoUrl'])
-            query_params = urllib.parse.parse_qs(parsed_url.query)
-            if 'path' in query_params:
-                rel_path = query_params['path'][0]
-                # 원래 스캐너가 저장하던 방식인 "animations_all/상대경로"로 되돌립니다.
-                original_spath = f"animations_all/{rel_path}"
-                revert_batch.append((original_spath, ep['id']))
-
-        if revert_batch:
-            # series_path를 원복하고, 수동으로 넣었던 시즌/회차 번호도 초기화합니다.
-            cursor.executemany(
-                "UPDATE episodes SET series_path = ?, season_number = NULL, episode_number = NULL WHERE id = ?",
-                revert_batch)
-
-        # 2. 통합용으로 만들었던 '나루토 질풍전' 시리즈 레코드를 삭제합니다.
-        cursor.execute("DELETE FROM series WHERE path = 'animations_all/시리즈/나/나루토 질풍전 (2007)'")
-        # 혹은 cleanedName이 '나루토 질풍전'인 대표 레코드 삭제
-        cursor.execute(
-            "DELETE FROM series WHERE cleanedName = '나루토 질풍전' AND path NOT LIKE '%.mkv' AND path NOT LIKE '%.mp4'")
-
-        conn.commit()
+    finally:
         conn.close()
-        build_all_caches()
 
-        return f"나루토 원복 완료: {len(revert_batch)}개의 에피소드를 이전 상태(개별 경로)로 되돌렸습니다."
+# 영화 파일명이나 경로를 키워드로 검색해 보세요
+@app.route('/api/debug/search_movies_anywhere')
+def search_movies_anywhere():
+    conn = get_db()
+    # 경로에 'movies' 혹은 '영화'가 들어간 파일들을 찾아 어떤 category로 등록되어 있는지 확인
+    rows = conn.execute("""
+        SELECT category, path, name
+        FROM series
+        WHERE path LIKE '%영화%' OR path LIKE '%movies%'
+        LIMIT 50
+    """).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/debug/find_movies_wrong_cat')
+def find_movies_wrong_cat():
+    # 경로에 '영화' 혹은 'movies'가 포함되어 있는데 category가 'movies'가 아닌 것들 조회
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT path, category, name
+        FROM series
+        WHERE (path LIKE '%영화%' OR path LIKE '%movies%')
+        AND category != 'movies'
+        LIMIT 50
+    """).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/debug/check_exclusion_rules')
+def check_exclusion_rules():
+    # 영화 폴더 경로 정의 (PATH_MAP 확인)
+    base_path, _ = PATH_MAP["영화"]
+
+    # 1. 영화 폴더 내부에 무엇이 있는지 확인
+    try:
+        items = os.listdir(base_path)
     except Exception as e:
-        return f"원복 중 에러 발생: {str(e)}"
+        return jsonify({"error": f"폴더 접근 불가: {str(e)}"})
 
+    # 2. 제외 규칙(EXCLUDE_FOLDERS)에 걸리는 항목이 있는지 확인
+    excluded = [item for item in items if any(ex in item for ex in EXCLUDE_FOLDERS)]
 
-# --- [특정 폴더 타겟 스캔 API] ---
-@app.route('/api/admin/scan_targeted')
-def api_scan_targeted():
-    cat_key = request.args.get('category')  # 'animations_all', 'movies' 등
-    folder_name = request.args.get('folder')  # '원피스' 등 실제 폴더명
+    # 3. 화이트리스트 확인
+    whitelist = WHITELISTS.get("movies", [])
 
-    if not cat_key or not folder_name:
-        return jsonify({"status": "error", "message": "카테고리와 폴더명을 입력하세요."}), 400
-
-    # 내부 카테고리 키를 PATH_MAP 라벨로 매핑
-    cat_map = {
-        "movies": "영화",
-        "foreigntv": "외국TV",
-        "koreantv": "국내TV",
-        "animations_all": "애니메이션",
-        "air": "방송중"
-    }
-
-    if cat_key not in cat_map:
-        return jsonify({"status": "error", "message": "잘못된 카테고리입니다."}), 400
-
-    label = cat_map[cat_key]
-    base_path, prefix = PATH_MAP[label]
-
-    def run_targeted_task():
-        # 1. 파일 시스템 스캔 (지정한 폴더만)
-        scan_recursive_to_db(base_path, prefix, cat_key, include_only=[folder_name])
-        # 2. 캐시 갱신
-        build_all_caches()
-        # 3. 메타데이터 매칭 실행 (폴더명 키워드로 타겟팅)
-        fetch_metadata_async(target_name=folder_name)
-
-    threading.Thread(target=run_targeted_task, daemon=True).start()
-    return jsonify({"status": "success", "message": f"[{label}] 카테고리의 '{folder_name}' 폴더 스캔 및 매칭을 시작했습니다."})
+    return jsonify({
+        "base_path": base_path,
+        "total_items_in_folder": len(items),
+        "items_matching_exclude_list": excluded,
+        "current_whitelist": whitelist
+    })
 
 # --- [추가] 수동 포스터 변경 라우트 ---
 @app.route('/custom_poster/<filename>')
