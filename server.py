@@ -561,9 +561,11 @@ def simple_similarity(s1, s2):
 
 
 # --- [TMDB API 보완: 지능형 재검색 및 랭킹 시스템] ---
-def get_tmdb_info_server(title, category=None, ignore_cache=False):  # category 매개변수 추가
+def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  # category 매개변수 추가
     if not title: return {"failed": True}
     hint_id = extract_tmdb_id(title)
+    if not hint_id and path: # 제목에 ID가 없으면 경로(폴더명)에서 추출 시도
+        hint_id = extract_tmdb_id(path)
     ct, year = clean_title_complex(title)
     if not ct or REGEX_FORBIDDEN_TITLE.match(ct):
         return {"failed": True, "forbidden": True}
@@ -986,7 +988,7 @@ def perform_full_scan():
     threading.Thread(target=fetch_metadata_async, daemon=True).start()
 
 
-def fetch_metadata_async(force_all=False, target_name=None):
+def fetch_metadata_async(force_all=False, target_name=None, target_category=None):
     global IS_METADATA_RUNNING
     if IS_METADATA_RUNNING:
         log("METADATA", "이미 프로세스가 실행 중입니다. 중단합니다.")
@@ -1006,8 +1008,9 @@ def fetch_metadata_async(force_all=False, target_name=None):
         if target_name:
             count_query += " AND (name LIKE ? OR cleanedName LIKE ?)"
             count_params.extend([f'%{target_name}%', f'%{target_name}%'])
-        else:
-            count_query += " AND (tmdbId IS NULL OR tmdbTitle IS NULL)"
+        elif target_category:  # 카테고리 필터 추가
+            count_query += " AND category = ?"
+            count_params.append(target_category)
 
         t_wait = cursor.execute(count_query, count_params).fetchone()[0]
 
@@ -1039,15 +1042,17 @@ def fetch_metadata_async(force_all=False, target_name=None):
 
         # 3. 매칭할 그룹 쿼리 (기존 유지)
         group_query = '''
-            SELECT cleanedName, yearVal, category, MIN(name) as sample_name, GROUP_CONCAT(name, '|') as orig_names
+            SELECT cleanedName, yearVal, category, MIN(name) as sample_name, MIN(path) as sample_path, GROUP_CONCAT(name, '|') as orig_names
             FROM series
-            WHERE failed = 0
-            AND cleanedName IS NOT NULL
+            WHERE failed = 0 AND cleanedName IS NOT NULL
         '''
         group_params = []
         if target_name:
             group_query += ' AND (name LIKE ? OR cleanedName LIKE ?)'
             group_params.extend([f'%{target_name}%', f'%{target_name}%'])
+        elif target_category:
+            group_query += ' AND category = ?'
+            group_params.append(target_category)
         else:
             group_query += ' AND (tmdbId IS NULL OR tmdbTitle IS NULL OR path IN (SELECT series_path FROM episodes WHERE season_number IS NULL))'
 
@@ -1062,6 +1067,7 @@ def fetch_metadata_async(force_all=False, target_name=None):
                 'year': gr['yearVal'],
                 'category': gr['category'],
                 'sample_name': gr['sample_name'],
+                'sample_path': gr['sample_path'],  # 🔴 이 줄을 추가!
                 'orig_names': gr['orig_names'].split('|')
             })
 
@@ -1069,8 +1075,9 @@ def fetch_metadata_async(force_all=False, target_name=None):
         set_update_state(total=total)  # [추가] 실제 작업할 그룹 수로 다시 정교하게 세팅
 
         def process_one(task):
+            # path=task['sample_path'] 추가 전달
             info = get_tmdb_info_server(task['sample_name'], category=task['category'],
-                                        ignore_cache=(target_name is not None))
+                                        ignore_cache=(target_name is not None), path=task['sample_path'])
             return (task, info)
 
         batch_size = 20  # [개선] 병렬 처리 안정성을 위해 배치 사이즈 조정
@@ -1826,22 +1833,29 @@ def backup_metadata():
 
 @app.route('/apply_tmdb_thumbnails')
 def apply_tmdb_thumbnails():
-    threading.Thread(target=run_apply_thumbnails, daemon=True).start()
-    return jsonify({"status": "success", "message": "Background task started: Applying TMDB thumbnails to episodes."})
-
+    cat = request.args.get('category') # 카테고리 파라미터 받기
+    threading.Thread(target=run_apply_thumbnails, kwargs={'target_category': cat}, daemon=True).start()
+    msg = f"{cat or '전체'} 카테고리 스틸컷 적용 시작"
+    return jsonify({"status": "success", "message": msg})
 
 def run_apply_thumbnails():
-    log("THUMB_SYNC", "🔄 TMDB 고화질 스틸컷/배경(original) 일괄 적용 시작")
+    task_name = f"TMDB 썸네일 교체 ({target_category or '전체'})"
+    log("THUMB_SYNC", f"🔄 {task_name} 시작")
+    set_update_state(is_running=True, task_name=task_name, clear_logs=True)
 
     conn = get_db()
-    # 전체 매칭된 작품 목록 가져오기
     query = """
         SELECT DISTINCT s.path, s.name, s.category, s.tmdbId
         FROM series s
         JOIN episodes e ON s.path = e.series_path
         WHERE s.tmdbId IS NOT NULL
     """
-    series_rows = [dict(r) for r in conn.execute(query).fetchall()]
+    params = []
+    if target_category:
+        query += " AND s.category = ?"
+        params.append(target_category)
+
+    series_rows = [dict(r) for r in conn.execute(query, params).fetchall()]
     conn.close()
 
     total = len(series_rows)
@@ -3408,20 +3422,40 @@ def updater_ui():
 
                     <!-- 3. 고급 도구 -->
                     <div class="action-card">
-                        <div class="card-title"><i class="fas fa-tools"></i> 고급 도구</div>
-                        <div class="btn-list">
-                            <button class="btn-maintenance" onclick="triggerTask('/apply_tmdb_thumbnails')"><i class="fas fa-image"></i> TMDB 스틸컷 일괄 교체</button>
-                            <button class="btn-maintenance" onclick="triggerTask('/pre_extract_subtitles')"><i class="fas fa-closed-captioning"></i> 영화 자막 일괄 추출</button>
-                            <button class="btn-maintenance" onclick="triggerTask('/refresh_cleaned_names')"><i class="fas fa-broom"></i> 제목 정제 및 그룹화 재정렬</button>
-                            <button class="btn-danger-alt" onclick="triggerTask('/reset_episodes_metadata')"><i class="fas fa-undo"></i> 에피소드 회차 정보 초기화</button>
-                            <button class="btn-danger-alt" onclick="triggerTask('/reset_all_tmdb_data')"><i class="fas fa-trash-alt"></i> 전체 TMDB 데이터 초기화</button>
-                        </div>
+    <div class="card-title"><i class="fas fa-tools"></i> 고급 도구</div>
+    <div class="input-group" style="margin-top: 0;">
+        <select id="stillsCategory" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
+            <option value="">전체 카테고리</option>
+            <option value="movies">영화</option>
+            <option value="koreantv">국내TV</option>
+            <option value="foreigntv">외국TV</option>
+            <option value="animations_all">애니메이션</option>
+            <option value="air">방송중</option>
+        </select>
+        <button class="btn-maintenance" onclick="applyStillsByCategory()"><i class="fas fa-image"></i> 선택 카테고리 스틸컷 적용</button>
+    </div>
+    <div class="btn-list" style="margin-top:15px; border-top: 1px solid #334155; padding-top: 15px;">
+        <button class="btn-maintenance" onclick="triggerTask('/pre_extract_subtitles')"><i class="fas fa-closed-captioning"></i> 영화 자막 일괄 추출</button>
+        <button class="btn-maintenance" onclick="triggerTask('/refresh_cleaned_names')"><i class="fas fa-broom"></i> 제목 정제 및 그룹화 재정렬</button>
+        <button class="btn-danger-alt" onclick="triggerTask('/reset_episodes_metadata')"><i class="fas fa-undo"></i> 에피소드 회차 정보 초기화</button>
+        <button class="btn-danger-alt" onclick="triggerTask('/reset_all_tmdb_data')"><i class="fas fa-trash-alt"></i> 전체 TMDB 데이터 초기화</button>
+        <button class="btn-meta" onclick="triggerTask('/api/admin/match_movies_all')" style="background: #E50914;">
+    <i class="fas fa-film"></i> 영화 카테고리 포스터 집중 매칭
+    </button>
+    </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <script>
+    <script>
+    function applyStillsByCategory() {
+        const category = document.getElementById('stillsCategory').value;
+        const catName = category || '전체';
+        if (confirm(`'${catName}' 카테고리의 스틸컷을 적용하시겠습니까?`)) {
+            triggerTask(`/apply_tmdb_thumbnails?category=${category}`);
+        }
+    }
     // 카테고리별 하위 폴더 힌트 가져오기
     // 힌트 가져오기
     async function fetchPathHints() {
@@ -4081,7 +4115,7 @@ def _rebuild_fast_memory_cache():
                 group_key = f"{tmdb_id}_{c_name}_{tag}_{sub_folder}" if tmdb_id else f"{c_name}_{tag}_{sub_folder}"
 
             if not group_key or group_key in seen_keys: continue
-            if not r['posterPath']: continue
+            # if not r['posterPath']: continue
             seen_keys.add(group_key)
 
             # 영화는 TMDB 제목이나 파일명을 우선 노출
@@ -6139,6 +6173,14 @@ def check_exclusion_rules():
         "items_matching_exclude_list": excluded,
         "current_whitelist": whitelist
     })
+
+@app.route('/api/admin/match_movies_all')
+def match_movies_all():
+    if IS_METADATA_RUNNING: return jsonify({"status": "error", "message": "이미 작업 중입니다."})
+    # 영화 카테고리 실패 기록 초기화
+    conn = get_db(); conn.execute("UPDATE series SET failed = 0 WHERE category = 'movies'"); conn.commit(); conn.close()
+    threading.Thread(target=fetch_metadata_async, kwargs={'target_category': 'movies', 'force_all': True}, daemon=True).start()
+    return jsonify({"status": "success", "message": "영화 전용 포스터 매칭을 시작합니다."})
 
 # --- [추가] 수동 포스터 변경 라우트 ---
 @app.route('/custom_poster/<filename>')
