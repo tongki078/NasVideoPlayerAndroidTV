@@ -3391,9 +3391,18 @@ def updater_ui():
         <p style="font-size: 11px; color: var(--text-dim); margin-top: 5px;">* 서버의 실제 폴더명을 입력하세요. 해당 폴더만 다시 읽고 정보를 가져옵니다.</p>
     </div>
 </div>
+                    <div class="action-card">
+                        <div class="card-title"><i class="fas fa-search"></i> 스캔 및 매칭 (전체)</div>
+                        <div class="btn-list">
+                            <button class="btn-meta" onclick="triggerTask('/api/match_air_foreign')"><i class="fas fa-bolt"></i> 외국 폴더 핀셋 매칭 (추천)</button>
+                            <button class="btn-scan" onclick="triggerTask('/api/scan_air_foreign')"><i class="fas fa-folder-open"></i> 외국 폴더 로컬 스캔</button>
+                            <button class="btn-scan" onclick="triggerTask('/rescan_broken')"><i class="fas fa-sync"></i> 전체 로컬 폴더 스캔</button>
+
+                        </div>
+                    </div>
                     <!--1. 개별 작품 수정 (통합 버전) -->
                     <div class="action-card">
-                        <div class="card-title"><i class="fas fa-magic"></i> 개별 작품 수정</div>
+                        <div class="card-title"><i class="fas fa-magic"></i> 매칭 지정 수정</div>
                         <div class="input-group">
                             <select id="fixCategorySelect" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
                                 <option value="전체">전체 카테고리</option>
@@ -3406,12 +3415,13 @@ def updater_ui():
                             <input type="text" id="fixNameInput" placeholder="작품 제목 (예: 미공개X파일)">
                             <input type="text" id="tmdbIdInput" placeholder="TMDB ID (예: tv:32863)">
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 5px;">
-                                <button class="btn-meta" onclick="manualMatchSimple()" style="justify-content: center;"><i class="fas fa-link"></i> 수동 연결</button>
-                                <button class="btn-meta" onclick="manualMatchV2()" style="justify-content: center; background: var(--accent);"><i class="fas fa-sync-alt"></i> 수동 연결 V2</button>
+                                <button class="btn-meta" onclick="manualMatchSimple()" style="justify-content: center;"><i class="fas fa-link"></i> 수동 연결\n(로컬제목으로고정)</button>
+                                <button class="btn-meta" onclick="manualMatchV2()" style="justify-content: center; background: var(--accent);"><i class="fas fa-sync-alt"></i> 수동 연결 V2\n(tmdb제목으로 변경됨)</button>
                                 <button class="btn-maintenance" onclick="fixMetadata()" style="justify-content: center;"><i class="fas fa-wand-magic-sparkles"></i> 자동 수정</button>
                                 <button class="btn-maintenance" onclick="resetAndRefresh()" style="justify-content: center; background: var(--danger);"><i class="fas fa-trash-alt"></i> 캐시삭제 & 재매칭</button>
+                                <button class="btn-meta" onclick="triggerTask('/retry_failed_metadata')" style="justify-content: center; background: #10b981; grid-column: span 2; margin-top: 5px;"><i class="fas fa-redo"></i> 실패 메타데이터 재시도</button>
                                 <button class="btn-meta" onclick="manualMatchTargeted()" style="justify-content: center; background: #2563eb; grid-column: span 2; margin-top: 5px;">
-                                    <i class="fas fa-bullseye"></i> 카테고리 지정 정밀 연결
+                                    <i class="fas fa-bullseye"></i> 카테고리 지정 메타데이터 정밀 연결
                                 </button>
                                 <button class="btn-danger-alt" onclick="triggerTask('/api/admin/force_clear_one_piece_stills')" style="justify-content: center; background: #991b1b; grid-column: span 2; margin-top: 5px;">
     <i class="fas fa-eraser"></i> 원피스 실사판 썸네일 강제 제거
