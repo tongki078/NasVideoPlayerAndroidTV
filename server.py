@@ -366,7 +366,10 @@ def clean_title_complex(title, full_path=None, base_path=None):
     if not title: return "", None
     t_orig = nfc(title)
 
-    # [수정] 연도 정보 미리 추출
+    # [로그] 시작 지점
+    is_bleach = "블리치" in t_orig
+    if is_bleach: print(f"\n[DEBUG] === 블리치 분석 시작: {t_orig} ===")
+
     year_match = REGEX_YEAR.search(t_orig)
     extracted_year = year_match.group().strip('()') if year_match else None
 
@@ -374,49 +377,65 @@ def clean_title_complex(title, full_path=None, base_path=None):
     is_movie = any(x in t_low for x in ['극장판', 'themovie', '劇場版', 'thelast'])
 
     series_name = ""
+    if is_movie and year_match:
+        potential = t_orig[:year_match.start()].replace('.', ' ').strip()
+        if len(potential) >= 2:
+            series_name = potential
+            if is_bleach: print(f"[DEBUG] 1단계(영화+연도): {series_name}")
+
     if full_path:
         parts = [p.strip() for p in full_path.replace('\\', '/').split('/') if p.strip()]
-
-        # [수정] Specials 폴더 감지 로직
-        is_in_special = any(x in full_path.lower() for x in ['specials', 'special', '특전'])
-
-        # 1. Specials 폴더 안의 '극장판' 키워드가 있는 파일은 파일명 자체를 시리즈명으로!
-        if is_in_special and is_movie:
-            series_name = os.path.splitext(t_orig)[0]
-        SKIP_DIRS = {
-            '애니메이션', '일본애니메이션', '라프텔', '시리즈', '기타', 'video', 'volume1', 'volume2',
-            'movies', 'animations_all', 'koreantv', 'foreigntv', 'air', 'gdrive', 'nas', 'share',
-            '더빙', '자막', 'gds3', 'video', 'GDS3', 'GDRIVE', 'VIDEO', 'specials', 'season', '시즌',
-            '가', '나', '다', '라', '마', '바', '사', '아', '자', '차', '카', '타', '파', '하',
-            'ㄱ', 'ㄴ', 'ㄷ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅅ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ',
-            'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u',
-            'v', 'w', 'x', 'y', 'z',
-            '극장판', '극장', 'movie', 'themovie'
-        }
-        # [수정] Specials 폴더 안에 있다면 폴더명 대신 파일명을 시리즈명으로 사용 (극장판 개별 분리용)
-        is_in_special = any(x in full_path.lower() for x in ['specials', 'special', '특전'])
+        SKIP_DIRS = {'애니메이션', '일본애니메이션', '라프텔', '시리즈', '기타', 'video', 'volume1', 'volume2', 'movies', 'animations_all',
+                     'koreantv', 'foreigntv', 'air', 'gdrive', 'nas', 'share', '더빙', '자막', 'gds3', 'video', 'GDS3',
+                     'GDRIVE', 'VIDEO', 'specials', 'season', '시즌', '가', '나', '다', '라', '마', '바', '사', '아', '자', '차',
+                     '카', '타', '파', '하', '극장판', '극장', 'movie', 'themovie'}
 
         if not series_name:
             for p in reversed(parts[:-1]):
-                # [중요] nfc()를 적용하여 NFD(자음모음분리) 환경에서도 정확히 매칭되게 수정
                 p_clean = nfc(p.lower().replace(" ", ""))
                 if p_clean in SKIP_DIRS or len(p_clean) <= 1: continue
+                if re.search(r'\d+~\d+|\d+-\d+', p_clean): continue
                 if any(p_clean.endswith(ext) for ext in VIDEO_EXTS): continue
                 if re.search(r'(?i)season\s*\d+|시즌\s*\d+|part\s*\d+|s\d+', p_clean): continue
                 series_name = p
+                if is_bleach: print(f"[DEBUG] 2단계(폴더추출): {series_name}")
                 break
 
     if not series_name:
         series_name = os.path.splitext(t_orig)[0]
+        if is_bleach: print(f"[DEBUG] 3단계(파일명기반): {series_name}")
 
     series_name = REGEX_BRACKETS.sub(' ', series_name)
+    if is_bleach: print(f"[DEBUG] 4단계(괄호제거): {series_name}")
+
     marker_match = REGEX_EP_MARKER_STRICT.search(series_name)
     if marker_match:
         potential = series_name[:marker_match.start()].strip()
-        if len(potential) >= 2: series_name = potential
+        if len(potential) >= 2:
+            series_name = potential
+            if is_bleach: print(f"[DEBUG] 5단계(마커절단): {series_name}")
 
-    series_name = re.sub(r'(?i)\b\d{1,4}\s*(?:기|화|회|부|장|쿨|편|시즌|Season|Part|파트)\b', ' ', series_name)
-    series_name = re.sub(r'(?i)[.\s_-](?:E|EP|S)\d+\b', ' ', series_name)
+    # 범인으로 의심되는 기수/회차 제거 구간
+    # [수정] 영화(극장판)일 때는 '1기', '2기'를 지우지 않고 보존해야 함!
+    if not is_movie:
+        series_name = re.sub(r'(?i)\b\d{1,4}\s*(?:기|화|회|부|장|쿨|편|시즌|Season|Part|파트)\b', ' ', series_name)
+    if is_bleach: print(f"[DEBUG] 6단계(기수제거): {series_name}")
+
+    # 1. [핵심] '1~4기' 같은 묶음 범위를 실제 파일 회차(E01, E02...)에 맞춰서 개별화
+    # 반드시 아래 정제 로직(2, 3번)보다 먼저 실행되어야 합니다.
+    range_match = re.search(r'(\d+)[~-](\d+)\s*(?:기|화|회|부|장|쿨|편|시즌|Season|Part|파트)?', series_name)
+    if range_match:
+        actual_ep = re.search(r'(?i)(?:[.\s_-]E|EP)\s*(\d+)|(\d+)\s*(?:화|회)', t_orig)
+        if actual_ep:
+            ep_num = int(actual_ep.group(1) or actual_ep.group(2))
+            series_name = series_name.replace(range_match.group(0), f"{ep_num}기")
+
+    # 2. 일반적인 기수/회차 제거 (영화가 아닐 때만 수행하여 '극장판 블리치 1기' 같은 이름을 보호)
+    if not is_movie:
+        series_name = re.sub(r'(?i)\b\d{1,4}\s*(?:기|화|회|부|장|쿨|편|시즌|Season|Part|파트)\b', ' ', series_name)
+        series_name = re.sub(r'(?i)[.\s_-](?:E|EP|S)\d+\b', ' ', series_name)
+
+    # 3. 공통 정제 (기술 태그, 특수문자, 공백 제거)
     series_name = REGEX_TECHNICAL_TAGS.sub('', series_name)
     series_name = REGEX_SPECIAL_CHARS.sub(' ', series_name)
     series_name = REGEX_SPACES.sub(' ', series_name).strip()
@@ -424,7 +443,8 @@ def clean_title_complex(title, full_path=None, base_path=None):
     if is_movie and "극장판" not in series_name:
         series_name = f"극장판 {series_name}"
 
-    return series_name.strip(), extracted_year  # [수정] 추출된 연도 반환
+    if is_bleach: print(f"[DEBUG] === 최종 결과: {series_name} ===\n")
+    return series_name.strip(), extracted_year
 
 @app.route('/api/repair/naruto_movie_liberation')
 def naruto_movie_liberation():
@@ -1838,7 +1858,7 @@ def apply_tmdb_thumbnails():
     msg = f"{cat or '전체'} 카테고리 스틸컷 적용 시작"
     return jsonify({"status": "success", "message": msg})
 
-def run_apply_thumbnails():
+def run_apply_thumbnails(target_category=None):
     task_name = f"TMDB 썸네일 교체 ({target_category or '전체'})"
     log("THUMB_SYNC", f"🔄 {task_name} 시작")
     set_update_state(is_running=True, task_name=task_name, clear_logs=True)
@@ -4115,7 +4135,7 @@ def _rebuild_fast_memory_cache():
                 group_key = f"{tmdb_id}_{c_name}_{tag}_{sub_folder}" if tmdb_id else f"{c_name}_{tag}_{sub_folder}"
 
             if not group_key or group_key in seen_keys: continue
-            # if not r['posterPath']: continue
+            if not r['posterPath']: continue
             seen_keys.add(group_key)
 
             # 영화는 TMDB 제목이나 파일명을 우선 노출
