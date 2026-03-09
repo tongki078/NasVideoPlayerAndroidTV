@@ -281,6 +281,11 @@ private fun Category.toSeries() = Series(
     episodes = this.movies ?: emptyList(),
     fullPath = this.path,
     posterPath = this.posterPath,
+    category = this.category,
     genreIds = this.genreIds ?: emptyList(),
-    genreNames = this.genreNames ?: emptyList()
+    genreNames = this.genreNames ?: emptyList(),
+    year = this.year,
+    rating = this.rating,
+    seasonCount = this.seasonCount,
+    overview = this.overview
 )
