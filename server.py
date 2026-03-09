@@ -440,6 +440,12 @@ def clean_title_complex(title, full_path=None, base_path=None):
     series_name = REGEX_SPECIAL_CHARS.sub(' ', series_name)
     series_name = REGEX_SPACES.sub(' ', series_name).strip()
 
+    if len(series_name) < 2 or series_name.isdigit():
+        if full_path:
+            parts = full_path.split('/')
+            if len(parts) > 1:
+                series_name = parts[-2]  # 파일의 바로 윗 폴더명 사용
+
     if is_movie and "극장판" not in series_name:
         series_name = f"극장판 {series_name}"
 
@@ -1632,6 +1638,7 @@ def search_videos():
             SELECT * FROM series
             WHERE (name LIKE ? OR name LIKE ? OR cleanedName LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ? OR tmdbTitle LIKE ?)
             AND posterPath IS NOT NULL
+            AND cleanedName NOT IN ('1', '2', '3', '01', '02') -- 의미 없는 숫자 제목 제외
             AND EXISTS (SELECT 1 FROM episodes WHERE series_path = series.path)
         """
         params = [f"%{q_nfc}%", f"%{nfd(q)}%", f"%{q_nfc}%", f"%{nfd(q)}%", f"%{q_nfc}%", f"%{nfd(q)}%"]
@@ -1646,19 +1653,6 @@ def search_videos():
             query += " AND path NOT LIKE ?"
             params.append(f"{exclude_path}%")
 
-        # 4. 그룹화 및 정렬 (특수 대상만 폴더별로 묶음)
-        # query += """
-        #     GROUP BY category, tmdbId, cleanedName,
-        #         (CASE WHEN (cleanedName LIKE '%원피스%' OR cleanedName LIKE '%명탐정 코난%' OR cleanedName LIKE '%나루토%')
-        #               THEN (CASE WHEN path LIKE '%/%/%' THEN SUBSTR(path, INSTR(path, '/') + 1, INSTR(SUBSTR(path, INSTR(path, '/') + 1), '/') - 1) ELSE '' END)
-        #               ELSE '' END),
-        #         CASE WHEN (path LIKE '%더빙%' OR name LIKE '%더빙%') THEN '더빙' WHEN (path LIKE '%자막%' OR name LIKE '%자막%') THEN '자막' ELSE '' END
-        #     ORDER BY
-        #         CASE WHEN tmdbTitle = ? OR cleanedName = ? THEN 1 WHEN tmdbTitle LIKE ? THEN 2 WHEN cleanedName LIKE ? THEN 3 ELSE 4 END ASC,
-        #         seasonCount DESC, name ASC
-        # """
-
-        # [개선] 하드코딩 대신 상단의 SPECIAL_GRANULAR_GROUPS 리스트를 동적으로 반영
         special_names_cond = " OR ".join([f"cleanedName LIKE '%{g}%'" for g in SPECIAL_GRANULAR_GROUPS])
 
         query += f"""
