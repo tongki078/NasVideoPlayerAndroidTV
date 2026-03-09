@@ -21,6 +21,8 @@ class VideoRepositoryImpl : VideoRepository {
     private fun isGenericFolder(name: String?): Boolean {
         if (name.isNullOrBlank()) return true
         val n = name.trim().toNfc()
+        // [수정] 이름이 숫자로만 되어 있거나 일반적인 제목이 아닌 경우 필터링
+        if (n.all { it.isDigit() }) return true
         return isGenericTitle(n) || n.contains("Search Results", ignoreCase = true)
     }
 
@@ -41,7 +43,8 @@ class VideoRepositoryImpl : VideoRepository {
     }
 
     private fun Category.toSeries() = Series(
-        title = if (!name.isNullOrBlank()) name else (tmdbTitle ?: ""),
+        // [수정] 제목이 모호할 경우 경로 정보를 활용
+        title = if (!name.isNullOrBlank()) name else (tmdbTitle ?: path?.split("/")?.lastOrNull() ?: "기타"),
         episodes = movies ?: emptyList(),
         seasons = seasons ?: emptyMap(),
         fullPath = path,
@@ -156,10 +159,13 @@ class VideoRepositoryImpl : VideoRepository {
             if (category.isNotEmpty()) {
                 parameter("cat", category)
             }
-        }.body<List<Category>>()
+        }
         
-        println("VideoRepository: Search success: ${response.size} results")
-        response.map { it.fixUrls().toSeries() }
+        val jsonString = response.bodyAsText()
+        println("VideoRepository: Raw search response: $jsonString")
+        
+        val categories = Json.decodeFromString<List<Category>>(jsonString)
+        categories.map { it.fixUrls().toSeries() }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         println("VideoRepository: Search failed: ${e.message}")

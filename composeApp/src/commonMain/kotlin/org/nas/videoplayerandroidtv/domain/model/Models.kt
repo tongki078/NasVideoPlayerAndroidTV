@@ -19,6 +19,7 @@ data class Category(
     val rating: String? = null,      // 추가
     val seasonCount: Int? = null,    // 추가
     val tmdbTitle: String? = null,
+    val tmdbId: String? = null,         // [수정] String? 으로 변경하여 타입 호환성 확보
     val chosung: String? = null
 )
 
