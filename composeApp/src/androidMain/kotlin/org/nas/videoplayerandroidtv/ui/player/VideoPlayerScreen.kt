@@ -88,30 +88,29 @@ fun VideoPlayerScreen(
     initialPosition: Long = 0L,
     repository: VideoRepository,
     onPositionUpdate: (Long, Long) -> Unit = { _, _ -> },
+    onNextMovie: (Movie) -> Unit,
     onBack: () -> Unit
 ) {
-    var currentMovie by remember(movie) { mutableStateOf(movie) }
     val scope = rememberCoroutineScope()
     
-    var isSeeking by remember(currentMovie.id) { mutableStateOf(false) }
-    var userPaused by remember { mutableStateOf(false) }
-    var seekTime by remember(currentMovie.id) { mutableLongStateOf(0L) }
-    var finalSeekPosition by remember(currentMovie.id) { mutableLongStateOf(-1L) }
-    var currentPosition by remember(currentMovie.id) { mutableLongStateOf(0L) }
-    var totalDuration by remember(currentMovie.id) { mutableLongStateOf(0L) }
+    // key를 movie.id로 지정하여 movie가 바뀌면 상태를 초기화하도록 수정
+    var isSeeking by remember(movie.id) { mutableStateOf(false) }
+    var userPaused by remember(movie.id) { mutableStateOf(false) }
+    var seekTime by remember(movie.id) { mutableLongStateOf(0L) }
+    var finalSeekPosition by remember(movie.id) { mutableLongStateOf(-1L) }
+    var currentPosition by remember(movie.id) { mutableLongStateOf(0L) }
+    var totalDuration by remember(movie.id) { mutableLongStateOf(0L) }
     
-    // 서버에서 받은 position이 있다면 그것을 우선 사용, 없으면 인자로 받은 initialPosition 사용
-    val startPosition = remember(currentMovie.id) { 
-        val serverPos = ((currentMovie.position ?: 0.0) * 1000).toLong()
-        if (serverPos > 0) serverPos else if (currentMovie.id == movie.id) initialPosition else 0L 
+    val startPosition = remember(movie.id) { 
+        val serverPos = ((movie.position ?: 0.0) * 1000).toLong()
+        if (serverPos > 0) serverPos else initialPosition
     }
     
     var isControllerVisible by remember { mutableStateOf(true) }
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
-    // 자막 관련 상태
     var subtitleTracks by remember { mutableStateOf<List<String>>(emptyList()) }
-    var selectedSubtitleIndex by remember { mutableStateOf(-2) } // -2: auto
+    var selectedSubtitleIndex by remember { mutableStateOf(-2) }
     var isSubtitlePanelOpen by remember { mutableStateOf(false) }
 
     val mainBoxFocusRequester = remember { FocusRequester() }
@@ -129,15 +128,15 @@ fun VideoPlayerScreen(
     var isSkipOpeningFocused by remember { mutableStateOf(false) }
     var isSubtitleButtonFocused by remember { mutableStateOf(false) }
 
-    val nextMovie = remember(currentMovie, playlist) {
-        val currentIndex = playlist.indexOfFirst { it.id == currentMovie.id }
+    val nextMovie = remember(movie, playlist) {
+        val currentIndex = playlist.indexOfFirst { it.id == movie.id }
         if (currentIndex != -1 && currentIndex < playlist.size - 1) {
             playlist[currentIndex + 1]
         } else null
     }
 
-    val introEnd = currentMovie.introEnd ?: 90000L
-    val isDuringOpening = currentPosition in (currentMovie.introStart ?: 0L)..introEnd
+    val introEnd = movie.introEnd ?: 90000L
+    val isDuringOpening = currentPosition in (movie.introStart ?: 0L)..introEnd
 
     val allThumbnails = remember(totalDuration) {
         if (totalDuration <= 0) emptyList()
@@ -148,17 +147,13 @@ fun VideoPlayerScreen(
         mainBoxFocusRequester.requestFocus()
     }
 
-    // 진행률 업데이트 (서버 및 로컬)
-    LaunchedEffect(currentPosition, totalDuration, currentMovie.id) {
+    LaunchedEffect(currentPosition, totalDuration, movie.id) {
         if (currentPosition > 0 && totalDuration > 0 && !isSeeking) {
-            // 로컬 DB 및 앱 상태 업데이트
             onPositionUpdate(currentPosition, totalDuration)
-
-            // 서버 보고 (10초 단위)
             if (currentPosition % 10000 < 1000 || currentPosition > totalDuration - 5000) {
                 scope.launch {
                     repository.updateProgress(
-                        currentMovie.id ?: "",
+                        movie.id ?: "",
                         currentPosition / 1000.0,
                         totalDuration / 1000.0
                     )
@@ -225,7 +220,7 @@ fun VideoPlayerScreen(
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                         if (isBackButtonFocused || isReplayButtonFocused || isNextButtonFocused) {
-                            false // Row internally handles Left/Right if focuses are properly connected or using standard navigation
+                            false 
                         } else if (isSubtitleButtonFocused && isDuringOpening) { 
                             try { skipOpeningFocusRequester.requestFocus() } catch(_:Exception) {}
                             true 
@@ -275,7 +270,7 @@ fun VideoPlayerScreen(
             }
     ) {
         VideoPlayer(
-            url = currentMovie.videoUrl ?: "",
+            url = movie.videoUrl ?: "",
             modifier = Modifier.fillMaxSize(),
             initialPosition = startPosition,
             seekToPosition = finalSeekPosition,
@@ -283,9 +278,7 @@ fun VideoPlayerScreen(
             onPositionUpdate = { pos -> currentPosition = pos; if (!isSeeking) seekTime = pos },
             onDurationDetermined = { dur -> totalDuration = dur },
             onControllerVisibilityChanged = { visible -> isControllerVisible = visible },
-            onVideoEnded = { 
-                nextMovie?.let { currentMovie = it; isControllerVisible = true; userPaused = false } 
-            },
+            onVideoEnded = { nextMovie?.let { onNextMovie(it) } },
             onSeekFinished = { finalSeekPosition = -1L },
             onSubtitleTracksAvailable = { subtitleTracks = it },
             selectedSubtitleIndex = selectedSubtitleIndex,
@@ -297,52 +290,43 @@ fun VideoPlayerScreen(
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
-            AnimatedVisibility(
-                visible = isControllerVisible && !isSeeking,
-                enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
-                exit = fadeOut(),
-                modifier = Modifier.align(Alignment.TopEnd).zIndex(2f)
-            ) {
-                Column(
-                    modifier = Modifier.padding(top = 32.dp, end = 48.dp),
-                    horizontalAlignment = Alignment.End
+            key(movie.id) {
+                AnimatedVisibility(
+                    visible = isControllerVisible && !isSeeking,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.TopEnd).zIndex(2f)
                 ) {
-                    val titleText = currentMovie.title ?: ""
-                    val isMovie = currentMovie.videoUrl?.contains("type=movie") == true
-                    
-                    Text(
-                        text = titleText.cleanTitle(keepAfterHyphen = true, includeYear = false),
-                        color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
-                        style = LocalTextStyle.current.copy(shadow = Shadow(Color.Black, androidx.compose.ui.geometry.Offset(2f, 2f), 4f))
-                    )
-                    
-                    // 🔴 영화가 아닐 때만 시즌/회차 정보를 표시합니다.
-                    if (!isMovie) {
-                        val infoLabel = buildString {
-                            val season = currentMovie.season_number
-                            val episode = currentMovie.episode_number
-                            
-                            if (season != null && season > 0) {
-                                append("시즌 $season")
-                            } else {
-                                append("시즌 ${titleText.extractSeason()}")
-                            }
-                            
-                            if (episode != null && episode > 0) {
-                                append(" : ${episode}화")
-                            } else {
-                                val epInfo = titleText.extractEpisode()
-                                if (epInfo != null) {
-                                    append(" : $epInfo")
-                                }
-                            }
-                        }
+                    Column(
+                        modifier = Modifier.padding(top = 32.dp, end = 48.dp),
+                        horizontalAlignment = Alignment.End
+                    ) {
+                        val titleText = movie.title ?: ""
+                        val isMovie = movie.videoUrl?.contains("type=movie") == true
                         
                         Text(
-                            text = infoLabel,
-                            color = Color.White.copy(alpha = 0.8f), fontSize = 18.sp,
+                            text = titleText.cleanTitle(keepAfterHyphen = true, includeYear = false),
+                            color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
                             style = LocalTextStyle.current.copy(shadow = Shadow(Color.Black, androidx.compose.ui.geometry.Offset(2f, 2f), 4f))
                         )
+                        
+                        if (!isMovie) {
+                            val season = movie.season_number ?: titleText.extractSeason()
+                            val episode = movie.episode_number ?: titleText.extractEpisode()?.replace("화", "")?.toIntOrNull()
+                            
+                            val infoLabel = buildString {
+                                if (season > 0) append("시즌 $season ")
+                                if (episode != null && episode > 0) append(": ${episode}화")
+                            }
+                            
+                            if (infoLabel.isNotBlank()) {
+                                Text(
+                                    text = infoLabel,
+                                    color = Color.White.copy(alpha = 0.8f), fontSize = 18.sp,
+                                    style = LocalTextStyle.current.copy(shadow = Shadow(Color.Black, androidx.compose.ui.geometry.Offset(2f, 2f), 4f))
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -359,34 +343,22 @@ fun VideoPlayerScreen(
                             icon = Icons.AutoMirrored.Filled.ArrowBack,
                             isFocused = isBackButtonFocused,
                             onClick = { onBack() },
-                            modifier = Modifier
-                                .focusRequester(backButtonFocusRequester)
-                                .onFocusChanged { isBackButtonFocused = it.isFocused }
+                            modifier = Modifier.focusRequester(backButtonFocusRequester).onFocusChanged { isBackButtonFocused = it.isFocused }
                         )
 
                         NetflixIconButton(
                             icon = Icons.Default.Refresh,
                             isFocused = isReplayButtonFocused,
-                            onClick = { 
-                                finalSeekPosition = 0L
-                                mainBoxFocusRequester.requestFocus()
-                            },
-                            modifier = Modifier
-                                .focusRequester(replayButtonFocusRequester)
-                                .onFocusChanged { isReplayButtonFocused = it.isFocused }
+                            onClick = { finalSeekPosition = 0L; mainBoxFocusRequester.requestFocus() },
+                            modifier = Modifier.focusRequester(replayButtonFocusRequester).onFocusChanged { isReplayButtonFocused = it.isFocused }
                         )
 
                         if (nextMovie != null) {
                             NetflixIconButton(
                                 icon = Icons.AutoMirrored.Filled.ArrowForward,
                                 isFocused = isNextButtonFocused,
-                                onClick = { 
-                                    currentMovie = nextMovie
-                                    mainBoxFocusRequester.requestFocus()
-                                },
-                                modifier = Modifier
-                                    .focusRequester(nextButtonFocusRequester)
-                                    .onFocusChanged { isNextButtonFocused = it.isFocused }
+                                onClick = { nextMovie.let { onNextMovie(it) }; mainBoxFocusRequester.requestFocus() },
+                                modifier = Modifier.focusRequester(nextButtonFocusRequester).onFocusChanged { isNextButtonFocused = it.isFocused }
                             )
                         }
                     }
@@ -412,7 +384,7 @@ fun VideoPlayerScreen(
                             LazyRow(state = thumbListState, contentPadding = PaddingValues(horizontal = horizontalPadding), horizontalArrangement = Arrangement.spacedBy(20.dp), userScrollEnabled = false, modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                                 itemsIndexed(allThumbnails) { _, timestamp ->
                                     Box(modifier = Modifier.width(280.dp).height(160.dp).clip(RoundedCornerShape(8.dp)).background(Color.DarkGray).border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))) {
-                                        AsyncImage(model = ImageRequest.Builder(LocalContext.current).data("${currentMovie.videoUrl?.replace("video_serve", "thumb_serve")}&id=${currentMovie.id}&t=${timestamp/1000}").crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                        AsyncImage(model = ImageRequest.Builder(LocalContext.current).data("${movie.videoUrl?.replace("video_serve", "thumb_serve")}&id=${movie.id}&t=${timestamp/1000}").crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                                     }
                                 }
                             }
@@ -438,7 +410,6 @@ fun VideoPlayerScreen(
             }
         }
 
-        // --- [넷플릭스 스타일 우측 자막 패널 (Dialog 기반으로 안전하게 복구)] ---
         if (isSubtitlePanelOpen) {
             Dialog(
                 onDismissRequest = { isSubtitlePanelOpen = false; mainBoxFocusRequester.requestFocus() },

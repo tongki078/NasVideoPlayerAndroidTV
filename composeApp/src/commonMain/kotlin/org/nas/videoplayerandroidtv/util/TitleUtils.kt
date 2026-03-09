@@ -10,7 +10,6 @@ object TitleUtils {
     private val REGEX_TMDB_HINT = Regex("""\{tmdb[\s-]*(\d+)\}""")
     private val REGEX_CH_PREFIX = Regex("""(?i)^\[(?:KBS|SBS|MBC|tvN|JTBC|OCN|Mnet|TV조선|채널A|MBN|ENA|KBS2|KBS1|CH\d+|TV|Netflix|Disney\+|AppleTV|NET|Wavve|Tving|Coupang)\]\s*""")
     private val REGEX_JUNK_KEYWORDS = Regex("""(?i)\s*(?:더빙|자막|극장판|BD|TV|Web|OAD|OVA|ONA|Full|무삭제|감독판|확장판|최종화|TV판|완결|속편|(?<=\s|^)[상하](?=\s|$)|\d+부|파트|LIMITED|RM4K|DC|THEATRICAL|EXTENDED|FINAL|REPACK|REMUX|10bit|BRRip|BDRip|HDRip|DVDRip|WEB-DL|WEBRip|Bluray|Blu-ray|h264|h265|x264|x265|hevc|avc|aac|dts|ac3|ddp|dd\+|TrueHD|Atmos|E-AC3|EAC3|Dual-Audio|Multi-Audio|Multi-Sub|xvid|divx|hallowed|Next|F1RST|CineWise|RAV|viki|DisneyPlus|DSNP|NF|Netflix|AMZN|Amazon|HULU|HBO|HMAX|ATVP|AppleTV|Wavve|Tving|Coupang|TVRip|HDTV|HDR10|HDR10Plus|Vision|Dolby|1080p|720p|480p|2160p|4K|FHD|UHD|QHD|1080i|720i|KOREAN|KOR|JAPANESE|JPN|CHINESE|CHN|ENGLISH|ENG|Mandarin|Cantonese|FanSub|2CH|5\.1CH|PROMO|RETAIL|B-Global|DV)\s*""")
-    // 🔴 [수정] 제목 마지막 글자가 잘리는 현상 해결 (앞 글자를 소모하지 않는 Lookbehind(?<=) 적용)
     private val REGEX_EP_MARKER = Regex("""(?i)(?<=[.\s_-]|[가-힣\u3040-\u30ff\u4e00-\u9fff])(?:第?\s*S(\d+)E(\d+)(?:[-~]E?\d+)?|第?\s*S(\d+)|第?\s*E(\d+)(?:[-~]\d+)?|\d+\s*(?:화|회|기|부|話)|Season\s*\d+|Part\s*\d+|pt\s*\d+|Episode\s*\d+|Disk\s*\d+|Disc\s*\d+|CD\s*\d+|시즌\s*\d+|[상하]부|최종화|\d{6}|\d{8}).*""")
     private val REGEX_LEADING_EP_MARKER = Regex("""(?i)^第?\s*S(\d+)E(\d+)(?:[-~]E?\d+)?|^第?\s*S(\d+)|^第?\s*E(\d+)|^Season\s*\d+|^Part\s*\d+|^Episode\s*\d+|^시즌\s*\d+|^\d+\s*(?:화|회|기|부|話)|^\d{6}|^\d{8}""")
     private val REGEX_LEADING_INDEX = Regex("""^(\d{1,5}\s+|(?:\d{1,5}\.(?!\d)\s*))""")
@@ -71,25 +70,19 @@ object TitleUtils {
         return null
     }
 
-    // [시즌 추출 로직 강화: URL 디코딩 추가]
     fun String.extractSeason(): Int {
-        // URL 형태일 경우 디코딩하여 한글(기, 시즌)을 읽을 수 있게 함
         val decoded = try { 
             if (this.contains("%")) this.decodeURLPart() else this 
         } catch(_: Exception) { this }
         
         val n = decoded.toNfc()
         
-        // 1. S21, s21 형식
-        Regex("""(?i)[Ss](\d+)""").find(n)?.let { return it.groupValues[1].toInt() }
-        // 2. 21기, 1기 형식 (애니메이션 핵심)
+        // 키워드 기반 매칭으로 강화
+        Regex("""(?i)(?:Season|시즌|S)\s*(\d+)""").find(n)?.let { return it.groupValues[1].toInt() }
         Regex("""(\d+)\s*기""").find(n)?.let { return it.groupValues[1].toInt() }
-        // 3. Season 21, 시즌 21 형식
-        Regex("""(?i)(?:Season|시즌)\s*(\d+)""").find(n)?.let { return it.groupValues[1].toInt() }
-        // 4. 경로 패턴 분석 (/21/, /S21/, /21기/)
-        Regex("""/(\d+)(?:기)?/""").find(n)?.let { return it.groupValues[1].toInt() }
+        Regex("""/(?:S|Season|시즌)\s*(\d+)""").find(n)?.let { return it.groupValues[1].toInt() }
         
-        return 1
+        return 0 
     }
 
     fun String.prettyTitle(): String {
@@ -100,32 +93,16 @@ object TitleUtils {
         return "$ep $cleaned".trim()
     }
     
-    // 🔴 [초성 추출 기능 추가]
     fun getInitialSound(text: String?): String {
         if (text.isNullOrBlank()) return "#"
-        
-        // 영어, 숫자 등 기타 문자 필터링 후 맨 앞 글자 하나 추출
         val firstChar = text.trimStart { !it.isLetterOrDigit() }.firstOrNull() ?: return "#"
-
-        // 한글인지 확인
         if (firstChar in '가'..'힣') {
-            // 한글 유니코드 기반 초성 추출 공식
             val chosungIndex = (firstChar.code - 0xAC00) / 28 / 21
-            val chosungArray = arrayOf(
-                "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", 
-                "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"
-            )
+            val chosungArray = arrayOf("ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ")
             return if (chosungIndex in chosungArray.indices) chosungArray[chosungIndex] else "#"
         }
-        
-        // 영문일 경우 대문자로
-        if (firstChar in 'a'..'z' || firstChar in 'A'..'Z') {
-            return "A-Z" // 영문은 A-Z 탭 하나로 묶는 것이 TV에서 탐색하기 편함
-        }
-        
-        // 숫자나 기타 기호
+        if (firstChar in 'a'..'z' || firstChar in 'A'..'Z') return "A-Z"
         if (firstChar.isDigit()) return "#"
-        
         return "#"
     }
 }

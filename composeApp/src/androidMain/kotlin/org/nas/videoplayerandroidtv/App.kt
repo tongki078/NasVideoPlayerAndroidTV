@@ -213,7 +213,11 @@ fun App(driver: SqlDriver) {
                                 onPositionUpdate = { pos: Long, dur: Long -> 
                                     lastPlaybackPosition = pos; 
                                     saveWatchHistory(selectedMovie!!, selectedSeries?.posterPath, pos, dur, selectedSeries?.title, selectedSeries?.fullPath)
-                                }, 
+                                },
+                                onNextMovie = { nextM -> 
+                                    selectedMovie = nextM
+                                    lastPlaybackPosition = 0L // 다음화 재생 시 시작위치 초기화
+                                },
                                 onBack = { selectedMovie = null }
                             )
                         }
