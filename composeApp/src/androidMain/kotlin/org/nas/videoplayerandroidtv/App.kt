@@ -152,7 +152,9 @@ fun App(driver: SqlDriver) {
 
     val saveWatchHistory: (Movie, String?, Long, Long, String?, String?) -> Unit = { movie, posterPath, pos, dur, sTitle, sPath ->
         scope.launch(Dispatchers.Default) {
-            watchHistoryDataSource.insertWatchHistory(movie.id ?: "", movie.title ?: "", movie.videoUrl ?: "", movie.thumbnailUrl ?: "", currentTimeMillis(), "movie", "", posterPath, pos, dur, sTitle, sPath)
+            // 시리즈물인 경우 시리즈 경로를 고유 ID로 사용하여 중복 방지
+            val recordId = sPath ?: movie.id ?: ""
+            watchHistoryDataSource.insertWatchHistory(recordId, movie.title ?: "", movie.videoUrl ?: "", movie.thumbnailUrl ?: "", currentTimeMillis(), "movie", "", posterPath, pos, dur, sTitle, sPath)
         }
     }
 
@@ -215,8 +217,12 @@ fun App(driver: SqlDriver) {
                                     saveWatchHistory(selectedMovie!!, selectedSeries?.posterPath, pos, dur, selectedSeries?.title, selectedSeries?.fullPath)
                                 },
                                 onNextMovie = { nextM -> 
-                                    selectedMovie = nextM
-                                    lastPlaybackPosition = 0L // 다음화 재생 시 시작위치 초기화
+                                    selectedMovie = null
+                                    scope.launch {
+                                        delay(10)
+                                        selectedMovie = nextM.copy()
+                                        lastPlaybackPosition = 0L 
+                                    }
                                 },
                                 onBack = { selectedMovie = null }
                             )
