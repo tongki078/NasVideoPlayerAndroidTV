@@ -134,36 +134,22 @@ fun SeriesDetailScreen(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 
-                // --- 넷플릭스 스타일 메타데이터 로우 (한 줄 정렬) ---
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (state.isLoading) {
                         Box(modifier = Modifier.width(100.dp).height(24.dp).clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)))
                     } else {
                         val metadataItems = mutableListOf<@Composable () -> Unit>()
-
-                        // 1. 타입 (시리즈/영화)
                         metadataItems.add { MetadataText(text = if (currentSeries.category == "movies") "영화" else "시리즈") }
-
-                        // 2. 연도
                         currentSeries.year?.let { y -> metadataItems.add { MetadataText(text = y) } }
-
-                        // 3. 장르 (통합 표시)
                         if (currentSeries.genreNames.isNotEmpty()) {
                             metadataItems.add { MetadataText(text = currentSeries.genreNames.take(3).joinToString(" · ")) }
                         }
-                        
-                        // 4. 시즌 정보
                         if (currentSeries.category != "movies" && state.seasons.isNotEmpty()) {
                             metadataItems.add { MetadataText(text = "시즌 ${state.seasons.size}개") }
                         }
-                        
-                        // 5. 화질
                         metadataItems.add { InfoBadge(text = "HD", isOutlined = true) }
-
-                        // 6. 연령 등급 뱃지 (가장 우측)
                         currentSeries.rating?.let { r -> metadataItems.add { DetailRatingBadge(r) } }
 
-                        // 구분점(·)과 함께 렌더링
                         metadataItems.forEachIndexed { index, component ->
                             component()
                             if (index < metadataItems.size - 1) {
@@ -185,14 +171,18 @@ fun SeriesDetailScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         if (resumeInfo != null) {
                             if (!resumeInfo.isNew) {
-                                val epTitle = resumeInfo.episode.title ?: ""
-                                val seasonNum = epTitle.extractSeason()
-                                val episodeStr = epTitle.extractEpisode() ?: "회차"
-
+                                val ep = resumeInfo.episode
+                                val seasonNum = ep.season_number ?: ep.title?.extractSeason() ?: 0
+                                val epTitle = ep.title ?: ""
+                                val episodeNumStr = ep.episode_number?.toString() ?: epTitle.extractEpisode()?.replace("화", "") ?: ""
+                                
+                                val seasonLabel = if (seasonNum > 0) "${seasonNum}시즌 " else ""
+                                val episodeLabel = if (episodeNumStr.isNotBlank()) "${episodeNumStr}화 " else ""
+                                
                                 val btnLabel = when {
-                                    resumeInfo.isNext -> "시즌 $seasonNum : $episodeStr 재생"
+                                    resumeInfo.isNext -> "${seasonLabel}${episodeLabel}재생"
                                     resumeInfo.isFinished -> "다시 보기"
-                                    else -> "시즌 $seasonNum : $episodeStr 이어보기"
+                                    else -> "${seasonLabel}${episodeLabel}이어보기"
                                 }
                                 PremiumTvButton(text = btnLabel, icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(resumeButtonFocusRequester), onClick = { onPlay(resumeInfo.episode, allEpisodes, resumeInfo.position) })
                             }
@@ -363,7 +353,6 @@ private fun EpisodeOverlay(
                 Column(modifier = Modifier.weight(0.35f)) {
                     Text(text = seriesTitle, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp)
                     
-                    // 제목 밑에 년도 및 시즌 수 표시
                     Row(modifier = Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         seriesYear?.let { 
                             Text(text = it, color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
@@ -443,7 +432,6 @@ private fun loadSeasons(series: Series): List<Season> {
             val processedEpisodes = entry.value.map { movie ->
                 val videoUrl = if (movie.videoUrl?.startsWith("http") == false) NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl else movie.videoUrl ?: ""
                 
-                // [수정] 서버 썸네일(thumb_serve)을 포스터보다 우선시하도록 변경
                 val rawThumb = movie.thumbnailUrl ?: series.posterPath
                 
                 val thumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
@@ -461,7 +449,6 @@ private fun loadSeasons(series: Series): List<Season> {
         val processedMovies = series.episodes.map { movie ->
             val videoUrl = if (movie.videoUrl?.startsWith("http") == false) NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl else movie.videoUrl ?: ""
             
-            // [수정] 서버 썸네일(thumb_serve)을 포스터보다 우선시하도록 변경
             val rawThumb = movie.thumbnailUrl ?: series.posterPath
 
             val thumbUrl = if (!rawThumb.isNullOrEmpty() && !rawThumb.startsWith("http")) {
@@ -473,14 +460,15 @@ private fun loadSeasons(series: Series): List<Season> {
 
         val distinctMovies = processedMovies.distinctBy { it.videoUrl }
         val seasonsMap = distinctMovies.groupBy { movie ->
-            movie.season_number ?: movie.videoUrl?.extractSeason() ?: movie.title?.extractSeason() ?: 1
+            val s = movie.season_number ?: movie.videoUrl?.extractSeason() ?: movie.title?.extractSeason() ?: 1
+            if (s <= 0) 1 else s
         }
 
         return seasonsMap.entries.map { entry -> 
             val num = entry.key
             Season(
                 number = num, 
-                name = "${num}시즌", 
+                name = if (seasonsMap.size > 1) "${num}시즌" else "회차 정보",
                 episodes = entry.value.sortedBy { it.episode_number ?: it.title?.let { t -> t.extractEpisode()?.filter { c -> c.isDigit() }?.toIntOrNull() } ?: 0 }
             )
         }.sortedBy { it.number }
