@@ -53,8 +53,8 @@ class VideoRepositoryImpl : VideoRepository {
         actors = actors ?: emptyList(),
         overview = overview,
         year = year,
-        rating = rating,      // 연령 정보 유지
-        seasonCount = seasonCount, // 시즌 정보 유지
+        rating = rating,
+        seasonCount = seasonCount,
         tmdbTitle = tmdbTitle
     )
 
@@ -71,6 +71,7 @@ class VideoRepositoryImpl : VideoRepository {
         response.filter { !isGenericFolder(it.name) }.map { it.fixUrls().toSeries() }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
+        println("VideoRepository: getCategoryListAsSeries($path) failed: ${e.message}")
         emptyList()
     }
 
@@ -88,6 +89,7 @@ class VideoRepositoryImpl : VideoRepository {
         }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
+        println("VideoRepository: getCategorySections($categoryKey) failed: ${e.message}")
         emptyList()
     }
 
@@ -99,6 +101,7 @@ class VideoRepositoryImpl : VideoRepository {
         }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
+        println("VideoRepository: getHomeRecommendations failed: ${e.message}")
         emptyList()
     }
 
@@ -109,6 +112,7 @@ class VideoRepositoryImpl : VideoRepository {
         response.fixUrls().toSeries()
     } catch (e: Exception) {
         if (e is CancellationException) throw e
+        println("VideoRepository: getSeriesDetail($path) failed: ${e.message}")
         null
     }
 
@@ -119,7 +123,10 @@ class VideoRepositoryImpl : VideoRepository {
             parameter("offset", offset)
         }.body<List<Category>>()
         response.map { it.fixUrls() }
-    } catch (e: Exception) { emptyList() }
+    } catch (e: Exception) {
+        println("VideoRepository: getCategoryList($path) failed: ${e.message}")
+        emptyList()
+    }
 
     override suspend fun getAnimationsAir(): List<Series> = getCategoryListAsSeries("방송중", "라프텔 애니메이션")
     override suspend fun getDramasAir(): List<Series> = getCategoryListAsSeries("방송중", "드라마")
@@ -143,6 +150,7 @@ class VideoRepositoryImpl : VideoRepository {
     override suspend fun getCategoryVideoCount(path: String): Int = 0
     
     override suspend fun searchVideos(query: String, category: String): List<Series> = try {
+        println("VideoRepository: Search start: query=$query")
         val response = client.get("$baseUrl/search") {
             parameter("q", query)
             if (category.isNotEmpty()) {
@@ -150,9 +158,11 @@ class VideoRepositoryImpl : VideoRepository {
             }
         }.body<List<Category>>()
         
+        println("VideoRepository: Search success: ${response.size} results")
         response.map { it.fixUrls().toSeries() }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
+        println("VideoRepository: Search failed: ${e.message}")
         emptyList()
     }
 
@@ -174,6 +184,7 @@ class VideoRepositoryImpl : VideoRepository {
         }.body<SubtitleInfo>()
     } catch (e: Exception) {
         if (e is CancellationException) throw e
+        println("VideoRepository: getSubtitleInfo failed: ${e.message}")
         SubtitleInfo()
     }
 
@@ -188,6 +199,7 @@ class VideoRepositoryImpl : VideoRepository {
         }.status == HttpStatusCode.OK
     } catch (e: Exception) {
         if (e is CancellationException) throw e
+        println("VideoRepository: updateProgress failed: ${e.message}")
         false
     }
 }
