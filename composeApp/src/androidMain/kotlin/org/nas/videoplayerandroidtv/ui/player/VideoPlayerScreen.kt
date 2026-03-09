@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -114,12 +115,16 @@ fun VideoPlayerScreen(
     var isSubtitlePanelOpen by remember { mutableStateOf(false) }
 
     val mainBoxFocusRequester = remember { FocusRequester() }
+    val backButtonFocusRequester = remember { FocusRequester() }
+    val replayButtonFocusRequester = remember { FocusRequester() }
     val nextButtonFocusRequester = remember { FocusRequester() }
     val skipOpeningFocusRequester = remember { FocusRequester() }
     val subtitleButtonFocusRequester = remember { FocusRequester() }
     
     val thumbListState = rememberLazyListState()
 
+    var isBackButtonFocused by remember { mutableStateOf(false) }
+    var isReplayButtonFocused by remember { mutableStateOf(false) }
     var isNextButtonFocused by remember { mutableStateOf(false) }
     var isSkipOpeningFocused by remember { mutableStateOf(false) }
     var isSubtitleButtonFocused by remember { mutableStateOf(false) }
@@ -162,8 +167,8 @@ fun VideoPlayerScreen(
         }
     }
 
-    LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused, isSkipOpeningFocused, isSubtitleButtonFocused, userPaused, isSubtitlePanelOpen) {
-        if (isControllerVisible && !isSeeking && !isNextButtonFocused && !isSkipOpeningFocused && !isSubtitleButtonFocused && !userPaused && !isSubtitlePanelOpen) {
+    LaunchedEffect(isControllerVisible, lastInteractionTime, isSeeking, isNextButtonFocused, isBackButtonFocused, isReplayButtonFocused, isSkipOpeningFocused, isSubtitleButtonFocused, userPaused, isSubtitlePanelOpen) {
+        if (isControllerVisible && !isSeeking && !isNextButtonFocused && !isBackButtonFocused && !isReplayButtonFocused && !isSkipOpeningFocused && !isSubtitleButtonFocused && !userPaused && !isSubtitlePanelOpen) {
             delay(5000)
             isControllerVisible = false
         }
@@ -197,19 +202,19 @@ fun VideoPlayerScreen(
                     android.view.KeyEvent.KEYCODE_DPAD_UP -> {
                         if (!isControllerVisible) { isControllerVisible = true; true }
                         else if (isSubtitleButtonFocused || isSkipOpeningFocused) {
-                            if (nextMovie != null) { 
-                                try { nextButtonFocusRequester.requestFocus() } catch(_:Exception) { mainBoxFocusRequester.requestFocus() }
-                                true 
-                            }
-                            else { mainBoxFocusRequester.requestFocus(); true }
-                        } else if (nextMovie != null && !isNextButtonFocused) {
-                            try { nextButtonFocusRequester.requestFocus() } catch(_:Exception) { mainBoxFocusRequester.requestFocus() }
+                            backButtonFocusRequester.requestFocus()
+                            true
+                        } else if (!isBackButtonFocused && !isReplayButtonFocused && !isNextButtonFocused) {
+                            backButtonFocusRequester.requestFocus()
                             true
                         } else false
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
                         if (!isControllerVisible) { isControllerVisible = true; true }
-                        else {
+                        else if (isBackButtonFocused || isReplayButtonFocused || isNextButtonFocused) {
+                            mainBoxFocusRequester.requestFocus()
+                            true
+                        } else {
                             if (isDuringOpening) {
                                 try { skipOpeningFocusRequester.requestFocus() } catch(_:Exception) { subtitleButtonFocusRequester.requestFocus() }
                             } else {
@@ -219,7 +224,9 @@ fun VideoPlayerScreen(
                         }
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        if (isSubtitleButtonFocused && isDuringOpening) { 
+                        if (isBackButtonFocused || isReplayButtonFocused || isNextButtonFocused) {
+                            false // Row internally handles Left/Right if focuses are properly connected or using standard navigation
+                        } else if (isSubtitleButtonFocused && isDuringOpening) { 
                             try { skipOpeningFocusRequester.requestFocus() } catch(_:Exception) {}
                             true 
                         }
@@ -231,7 +238,9 @@ fun VideoPlayerScreen(
                         }
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        if (isSkipOpeningFocused) { 
+                        if (isBackButtonFocused || isReplayButtonFocused || isNextButtonFocused) {
+                            false 
+                        } else if (isSkipOpeningFocused) { 
                             try { subtitleButtonFocusRequester.requestFocus() } catch(_:Exception) {}
                             true 
                         }
@@ -248,7 +257,7 @@ fun VideoPlayerScreen(
                             finalSeekPosition = seekTime
                             isSeeking = false
                             true
-                        } else if (isNextButtonFocused || isSkipOpeningFocused || isSubtitleButtonFocused) {
+                        } else if (isBackButtonFocused || isReplayButtonFocused || isNextButtonFocused || isSkipOpeningFocused || isSubtitleButtonFocused) {
                             false
                         } else {
                             userPaused = !userPaused
@@ -339,10 +348,47 @@ fun VideoPlayerScreen(
             }
 
             Box(modifier = Modifier.fillMaxSize().padding(48.dp)) {
-                if (nextMovie != null) {
-                    AnimatedVisibility(visible = isControllerVisible && !isSeeking, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopStart)) {
-                        NetflixIconButton(Icons.AutoMirrored.Filled.ArrowForward, isNextButtonFocused, onClick = { currentMovie = nextMovie; mainBoxFocusRequester.requestFocus() },
-                            modifier = Modifier.focusRequester(nextButtonFocusRequester).onFocusChanged { isNextButtonFocused = it.isFocused })
+                AnimatedVisibility(
+                    visible = isControllerVisible && !isSeeking,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.TopStart)
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        NetflixIconButton(
+                            icon = Icons.AutoMirrored.Filled.ArrowBack,
+                            isFocused = isBackButtonFocused,
+                            onClick = { onBack() },
+                            modifier = Modifier
+                                .focusRequester(backButtonFocusRequester)
+                                .onFocusChanged { isBackButtonFocused = it.isFocused }
+                        )
+
+                        NetflixIconButton(
+                            icon = Icons.Default.Refresh,
+                            isFocused = isReplayButtonFocused,
+                            onClick = { 
+                                finalSeekPosition = 0L
+                                mainBoxFocusRequester.requestFocus()
+                            },
+                            modifier = Modifier
+                                .focusRequester(replayButtonFocusRequester)
+                                .onFocusChanged { isReplayButtonFocused = it.isFocused }
+                        )
+
+                        if (nextMovie != null) {
+                            NetflixIconButton(
+                                icon = Icons.AutoMirrored.Filled.ArrowForward,
+                                isFocused = isNextButtonFocused,
+                                onClick = { 
+                                    currentMovie = nextMovie
+                                    mainBoxFocusRequester.requestFocus()
+                                },
+                                modifier = Modifier
+                                    .focusRequester(nextButtonFocusRequester)
+                                    .onFocusChanged { isNextButtonFocused = it.isFocused }
+                            )
+                        }
                     }
                 }
                 
