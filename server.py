@@ -1528,9 +1528,11 @@ def get_series_detail_api():
                         s_weight = 999
                     else:
                         # 기존의 부제 처리 로직 유지
-                        base_c_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', c_name).strip()
+                        base_c_name = re.sub(r'\[.*?\\]|\(.*?\)|{.*?}', '', c_name).strip()
                         short_name = clean_folder.replace(base_c_name, '').strip()
-                        if short_name:
+
+                        # [수정] 결과가 1글자 이하의 특수문자일 경우 무시하고 기본값으로 처리
+                        if short_name and len(short_name) > 1 and any(c.isalnum() for c in short_name):
                             s_disp = short_name
                             num_match = re.search(r'\d+', short_name)
                             s_weight = int(num_match.group(0)) if num_match else 900
@@ -1634,13 +1636,14 @@ def search_videos():
         target_cat = cat_map.get(cat_filter)
 
         # 1. 기본 쿼리
+        # AND posterPath IS NOT NULL
         query = """
             SELECT * FROM series
             WHERE (name LIKE ? OR name LIKE ? OR cleanedName LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ? OR tmdbTitle LIKE ?)
-            AND posterPath IS NOT NULL
             AND cleanedName NOT IN ('1', '2', '3', '01', '02') -- 의미 없는 숫자 제목 제외
             AND EXISTS (SELECT 1 FROM episodes WHERE series_path = series.path)
         """
+
         params = [f"%{q_nfc}%", f"%{nfd(q)}%", f"%{q_nfc}%", f"%{nfd(q)}%", f"%{q_nfc}%", f"%{nfd(q)}%"]
 
         # 2. 카테고리 필터 동적 추가
@@ -3335,14 +3338,6 @@ def updater_ui():
                                 <input type="text" id="editYear" style="width: 100%; box-sizing: border-box;">
                             </div>
                             <div>
-                                <label style="font-size: 11px; color: var(--text-dim); display: block; margin-bottom: 3px;">표시 제목 (tmdbTitle)</label>
-                                <input type="text" id="editTitle" style="width: 100%; box-sizing: border-box;">
-                            </div>
-                            <div>
-                                <label style="font-size: 11px; color: var(--text-dim); display: block; margin-bottom: 3px;">방영/개봉 연도</label>
-                                <input type="text" id="editYear" style="width: 100%; box-sizing: border-box;">
-                            </div>
-                            <div>
                                 <label style="font-size: 11px; color: var(--text-dim); display: block; margin-bottom: 3px;">줄거리 요약</label>
                                 <textarea id="editOverview" rows="4" style="width: 100%; box-sizing: border-box; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: white; padding: 10px; font-family: inherit; font-size: 13px; resize: vertical;"></textarea>
                             </div>
@@ -4139,7 +4134,7 @@ def _rebuild_fast_memory_cache():
                 group_key = f"{tmdb_id}_{c_name}_{tag}_{sub_folder}" if tmdb_id else f"{c_name}_{tag}_{sub_folder}"
 
             if not group_key or group_key in seen_keys: continue
-            if not r['posterPath']: continue
+            # if not r['posterPath']: continue
             seen_keys.add(group_key)
 
             # 영화는 TMDB 제목이나 파일명을 우선 노출
@@ -5039,10 +5034,11 @@ def api_reset_and_refresh():
 def upload_custom_poster():
     """ImgBB를 사용하여 이미지를 외부 서버에 업로드하고 DB를 업데이트합니다."""
     try:
-        # 무료 API 키 (직접 발급받아 교체하는 것을 권장합니다: https://api.imgbb.com/)
+        # API 키
         IMGBB_API_KEY = "785b021132b54c5f3191d4f48ee3093d"
 
         if 'file' not in request.files:
+            emit_ui_log("포스터 업로드 실패: 파일 누락", "error")
             return jsonify({"status": "error", "message": "파일이 없습니다."}), 400
 
         file = request.files['file']
@@ -5050,19 +5046,29 @@ def upload_custom_poster():
         name = request.form.get('name', '').strip()
 
         if not name:
+            emit_ui_log("포스터 업로드 실패: 제목 미입력", "error")
             return jsonify({"status": "error", "message": "작품 제목을 입력하세요."}), 400
 
-        # 1. ImgBB API로 이미지 전송
+        # 1. ImgBB API로 이미지 전송 (기존 로직 유지)
         img_data = file.read()
         files = {'image': img_data}
         params = {'key': IMGBB_API_KEY}
 
         log("UPLOAD", f"외부 서버(ImgBB) 업로드 시작: {name}")
+        emit_ui_log(f"ImgBB 외부 서버 업로드 시작: {name}", "info")
+
         response = requests.post("https://api.imgbb.com/1/upload", params=params, files=files, timeout=30)
-        res_json = response.json()
+
+        # 응답이 JSON인지 확인하여 파싱 에러 방지
+        try:
+            res_json = response.json()
+        except Exception:
+            emit_ui_log("ImgBB 서버로부터 비정상적인 응답을 받았습니다.", "error")
+            return jsonify({"status": "error", "message": "ImgBB 응답 파싱 실패"}), 500
 
         if response.status_code != 200 or not res_json.get('success'):
             error_msg = res_json.get('error', {}).get('message', '알 수 없는 오류')
+            emit_ui_log(f"ImgBB 업로드 실패: {error_msg}", "error")
             return jsonify({"status": "error", "message": f"외부 서버 업로드 실패: {error_msg}"}), 500
 
         # 2. 업로드된 이미지의 URL 추출
@@ -5096,13 +5102,16 @@ def upload_custom_poster():
 
         if updated_count > 0:
             build_all_caches()
-            emit_ui_log(f"수동 포스터(외부) 적용 완료: '{name}'", "success")
+            emit_ui_log(f"✅ 수동 포스터 적용 완료: '{name}' ({updated_count}건)", "success")
             return jsonify({"status": "success", "message": "포스터가 성공적으로 변경되었습니다.", "url": poster_url})
         else:
+            emit_ui_log(f"⚠️ DB 업데이트 실패: '{name}'을 찾을 수 없음", "warning")
             return jsonify({"status": "error", "message": "DB에서 대상을 찾을 수 없습니다."}), 404
 
     except Exception as e:
-        log("UPLOAD_ERROR", str(e))
+        log("UPLOAD_ERROR", traceback.format_exc())
+        emit_ui_log(f"❌ 업로드 중 치명적 오류: {str(e)}", "error")
+        # 어떤 에러가 나더라도 반드시 JSON을 반환하여 SyntaxError 방지
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # --- [추가] 수동 메타데이터 정보 수정 라우트 ---
@@ -5112,8 +5121,10 @@ def get_metadata_for_edit():
     name = request.args.get('name', '').strip()
     if not name: return jsonify({"error": "이름을 입력하세요"}), 400
 
+    # [수정] 검색 키워드를 NFC로 정규화하여 DB 검색
+    name_nfc = nfc(name)
     conn = get_db()
-    search_pattern = f"%{name}%"
+    search_pattern = f"%{name_nfc}%"
     cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
     internal_cat = cat_map.get(cat)
 
@@ -5140,58 +5151,70 @@ def get_metadata_for_edit():
 
 @app.route('/api/save_manual_metadata', methods=['POST'])
 def save_manual_metadata():
-    data = request.json
-    cat = data.get('category', '전체')
-    name = data.get('name', '').strip()
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"status": "error", "message": "데이터가 없습니다."}), 400
 
-    if not name: return jsonify({"status": "error", "message": "대상이 지정되지 않았습니다."}), 400
+        cat = data.get('category', '전체')
+        name = data.get('name', '').strip()
 
-    conn = get_db()
-    cursor = conn.cursor()
+        if not name:
+            return jsonify({"status": "error", "message": "대상이 지정되지 않았습니다."}), 400
 
-    search_pattern = f"%{name}%"
-    cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
-    internal_cat = cat_map.get(cat)
+        conn = get_db()
+        cursor = conn.cursor()
 
-    # 출연진/장르 JSON 변환 로직 (기존과 동일)
-    actors_input = data.get('actors', '').strip()
-    actors_json = actors_input if actors_input.startswith('[') else json.dumps(
-        [{"name": a.strip(), "profile": None, "role": ""} for a in actors_input.split(',') if a.strip()],
-        ensure_ascii=False)
+        search_pattern = f"%{name}%"
+        cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
+        internal_cat = cat_map.get(cat)
 
-    genres_input = data.get('genres', '').strip()
-    genres_json = genres_input if genres_input.startswith('[') else json.dumps(
-        [g.strip() for g in genres_input.split(',') if g.strip()], ensure_ascii=False)
+        actors_input = data.get('actors', '').strip()
+        # 입력된 문자열을 JSON 배열 형태로 변환하거나 유지
+        if actors_input.startswith('['):
+            actors_json = actors_input
+        else:
+            actors_json = json.dumps(
+                [{"name": a.strip(), "profile": None, "role": ""} for a in actors_input.split(',') if a.strip()],
+                ensure_ascii=False)
 
-    # [수정] tmdbTitle, cleanedName 포함하여 업데이트
-    up = (
-        data.get('tmdbTitle'),
-        data.get('cleanedName'),
-        data.get('year'),
-        data.get('overview'),
-        data.get('director'),
-        actors_json,
-        genres_json
-    )
+        genres_input = data.get('genres', '').strip()
+        if genres_input.startswith('['):
+            genres_json = genres_input
+        else:
+            genres_json = json.dumps([g.strip() for g in genres_input.split(',') if g.strip()], ensure_ascii=False)
 
-    sql = '''UPDATE series SET tmdbTitle=?, cleanedName=?, year=?, overview=?, director=?, actors=?, genreNames=?, failed=0 '''
+        up = (
+            data.get('tmdbTitle'),
+            data.get('cleanedName'),
+            data.get('year'),
+            data.get('overview'),
+            data.get('director'),
+            actors_json,
+            genres_json
+        )
 
-    if internal_cat:
-        cursor.execute(sql + "WHERE category=? AND (name LIKE ? OR cleanedName LIKE ?)",
-                       (*up, internal_cat, search_pattern, search_pattern))
-    else:
-        cursor.execute(sql + "WHERE name LIKE ? OR cleanedName LIKE ?", (*up, search_pattern, search_pattern))
+        sql = '''UPDATE series SET tmdbTitle=?, cleanedName=?, year=?, overview=?, director=?, actors=?, genreNames=?, failed=0 '''
 
-    updated = cursor.rowcount
-    conn.commit()
-    conn.close()
+        if internal_cat:
+            cursor.execute(sql + "WHERE category=? AND (name LIKE ? OR cleanedName LIKE ?)",
+                           (*up, internal_cat, search_pattern, search_pattern))
+        else:
+            cursor.execute(sql + "WHERE name LIKE ? OR cleanedName LIKE ?", (*up, search_pattern, search_pattern))
 
-    if updated > 0:
-        build_all_caches()
-        emit_ui_log(f"수동 메타데이터 수정 완료: '{name}' ({updated}건)", "success")
-        return jsonify({"status": "success", "message": f"성공적으로 {updated}개 항목이 수정되었습니다."})
-    return jsonify({"status": "error", "message": "수정할 대상을 찾을 수 없습니다."}), 404
+        updated = cursor.rowcount
+        conn.commit()
+        conn.close()
 
+        if updated > 0:
+            # 🔴 수정: 캐시 갱신을 스레드로 분리하여 응답에 간섭하지 않도록 함
+            threading.Thread(target=build_all_caches, daemon=True).start()
+            return jsonify({"status": "success", "message": f"성공적으로 {updated}개 항목이 수정되었습니다."})
+        else:
+            return jsonify({"status": "error", "message": "수정할 대상을 찾을 수 없습니다."}), 404
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/admin/get_path_hints')
 def get_path_hints():
