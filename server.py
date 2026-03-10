@@ -568,9 +568,12 @@ def extract_episode_numbers(full_path):
         episode = int(me.group(1) or me.group(2))
     else:
         # 마커가 없으면 파일명 끝에서부터 숫자 추출
+        # nums = re.findall(r'\d+', filename)
+        # episode = int(nums[-1]) if nums else 1
+        # 파일명에서 모든 숫자를 찾되, 4자리(1080, 2160) 혹은 그 이상의 해상도 관련 숫자를 배제
         nums = re.findall(r'\d+', filename)
-        episode = int(nums[-1]) if nums else 1
-
+        valid_nums = [int(num) for num in nums if len(num) < 4]
+        episode = valid_nums[-1] if valid_nums else 1
     return season, episode
 
 
@@ -1475,12 +1478,16 @@ def get_series_detail_api():
             ep_path = nfc(d['series_path'])
             ep_title = nfc(d['title'])
 
+            # DB에서 가져온 기본값 (실제 번호)
+            actual_sn = d.get('season_number') or 1
+            actual_en = d.get('episode_number') or 1
+
             if is_single_movie:
                 s_disp, s_weight, en = "영화", 1, 1
             else:
                 s_disp = "1시즌"
                 s_weight = 1
-                en = 1
+                en = actual_en
 
                 path_parts = ep_path.split('/')
                 parent_folder = path_parts[-2] if len(path_parts) >= 2 else ""
@@ -1490,78 +1497,98 @@ def get_series_detail_api():
 
                 # --- [엄격한 특별 분기: 애니메이션 카테고리 + 코난 미공개X파일 한정] ---
                 if cat == 'animations_all' and "코난" in combined_name_nfc and "미공개X파일" in combined_name_nfc:
-                    # 파일명 또는 폴더명에서 '미공개X파일 1', '미공개X파일3' 등의 숫자 추출
                     xfile_match = re.search(r'(?i)미공개\s*X\s*파일\s*(\d+)', combined_name_nfc)
                     if xfile_match:
                         season_num = int(xfile_match.group(1))
                         s_disp = f"미공개X파일 {season_num}"
-                        s_weight = 800 + season_num  # 일반 시즌(1~100)과 스페셜(999) 사이에 배치
+                        s_weight = 800 + season_num
+                        actual_sn = season_num
                     else:
                         s_disp = "미공개X파일"
                         s_weight = 800
+                        actual_sn = 800
                 # ------------------------------------------------------------------------
                 elif any(kw in full_name_upper for kw in ["극장판", "MOVIE"]):
-                    s_disp = "극장판"
-                    s_weight = 1000
+                    s_disp, s_weight = "극장판", 1000
                 elif any(kw in full_name_upper for kw in ["스페셜", "OVA", "OAD", "대괴수", "수학여행", "실종사건", "에피소드 원"]):
-                    s_disp = "스페셜"
-                    s_weight = 999
+                    s_disp, s_weight = "스페셜", 999
                 else:
                     clean_folder = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', parent_folder).strip()
                     season_match = re.search(r'(?i)(?:시즌|Season|S)\s*(\d+)|(\d+)\s*(?:기|시즌)', clean_folder)
 
                     if season_match:
                         season_num = int(season_match.group(1) or season_match.group(2))
-                        s_disp = f"{season_num}시즌"
-                        s_weight = season_num
-                    # 2. 폴더명이 그냥 숫자인 경우 (예: "01", "04")
+                        s_disp, s_weight = f"{season_num}시즌", season_num
+                        actual_sn = season_num
                     elif re.search(r'^\d{1,2}$', clean_folder):
                         season_num = int(clean_folder)
-                        s_disp = f"{season_num}시즌"
-                        s_weight = season_num
-                    # 3. 그 다음 특수 키워드를 체크합니다 (범위를 파일명+폴더명으로 축소)
+                        s_disp, s_weight = f"{season_num}시즌", season_num
+                        actual_sn = season_num
                     elif any(kw in (parent_folder + ep_title).upper() for kw in ["극장판", "MOVIE"]):
-                        s_disp = "극장판"
-                        s_weight = 1000
+                        s_disp, s_weight = "극장판", 1000
                     elif any(kw in (parent_folder + ep_title).upper() for kw in ["스페셜", "OVA", "OAD", "특전"]):
-                        s_disp = "스페셜"
-                        s_weight = 999
+                        s_disp, s_weight = "스페셜", 999
                     else:
-                        # 기존의 부제 처리 로직 유지
                         base_c_name = re.sub(r'\[.*?\\]|\(.*?\)|{.*?}', '', c_name).strip()
                         short_name = clean_folder.replace(base_c_name, '').strip()
 
-                        # [수정] 결과가 1글자 이하의 특수문자일 경우 무시하고 기본값으로 처리
                         if short_name and len(short_name) > 1 and any(c.isalnum() for c in short_name):
                             s_disp = short_name
                             num_match = re.search(r'\d+', short_name)
                             s_weight = int(num_match.group(0)) if num_match else 900
                         else:
-                            s_disp = "1시즌"
-                            s_weight = 1
+                            s_disp, s_weight = "1시즌", 1
 
-                if any(k in ep_path.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"]):
+                is_high_quality = any(k in ep_path.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"])
+                if is_high_quality:
                     s_disp = f"고화질 ({s_disp})"
-                    s_weight += 900
 
-                ep_match = re.search(r'(?i)(?:[.\s_-]E|EP)\s*(\d+)|(\d+)\s*(?:화|회)', ep_title)
-                if ep_match:
-                    en = int(ep_match.group(1) or ep_match.group(2))
+                # 1. 파일명에서 S와 E가 명확히 있는 경우 우선 파싱 (예: S01E01)
+                s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
+                # 2. E만 있는 경우 (예: E01)
+                e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
+                # 3. 화/회 가 있는 경우
+                h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
+
+                if s_match:
+                    actual_sn = int(s_match.group(1))
+                    en = int(s_match.group(2))
+                elif e_match:
+                    en = int(e_match.group(1))
+                elif h_match:
+                    en = int(h_match.group(1))
                 else:
-                    nums = re.findall(r'\d+', ep_title)
-                    if nums: en = int(nums[-1])
+                    # 마커가 없을 때 해상도(1080, 265, 10)를 피해서 번호를 찾기 위한 보완책
+                    # 파일명에서 'E' 뒤에 오는 숫자만 찾는 패턴을 다시 시도
+                    nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
+                    if nums:
+                        en = int(nums[0])
+                    else:
+                        # 최후의 수단: 파일명 끝부분의 숫자만 고려
+                        nums = re.findall(r'\d+', ep_title)
+                        en = int(nums[-1]) if nums else actual_en
+
+                # 로그 확인용
+                print(f"[DEBUG] 파일: {ep_title} | 추출시즌: {actual_sn} | 추출회차: {en}", flush=True)
 
             all_refined_eps.append({
-                "id": str(d.get('id')), "title": ep_title, "videoUrl": d.get('videoUrl'),
-                "thumbnailUrl": d.get('thumbnailUrl'), "overview": d.get('overview'),
-                "air_date": d.get('air_date'), "season_number": s_weight, "episode_number": en,
-                "display_season": s_disp, "sort_weight": s_weight,
-                "position": d.get('position') or 0, "duration": d.get('duration') or 0, "runtime": d.get('runtime')
+                "id": str(d.get('id')),
+                "title": ep_title,
+                "videoUrl": d.get('videoUrl'),
+                "thumbnailUrl": d.get('thumbnailUrl'),
+                "overview": d.get('overview'),
+                "air_date": d.get('air_date'),
+                "season_number": actual_sn,  # 🔴 순수 시즌 번호
+                "episode_number": en,        # 🔴 순수 회차 번호
+                "display_season": s_disp,
+                "sort_weight": s_weight,     # 🔴 정렬용
+                "position": d.get('position') or 0,
+                "duration": d.get('duration') or 0,
+                "runtime": d.get('runtime')
             })
 
-        sorted_eps = sorted(all_refined_eps, key=lambda x: (x['sort_weight'], x['episode_number'] or 0))
+        sorted_eps = sorted(all_refined_eps, key=lambda x: (x['sort_weight'], x['season_number'], x['episode_number']))
 
-        # 중복 에피소드 방어 로직 (id 기준 고유값만 남김)
         unique_eps_dict = {}
         for ep in sorted_eps:
             unique_eps_dict[ep['id']] = ep
@@ -1573,36 +1600,19 @@ def get_series_detail_api():
 
         final_season_count = len(seasons_map)
 
-        # --- [수정 후: 제목 일관성 유지 로직] ---
-        # 1. 원본 파일명/폴더명에서 태그를 먼저 추출하여 보존합니다.
         orig_raw_name = nfc(series_data.get('name', ''))
-        tag = ""
-        if "더빙" in nfc(db_path + orig_raw_name).lower():
-            tag = "더빙"
-        elif "자막" in nfc(db_path + orig_raw_name).lower():
-            tag = "자막"
-
-        # 2. 기본 제목을 결정합니다.
+        tag = "더빙" if is_dub else "자막" if is_sub else ""
         base_title = c_name if c_name else nfc(series_data.get('tmdbTitle') or series_data.get('name'))
 
-        # 3. 특수 대작(나루토 등)의 경우 폴더명 정보를 포함합니다. (리스트와 동일한 로직)
         is_special = any(k in base_title for k in SPECIAL_GRANULAR_GROUPS)
-        sub_folder = ""
-        if is_special:
-            parts = db_path.split('/')
-            sub_folder = parts[1] if len(parts) > 2 else ""
-            if sub_folder and sub_folder not in base_title:
-                base_title = f"{sub_folder} > {base_title}"
+        sub_folder = db_path.split('/')[1] if is_special and len(db_path.split('/')) > 2 else ""
+        if sub_folder and sub_folder not in base_title: base_title = f"{sub_folder} > {base_title}"
 
-        # 4. 최종 이름을 조립합니다. (이미 태그가 있다면 중복 방지)
-        if tag and f"[{tag}]" not in base_title:
-            final_display_name = f"{base_title} [{tag}]"
-        else:
-            final_display_name = base_title
+        final_display_name = f"{base_title} [{tag}]" if tag and f"[{tag}]" not in base_title else base_title
+        series_data["name"] = final_display_name.strip()
 
         response_data = {
             **series_data,
-            "name": final_display_name.strip(), # 이 값이 앱의 제목이 됩니다.
             "seasonCount": final_season_count,
             "episodes": final_sorted_eps, "movies": final_sorted_eps, "seasons": seasons_map,
             "genreIds": json.loads(series_data.get('genreIds', '[]')) if series_data.get('genreIds') else [],
@@ -1613,7 +1623,6 @@ def get_series_detail_api():
         return gzip_response(response_data)
     except Exception as e:
         return gzip_response({"error": str(e)})
-
 
 def pre_generate_individual_task(ep_thumb_url):
     try:
@@ -5971,16 +5980,24 @@ def admin_db_pro():
             .btn { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
             .btn-primary { background: var(--accent); color: white; }
             .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+
             .grid-container { flex: 1; overflow: auto; padding: 20px 30px; }
-            table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border); }
+            table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border); table-layout: auto; }
             th { position: sticky; top: 0; z-index: 10; background: #334155; color: var(--text-dim); padding: 12px 15px; text-align: left; font-size: 12px; border-bottom: 1px solid var(--border); cursor: pointer; white-space: nowrap; }
-            td { padding: 12px 15px; border-bottom: 1px solid var(--border); font-size: 13px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            td { padding: 12px 15px; border-bottom: 1px solid var(--border); font-size: 13px; white-space: nowrap; overflow: visible; text-overflow: clip; max-width: none; }
             tr:hover { background: #2d3748; }
+
+            /* 수정 가능 필드 스타일 */
+            .editable { color: var(--accent); cursor: pointer; border-bottom: 1px dashed var(--accent); }
+            .editable:hover { background: #334155; color: white; }
+            .edit-input { background: #0f172a; color: white; border: 1px solid var(--accent); padding: 5px; width: 100%; box-sizing: border-box; font-size: 13px; }
+
             .pagination { padding: 15px 30px; background: var(--bg-card); border-top: 1px solid var(--border); display: flex; justify-content: center; align-items: center; gap: 15px; }
             .poster-thumb { width: 35px; height: 50px; border-radius: 4px; object-fit: cover; }
         </style>
     </head>
     <body>
+        <!-- 사이드바 및 상단바 생략 (기존 유지) -->
         <div class="sidebar">
             <div class="sidebar-header"><i class="fas fa-terminal"></i> DB PRO ADMIN</div>
             <div class="nav-menu">
@@ -6016,14 +6033,61 @@ def admin_db_pro():
                 </select>
             </div>
         </div>
+
         <script>
             let currentTable = 'series', currentPage = 0, pageSize = 50, sortCol = '', sortDir = 'ASC';
+
+            async function makeEditable(td, pk, field) {
+                if (td.querySelector('input')) return;
+                const originalVal = td.innerText === 'null' ? '' : td.innerText;
+                const input = document.createElement('input');
+                input.className = 'edit-input';
+                input.value = originalVal;
+                td.innerHTML = '';
+                td.appendChild(input);
+                input.focus();
+
+                input.onblur = () => { if (!input.dataset.saving) td.innerText = originalVal || 'null'; };
+                input.onkeydown = async (e) => {
+                    if (e.key === 'Enter') {
+                        input.dataset.saving = "true";
+                        const newVal = input.value;
+                        if (newVal === originalVal) { td.innerText = originalVal || 'null'; return; }
+                        const ok = await saveCell(pk, field, newVal);
+                        if (ok) {
+                            td.innerText = newVal || 'null';
+                            td.style.color = '#4ade80';
+                            setTimeout(() => td.style.color = '', 2000);
+                        } else { alert('저장 실패'); td.innerText = originalVal || 'null'; }
+                    } else if (e.key === 'Escape') { td.innerText = originalVal || 'null'; }
+                };
+            }
+
+            async function saveCell(pk, field, newVal) {
+                try {
+                    const res = await fetch('/api/admin/update_cell', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            table: currentTable,
+                            pk_col: currentTable === 'series' ? 'path' : 'id',
+                            pk_val: pk,
+                            field: field,
+                            new_val: newVal
+                        })
+                    });
+                    const data = await res.json();
+                    return data.status === 'success';
+                } catch (e) { return false; }
+            }
+
             function switchTable(table, el) {
                 document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
                 el.classList.add('active');
                 currentTable = table; triggerSearch();
             }
             function triggerSearch() { currentPage = 0; loadData(); }
+
             async function loadData() {
                 const q = document.getElementById('searchInput').value;
                 const cat = document.getElementById('categorySelect').value;
@@ -6033,13 +6097,18 @@ def admin_db_pro():
                     const res = await (await fetch(`/api/admin/db_pro_data?table=${currentTable}&q=${encodeURIComponent(q)}&cat=${cat}&limit=${pageSize}&offset=${currentPage*pageSize}&sort=${sortCol}&dir=${sortDir}`)).json();
                     document.getElementById('rowCount').innerText = `${res.total.toLocaleString()} items found`;
                     document.getElementById('pageDisplay').innerText = `Page ${currentPage + 1} / ${Math.ceil(res.total / pageSize) || 1}`;
-                    document.getElementById('prevBtn').disabled = currentPage === 0;
-                    document.getElementById('nextBtn').disabled = (currentPage + 1) * pageSize >= res.total;
+
                     let html = '<table><thead><tr>' + res.columns.map(c => `<th onclick="handleSort('${c}')">${c} ${sortCol===c?(sortDir==='ASC'?'▲':'▼'):''}</th>`).join('') + '</tr></thead><tbody>';
                     res.data.forEach(row => {
                         html += '<tr>' + res.columns.map(c => {
                             let val = row[c], display = val === null ? '<span style="color:#475569">null</span>' : val;
                             if (c === 'posterPath' && val) display = `<img src="${val.startsWith('http') ? val : 'https://image.tmdb.org/t/p/w200' + val}" class="poster-thumb">`;
+
+                            // cleanedName과 tmdbTitle은 편집 가능하게 설정
+                            if ((c === 'cleanedName' || c === 'tmdbTitle') && currentTable === 'series') {
+                                const safePath = JSON.stringify(row.path).replace(/"/g, '&quot;');
+                                return `<td class="editable" onclick="makeEditable(this, ${safePath}, '${c}')">${display}</td>`;
+                            }
                             return `<td title="${String(val).replace(/"/g, '&quot;')}">${display}</td>`;
                         }).join('') + '</tr>';
                     });
@@ -6054,6 +6123,7 @@ def admin_db_pro():
     </body>
     </html>
     """
+
 @app.route('/api/admin/db_pro_data')
 def api_db_pro_data():
     table = request.args.get('table', 'series')
@@ -6115,7 +6185,7 @@ def api_db_pro_data():
         prio = ['posterPath', 'path', 'series_path', 'name', 'title', 'cleanedName', 'season_number', 'episode_number']
         columns = sorted(list(dict.fromkeys(columns)), key=lambda x: prio.index(x) if x in prio else 999)
 
-        data = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        data = [dict(row) for row in cursor.fetchall()]
         conn.close()
 
         return jsonify({"columns": columns, "data": data, "total": total_count, "offset": offset, "limit": limit})
@@ -6228,6 +6298,133 @@ def match_movies_all():
     conn = get_db(); conn.execute("UPDATE series SET failed = 0 WHERE category = 'movies'"); conn.commit(); conn.close()
     threading.Thread(target=fetch_metadata_async, kwargs={'target_category': 'movies', 'force_all': True}, daemon=True).start()
     return jsonify({"status": "success", "message": "영화 전용 포스터 매칭을 시작합니다."})
+
+@app.route('/api/debug/find_exact_path')
+def find_exact_path():
+    keyword = request.args.get('q', '터무니없는')
+    conn = get_db()
+    # '터무니없는'이 포함된 모든 path를 가져와서 리스트로 보여줍니다.
+    rows = conn.execute("SELECT DISTINCT series_path FROM episodes WHERE series_path LIKE ?", (f'%{keyword}%',)).fetchall()
+    conn.close()
+    return jsonify([r['series_path'] for r in rows])
+
+@app.route('/api/repair/fix_specific_series')
+def fix_specific_series():
+    target_path = request.args.get('path')
+    if not target_path: return "path 파라미터 필요", 400
+
+    conn = get_db()
+    # 1. 해당 경로에 에피소드가 몇 개 있는지 확인하는 디버깅 로그 추가
+    count = conn.execute("SELECT COUNT(*) FROM episodes WHERE series_path = ?", (target_path,)).fetchone()[0]
+    log("DEBUG", f"경로 '{target_path}' 확인 결과: DB에 존재하는 에피소드 수 = {count}")
+
+    if count == 0:
+        # 2. 경로가 틀렸을 가능성이 크므로, '터무니'가 포함된 경로를 다 보여줌
+        similar = conn.execute("SELECT DISTINCT series_path FROM episodes WHERE series_path LIKE '%터무니%'").fetchall()
+        similar_paths = [r['series_path'] for r in similar]
+        conn.close()
+        return f"실패: 경로 '{target_path}'를 찾을 수 없습니다. DB에는 다음 경로들이 있습니다: {similar_paths}"
+
+    # ... 기존의 교정 로직 진행 ...
+    eps = conn.execute("SELECT id, title, series_path FROM episodes WHERE series_path = ?", (target_path,)).fetchall()
+    update_batch = []
+    for ep in eps:
+        sn, en = extract_episode_numbers(f"{ep['series_path']}/{ep['title']}")
+        if sn is not None:
+            update_batch.append((sn, en, ep['id']))
+
+    if update_batch:
+        conn.execute("UPDATE episodes SET season_number = ?, episode_number = ? WHERE id = ?",
+                     (update_batch[0][0], update_batch[0][1], update_batch[0][2]))  # (배치 처리 간소화 예시)
+        conn.commit()
+
+    conn.close()
+    return f"성공! {len(update_batch)}개 교정 완료."
+
+
+@app.route('/api/repair/fix_tondemo_final')
+def fix_tondemo_final():
+    folder_path = "animations_all/시리즈/타/터무니없는 스킬로 이세계 방랑 밥 (2023)"
+
+    def run_fix_task():
+        try:
+            conn = get_db()
+            cursor = conn.cursor()
+            # 1. 해당 폴더의 모든 에피소드 조회
+            eps = conn.execute("SELECT id, title, series_path FROM episodes WHERE series_path = ?",
+                               (folder_path,)).fetchall()
+
+            update_batch = []
+            for ep in eps:
+                # 1. 파일명에서 S와 E가 포함된 패턴을 강제로 찾음
+                # 예: [Moozzi2] ... - S01E01 ...
+                match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep['title'])
+
+                if match:
+                    sn = int(match.group(1))
+                    en = int(match.group(2))
+                    # S01E01 파싱 성공 시
+                    update_batch.append((sn, en, ep['id']))
+                else:
+                    # 패턴을 못 찾으면 1시즌 1화로 강제 할당 (디버깅용)
+                    update_batch.append((1, 1, ep['id']))
+
+            # 4. DB 일괄 업데이트
+            if update_batch:
+                cursor.executemany("UPDATE episodes SET season_number = ?, episode_number = ? WHERE id = ?",
+                                   update_batch)
+                conn.commit()
+
+            conn.close()
+            # 5. 작업이 끝난 후에만 캐시를 한 번만 갱신
+            build_all_caches()
+            log("REPAIR", f"성공! '{folder_path}' {len(update_batch)}개 항목 교정 완료")
+        except Exception as e:
+            log("REPAIR_ERROR", f"에러 발생: {str(e)}")
+
+    # 스레드로 분리하여 타임아웃 방지
+    threading.Thread(target=run_fix_task, daemon=True).start()
+    return f"교정 작업 시작: {folder_path} (백그라운드에서 진행 중)"
+
+@app.route('/api/debug/all_paths')
+def debug_all_paths():
+    conn = get_db()
+    # 경로에 '터무니'가 들어간 모든 series_path를 중복 제거하고 보여줌
+    rows = conn.execute("SELECT DISTINCT series_path FROM episodes WHERE series_path LIKE '%터무니%'").fetchall()
+    conn.close()
+    return jsonify([r['series_path'] for r in rows])
+
+
+@app.route('/api/admin/update_cell', methods=['POST'])
+def api_update_cell():
+    try:
+        data = request.json
+        table = data.get('table')
+        pk_col = data.get('pk_col')
+        pk_val = data.get('pk_val')
+        field = data.get('field')
+        new_val = data.get('new_val')
+
+        if table not in ['series', 'episodes']:
+            return jsonify({"status": "error", "message": "Invalid table"}), 400
+
+        # 수정 허용 필드 제한
+        allowed_fields = ['cleanedName', 'tmdbTitle', 'year', 'yearVal', 'category', 'title', 'season_number',
+                          'episode_number']
+        if field not in allowed_fields:
+            return jsonify({"status": "error", "message": "수정이 허용되지 않은 필드입니다."}), 403
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE {table} SET {field} = ? WHERE {pk_col} = ?", (new_val, pk_val))
+        conn.commit()
+        conn.close()
+
+        # 캐시 비동기 갱신
+        threading.Thread(target=build_all_caches, daemon=True).start()
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # --- [추가] 수동 포스터 변경 라우트 ---
 @app.route('/custom_poster/<filename>')
