@@ -90,8 +90,9 @@ fun SeriesDetailScreen(
     val allEpisodes = state.seasons.flatMap { it.episodes }
     val resumeInfo = remember(allEpisodes, watchHistory, currentSeries.fullPath) {
         if (allEpisodes.isEmpty()) return@remember null
-        val history = watchHistory.filter { it.seriesPath == currentSeries.fullPath }
-            .sortedByDescending { it.timestamp }.firstOrNull()
+        val historyList = watchHistory.filter { it.seriesPath == currentSeries.fullPath }
+            .sortedByDescending { it.timestamp }
+        val history = historyList.firstOrNull()
             
         if (history == null) ResumeInfo(allEpisodes.first(), 0L, isNew = true)
         else {
@@ -100,9 +101,15 @@ fun SeriesDetailScreen(
             else {
                 val lastEp = allEpisodes[lastEpIndex]
                 val isFinished = history.duration > 0 && history.lastPosition > history.duration * 0.95
-                if (isFinished && lastEpIndex < allEpisodes.size - 1) ResumeInfo(allEpisodes[lastEpIndex + 1], 0L, isNext = true)
-                else if (isFinished) ResumeInfo(lastEp, 0L, isFinished = true)
-                else ResumeInfo(lastEp, history.lastPosition)
+                
+                // [수정] 마지막 시청 기록이 완료(isFinished)된 상태에서 
+                // 다음 에피소드가 존재할 때만 다음 화를 추천하도록 함.
+                // 마지막 에피소드인 경우 완료된 에피소드 정보를 유지.
+                if (isFinished && lastEpIndex < allEpisodes.size - 1) {
+                    ResumeInfo(allEpisodes[lastEpIndex + 1], 0L, isNext = true)
+                } else {
+                    ResumeInfo(lastEp, if (isFinished) 0L else history.lastPosition, isFinished = isFinished)
+                }
             }
         }
     }

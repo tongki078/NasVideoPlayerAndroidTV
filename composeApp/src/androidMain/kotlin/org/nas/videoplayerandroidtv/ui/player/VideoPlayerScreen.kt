@@ -103,7 +103,17 @@ fun VideoPlayerScreen(
     
     val startPosition = remember(movie.id) { 
         val serverPos = ((movie.position ?: 0.0) * 1000).toLong()
-        if (serverPos > 0) serverPos else initialPosition
+        val durationMs = ((movie.duration ?: 0.0) * 1000).toLong()
+        
+        // [버그 수정] 다 본 영상(95% 이상 시청)을 다시 클릭했을 때 
+        // 자동으로 다음 화로 넘어가는 현상을 방지하기 위해, 다 본 영상은 처음부터 재생함.
+        if (durationMs > 0 && serverPos > durationMs * 0.95) {
+            0L
+        } else if (serverPos > 0) {
+            serverPos
+        } else {
+            initialPosition
+        }
     }
     
     var isControllerVisible by remember { mutableStateOf(true) }
@@ -252,7 +262,12 @@ fun VideoPlayerScreen(
                             finalSeekPosition = seekTime
                             isSeeking = false
                             true
-                        } else if (isBackButtonFocused || isReplayButtonFocused || isNextButtonFocused || isSkipOpeningFocused || isSubtitleButtonFocused) {
+                        } else if (isSkipOpeningFocused) {
+                            finalSeekPosition = introEnd
+                            isControllerVisible = false
+                            mainBoxFocusRequester.requestFocus()
+                            true
+                        } else if (isBackButtonFocused || isReplayButtonFocused || isNextButtonFocused || isSubtitleButtonFocused) {
                             false
                         } else {
                             userPaused = !userPaused
@@ -312,7 +327,11 @@ fun VideoPlayerScreen(
                         
                         if (!isMovie) {
                             val season = movie.season_number ?: titleText.extractSeason()
-                            val episode = movie.episode_number ?: titleText.extractEpisode()?.replace("화", "")?.toIntOrNull()
+                            val episode = movie.episode_number ?: try {
+                                titleText.extractEpisode()?.filter { it.isDigit() }?.toIntOrNull()
+                            } catch (e: Exception) {
+                                null
+                            }
                             
                             val infoLabel = buildString {
                                 if (season > 0) append("시즌 $season ")
@@ -364,10 +383,25 @@ fun VideoPlayerScreen(
                     }
                 }
                 
+                // 오프닝 건너뛰기 버튼: 오프닝 구간이면 항상 노출하여 접근성 강화
                 if (isDuringOpening) {
-                    AnimatedVisibility(visible = isControllerVisible && !isSeeking, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 80.dp)) {
-                        NetflixPlayerButton("오프닝 건너뛰기", Icons.AutoMirrored.Filled.ArrowForward, isSkipOpeningFocused, onClick = { finalSeekPosition = introEnd; mainBoxFocusRequester.requestFocus() },
-                            modifier = Modifier.focusRequester(skipOpeningFocusRequester).onFocusChanged { isSkipOpeningFocused = it.isFocused })
+                    AnimatedVisibility(
+                        visible = !isSeeking, 
+                        enter = fadeIn() + slideInHorizontally(), 
+                        exit = fadeOut() + slideOutHorizontally(), 
+                        modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 96.dp).zIndex(5f)
+                    ) {
+                        NetflixPlayerButton(
+                            text = "오프닝 건너뛰기", 
+                            icon = Icons.AutoMirrored.Filled.ArrowForward, 
+                            isFocused = isSkipOpeningFocused, 
+                            onClick = { 
+                                finalSeekPosition = introEnd
+                                isControllerVisible = false
+                                mainBoxFocusRequester.requestFocus() 
+                            },
+                            modifier = Modifier.focusRequester(skipOpeningFocusRequester).onFocusChanged { isSkipOpeningFocused = it.isFocused }
+                        )
                     }
                 }
                 
