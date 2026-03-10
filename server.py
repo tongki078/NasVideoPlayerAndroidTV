@@ -1569,7 +1569,7 @@ def get_series_detail_api():
                         en = int(nums[-1]) if nums else actual_en
 
                 # 로그 확인용
-                print(f"[DEBUG] 파일: {ep_title} | 추출시즌: {actual_sn} | 추출회차: {en}", flush=True)
+                # print(f"[DEBUG] 파일: {ep_title} | 추출시즌: {actual_sn} | 추출회차: {en}", flush=True)
 
             all_refined_eps.append({
                 "id": str(d.get('id')),
@@ -5069,16 +5069,15 @@ def upload_custom_poster():
         response = requests.post("https://api.imgbb.com/1/upload", params=params, files=files, timeout=30)
 
         # 응답이 JSON인지 확인하여 파싱 에러 방지
+        # 여기서 JSON 파싱 에러가 발생할 수 있으니 안전하게 처리
         try:
             res_json = response.json()
-        except Exception:
-            emit_ui_log("ImgBB 서버로부터 비정상적인 응답을 받았습니다.", "error")
-            return jsonify({"status": "error", "message": "ImgBB 응답 파싱 실패"}), 500
+        except Exception as e:
+            return jsonify({"status": "error", "message": f"서버 응답 파싱 실패: {response.text[:100]}"}), 500
 
         if response.status_code != 200 or not res_json.get('success'):
-            error_msg = res_json.get('error', {}).get('message', '알 수 없는 오류')
-            emit_ui_log(f"ImgBB 업로드 실패: {error_msg}", "error")
-            return jsonify({"status": "error", "message": f"외부 서버 업로드 실패: {error_msg}"}), 500
+            error_msg = res_json.get('error', {}).get('message', '알 수 없는 외부 서버 오류')
+            return jsonify({"status": "error", "message": error_msg}), 500
 
         # 2. 업로드된 이미지의 URL 추출
         poster_url = res_json['data']['url']
