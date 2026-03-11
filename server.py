@@ -5138,45 +5138,71 @@ def upload_custom_poster():
 # --- [추가] 수동 메타데이터 정보 수정 라우트 ---
 @app.route('/api/get_metadata_for_edit')
 def get_metadata_for_edit():
-    cat = request.args.get('category', '전체')
-    name = request.args.get('name', '').strip()
-    if not name: return jsonify({"error": "이름을 입력하세요"}), 400
+    # cat = request.args.get('category', '전체')
+    # name = request.args.get('name', '').strip()
+    # if not name: return jsonify({"error": "이름을 입력하세요"}), 400
+    #
+    # conn = get_db()
+    # cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
+    # internal_cat = cat_map.get(cat)
+    #
+    # try:
+    #     if internal_cat:
+    #         # 카테고리 필터가 있는 경우: name 또는 cleanedName과 '완전 일치'하는지 확인
+    #         query = """
+    #             SELECT * FROM series
+    #             WHERE category = ?
+    #             AND (name = ? OR cleanedName = ?)
+    #             LIMIT 1
+    #         """
+    #         row = conn.execute(query, (internal_cat, name, name)).fetchone()
+    #     else:
+    #         # 카테고리 상관없이 전체에서 '완전 일치'하는지 확인
+    #         query = """
+    #             SELECT * FROM series
+    #             WHERE (name = ? OR cleanedName = ?)
+    #             LIMIT 1
+    #         """
+    #         row = conn.execute(query, (name, name)).fetchone()
 
-    # [수정] 검색 키워드를 NFC로 정규화하여 DB 검색
-    name_nfc = nfc(name)
-    conn = get_db()
-    search_pattern = f"%{name_nfc}%"
-    cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
-    internal_cat = cat_map.get(cat)
+    ########################################################
+    # 부분검색
+    ########################################################
+        cat = request.args.get('category', '전체')
+        name = request.args.get('name', '').strip()
+        if not name: return jsonify({"error": "이름을 입력하세요"}), 400
 
-    if internal_cat:
-        row = conn.execute("SELECT * FROM series WHERE category = ? AND (name LIKE ? OR cleanedName LIKE ?) LIMIT 1",
-                           (internal_cat, search_pattern, search_pattern)).fetchone()
-    else:
-        row = conn.execute("SELECT * FROM series WHERE name LIKE ? OR cleanedName LIKE ? LIMIT 1",
-                           (search_pattern, search_pattern)).fetchone()
-    conn.close()
+        conn = get_db()
+        search_pattern = f"%{name}%"
+        cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
+        internal_cat = cat_map.get(cat)
 
-    if row:
-        return jsonify({
-            "tmdbTitle": row['tmdbTitle'] or "",
-            "cleanedName": row['cleanedName'] or "",  # [추가]
-            "year": row['year'] or "",
-            "overview": row['overview'] or "",
-            "director": row['director'] or "",
-            "actors": row['actors'] or "[]",
-            "genreNames": row['genreNames'] or "[]"
-        })
-    return jsonify({"error": "대상을 찾을 수 없습니다."}), 404
+        if internal_cat:
+            row = conn.execute("SELECT * FROM series WHERE category = ? AND (name LIKE ? OR cleanedName LIKE ?) LIMIT 1",
+                               (internal_cat, search_pattern, search_pattern)).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM series WHERE name LIKE ? OR cleanedName LIKE ? LIMIT 1",
+                               (search_pattern, search_pattern)).fetchone()
+        conn.close()
 
+        if row:
+            return jsonify({
+                "tmdbTitle": row['tmdbTitle'] or "",
+                "cleanedName": row['cleanedName'] or "",
+                "year": row['year'] or "",
+                "overview": row['overview'] or "",
+                "director": row['director'] or "",
+                "actors": row['actors'] or "[]",
+                "genreNames": row['genreNames'] or "[]"
+            })
+        return jsonify({"error": "완전히 일치하는 대상을 찾을 수 없습니다."}), 404
+    # finally:
+    #     conn.close()
 
 @app.route('/api/save_manual_metadata', methods=['POST'])
 def save_manual_metadata():
     try:
         data = request.json
-        if not data:
-            return jsonify({"status": "error", "message": "데이터가 없습니다."}), 400
-
         cat = data.get('category', '전체')
         name = data.get('name', '').strip()
 
@@ -5186,51 +5212,37 @@ def save_manual_metadata():
         conn = get_db()
         cursor = conn.cursor()
 
-        search_pattern = f"%{name}%"
+        # 1. 매핑 (기존과 동일)
         cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
         internal_cat = cat_map.get(cat)
 
+        # 2. 데이터 가공 (기존과 동일)
         actors_input = data.get('actors', '').strip()
-        # 입력된 문자열을 JSON 배열 형태로 변환하거나 유지
-        if actors_input.startswith('['):
-            actors_json = actors_input
-        else:
-            actors_json = json.dumps(
-                [{"name": a.strip(), "profile": None, "role": ""} for a in actors_input.split(',') if a.strip()],
-                ensure_ascii=False)
-
+        actors_json = json.dumps([{"name": a.strip(), "profile": None, "role": ""} for a in actors_input.split(',') if a.strip()], ensure_ascii=False)
         genres_input = data.get('genres', '').strip()
-        if genres_input.startswith('['):
-            genres_json = genres_input
-        else:
-            genres_json = json.dumps([g.strip() for g in genres_input.split(',') if g.strip()], ensure_ascii=False)
+        genres_json = json.dumps([g.strip() for g in genres_input.split(',') if g.strip()], ensure_ascii=False)
 
-        up = (
-            data.get('tmdbTitle'),
-            data.get('cleanedName'),
-            data.get('year'),
-            data.get('overview'),
-            data.get('director'),
-            actors_json,
-            genres_json
-        )
+        up = (data.get('tmdbTitle'), data.get('cleanedName'), data.get('year'), data.get('overview'), data.get('director'), actors_json, genres_json)
 
-        sql = '''UPDATE series SET tmdbTitle=?, cleanedName=?, year=?, overview=?, director=?, actors=?, genreNames=?, failed=0 '''
-
+        # 3. 쿼리 구성 (안전하게 분리)
         if internal_cat:
-            cursor.execute(sql + "WHERE category=? AND (name LIKE ? OR cleanedName LIKE ?)",
-                           (*up, internal_cat, search_pattern, search_pattern))
+            # 카테고리 필터가 있을 경우: 카테고리 AND 이름조건으로 정확히 타겟팅
+            sql = '''UPDATE series SET tmdbTitle=?, cleanedName=?, year=?, overview=?, director=?, actors=?, genreNames=?, failed=0
+                     WHERE category=? AND (name LIKE ? OR cleanedName LIKE ?)'''
+            cursor.execute(sql, (*up, internal_cat, f'%{name}%', f'%{name}%'))
         else:
-            cursor.execute(sql + "WHERE name LIKE ? OR cleanedName LIKE ?", (*up, search_pattern, search_pattern))
+            # 카테고리 필터가 없을 경우 (전체)
+            sql = '''UPDATE series SET tmdbTitle=?, cleanedName=?, year=?, overview=?, director=?, actors=?, genreNames=?, failed=0
+                     WHERE name LIKE ? OR cleanedName LIKE ?'''
+            cursor.execute(sql, (*up, f'%{name}%', f'%{name}%'))
 
         updated = cursor.rowcount
         conn.commit()
         conn.close()
 
         if updated > 0:
-            # 🔴 수정: 캐시 갱신을 스레드로 분리하여 응답에 간섭하지 않도록 함
             threading.Thread(target=build_all_caches, daemon=True).start()
-            return jsonify({"status": "success", "message": f"성공적으로 {updated}개 항목이 수정되었습니다."})
+            return jsonify({"status": "success", "message": f"{updated}개 항목이 수정되었습니다."})
         else:
             return jsonify({"status": "error", "message": "수정할 대상을 찾을 수 없습니다."}), 404
 
@@ -5298,13 +5310,22 @@ def refresh_by_keyword():
                     cursor.executemany("UPDATE series SET cleanedName = ? WHERE path = ?", batch)
                     conn.commit()
                     set_update_state(success=i + len(batch))
-                emit_ui_log(f"업데이트 완료: {update_count}개 항목의 그룹명이 수정되었습니다.", "success")
-            else:
-                emit_ui_log("수정할 항목이 없습니다. 이미 최신 로직으로 정제되어 있습니다.", "info")
 
+                # [수정] 아래 코드 추가:
+                # 1. 수정한 항목들의 매칭 정보를 초기화해서 재매칭 유도
+                # 2. 강제로 TMDB 정보를 다시 가져오도록 매칭 프로세스 실행
+                cursor.executemany("UPDATE series SET tmdbId = NULL, failed = 0 WHERE path = ?",
+                                   [(u[1],) for u in updates])
+                conn.commit()
+                emit_ui_log(f"업데이트 완료: {update_count}개 항목 재매칭 예약됨.", "success")
+            else:
+                emit_ui_log("수정할 항목이 없습니다.", "info")
             conn.close()
             build_all_caches()
-            set_update_state(is_running=False, current_item=f"완료! ({update_count}건 수정됨)")
+            # [수정] 아래 호출 추가
+            threading.Thread(target=fetch_metadata_async, kwargs={'target_name': target_keyword}, daemon=True).start()
+
+            set_update_state(is_running=False, current_item=f"완료! ({update_count}건 재매칭 예약)")
 
         except Exception as e:
             emit_ui_log(f"오류 발생: {str(e)}", "error")
