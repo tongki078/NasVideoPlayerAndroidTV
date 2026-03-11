@@ -1543,37 +1543,49 @@ def get_series_detail_api():
                 if is_high_quality:
                     s_disp = f"고화질 ({s_disp})"
 
-                # 1. 파일명에서 S와 E가 명확히 있는 경우 우선 파싱 (예: S01E01)
-                s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
-                # 2. E만 있는 경우 (예: E01)
-                e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
-                # 3. 화/회 가 있는 경우
-                h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
+                # 파일명에서 'E' 또는 'EP' 뒤, 혹은 '화' 앞의 숫자만 타겟팅
+                ep_match = re.search(r'(?i)(?:[.\s_-](?:E|EP))\s*(\d+)|(\d+)\s*(?:화|회)', ep_title)
 
-                if s_match:
-                    actual_sn = int(s_match.group(1))
-                    en = int(s_match.group(2))
-                elif e_match:
-                    en = int(e_match.group(1))
-                elif h_match:
-                    en = int(h_match.group(1))
+                if ep_match:
+                    # 그룹 1(E01) 또는 그룹 2(01화)에서 숫자 추출
+                    en = int(ep_match.group(1) or ep_match.group(2))
                 else:
-                    # 마커가 없을 때 해상도(1080, 265, 10)를 피해서 번호를 찾기 위한 보완책
-                    # 파일명에서 'E' 뒤에 오는 숫자만 찾는 패턴을 다시 시도
-                    nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
-                    if nums:
-                        en = int(nums[0])
-                    else:
-                        # 최후의 수단: 파일명 끝부분의 숫자만 고려
-                        nums = re.findall(r'\d+', ep_title)
-                        en = int(nums[-1]) if nums else actual_en
+                    # 마커가 없을 때 해상도 숫자(1080, 265, 10 등)를 배제하고 추출
+                    # 4자리 숫자(1080, 2160) 및 3자리(265)를 피하기 위해
+                    # 1~2자리 숫자 뭉치만 찾도록 정규식 수정
+                    nums = re.findall(r'(?<!\d)\d{1,2}(?!\d)', ep_title)
+                    en = int(nums[-1]) if nums else actual_en
 
-                # 로그 확인용
-                # print(f"[DEBUG] 파일: {ep_title} | 추출시즌: {actual_sn} | 추출회차: {en}", flush=True)
+            # 1. 파일명에서 S와 E가 명확히 있는 경우 우선 파싱 (예: S01E01)
+            s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
+            # 2. E만 있는 경우 (예: E01)
+            e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
+            # 3. 화/회 가 있는 경우
+            h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
+
+            if s_match:
+                actual_sn = int(s_match.group(1))
+                en = int(s_match.group(2))
+            elif e_match:
+                en = int(e_match.group(1))
+            elif h_match:
+                en = int(h_match.group(1))
+            else:
+                # 마커가 없을 때 해상도(1080, 265, 10)를 피해서 번호를 찾기 위한 보완책
+                # 파일명에서 'E' 뒤에 오는 숫자만 찾는 패턴을 다시 시도
+                nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
+                if nums:
+                    en = int(nums[0])
+                else:
+                    # 최후의 수단: 파일명 끝부분의 숫자만 고려
+                    nums = re.findall(r'\d+', ep_title)
+                    en = int(nums[-1]) if nums else actual_en
+            # 🔴 디버깅 로그 추가
+            print(f"[DEBUG] EP: {ep_title} | display: {s_disp} | 실제시즌: {actual_sn} | 실제회차: {en} | 가중치: {s_weight}", flush=True)
 
             all_refined_eps.append({
                 "id": str(d.get('id')),
-                "title": ep_title,
+                "title": c_name,
                 "videoUrl": d.get('videoUrl'),
                 "thumbnailUrl": d.get('thumbnailUrl'),
                 "overview": d.get('overview'),
@@ -1608,31 +1620,13 @@ def get_series_detail_api():
         sub_folder = db_path.split('/')[1] if is_special and len(db_path.split('/')) > 2 else ""
         if sub_folder and sub_folder not in base_title: base_title = f"{sub_folder} > {base_title}"
 
-        final_display_name = (c_name if c_name else nfc(series_data.get('tmdbTitle') or series_data.get('name', ''))).strip()
-
-        # 🔴 이 부분이 중요합니다. 클라이언트가 이 'name' 필드를 제목으로 사용합니다.
-        series_data["name"] = final_display_name
-        series_data["tmdbTitle"] = final_display_name  # 재생 화면이 이 필드를 참조할 경우를 대비
-        # 🔴 [핵심 수정] 클라이언트(Android)가 movie.title을 참조하므로, 여기에 한글 제목을 할당
-        series_data.pop("title", None)  # 기존 영문 title 삭제
-        series_data["title"] = final_display_name
-        # 🔴 서버 터미널에서 한글이 잘 찍히는지 눈으로 직접 확인하세요!
-        print(f"[DEBUG] 최종 응답 JSON의 title 필드값: {final_display_name}", flush=True)
-        # --- [최종 수정] 서버가 보낼 응답을 완전히 새로 구성 ---
-        final_display_name = (
-            c_name if c_name else nfc(series_data.get('tmdbTitle') or series_data.get('name', ''))).strip()
+        final_display_name = f"{base_title} [{tag}]" if tag and f"[{tag}]" not in base_title else base_title
+        series_data["name"] = final_display_name.strip()
 
         response_data = {
-            "id": series_data.get('tmdbId') or series_data.get('path'),
-            "title": final_display_name,  # 🔴 오직 이것만 사용됨
-            "videoUrl": series_data.get('videoUrl'),  # 만약 여기에 파일명이 있다면? (에피소드 정보 확인 필요)
-            "overview": series_data.get('overview'),
-            "season_number": series_data.get('season_number'),
-            "episode_number": series_data.get('episode_number'),
+            **series_data,
             "seasonCount": final_season_count,
-            "episodes": final_sorted_eps,
-            "movies": final_sorted_eps,
-            "seasons": seasons_map,
+            "episodes": final_sorted_eps, "movies": final_sorted_eps, "seasons": seasons_map,
             "genreIds": json.loads(series_data.get('genreIds', '[]')) if series_data.get('genreIds') else [],
             "genreNames": json.loads(series_data.get('genreNames', '[]')) if series_data.get('genreNames') else [],
             "actors": json.loads(series_data.get('actors', '[]')) if series_data.get('actors') else []
@@ -5087,15 +5081,16 @@ def upload_custom_poster():
         response = requests.post("https://api.imgbb.com/1/upload", params=params, files=files, timeout=30)
 
         # 응답이 JSON인지 확인하여 파싱 에러 방지
-        # 여기서 JSON 파싱 에러가 발생할 수 있으니 안전하게 처리
         try:
             res_json = response.json()
-        except Exception as e:
-            return jsonify({"status": "error", "message": f"서버 응답 파싱 실패: {response.text[:100]}"}), 500
+        except Exception:
+            emit_ui_log("ImgBB 서버로부터 비정상적인 응답을 받았습니다.", "error")
+            return jsonify({"status": "error", "message": "ImgBB 응답 파싱 실패"}), 500
 
         if response.status_code != 200 or not res_json.get('success'):
-            error_msg = res_json.get('error', {}).get('message', '알 수 없는 외부 서버 오류')
-            return jsonify({"status": "error", "message": error_msg}), 500
+            error_msg = res_json.get('error', {}).get('message', '알 수 없는 오류')
+            emit_ui_log(f"ImgBB 업로드 실패: {error_msg}", "error")
+            return jsonify({"status": "error", "message": f"외부 서버 업로드 실패: {error_msg}"}), 500
 
         # 2. 업로드된 이미지의 URL 추출
         poster_url = res_json['data']['url']
