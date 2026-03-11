@@ -91,6 +91,9 @@ fun VideoPlayerScreen(
     onNextMovie: (Movie) -> Unit,
     onBack: () -> Unit
 ) {
+    // 🔴 무조건 실행되는 로그 추가
+    Log.d("VideoPlayerDebug", "Movie Data: title=${movie.title}, season=${movie.season_number}, ep=${movie.episode_number}")
+
     val scope = rememberCoroutineScope()
     
     // key를 movie.id로 지정하여 movie가 바뀌면 상태를 초기화하도록 수정
@@ -316,35 +319,26 @@ fun VideoPlayerScreen(
                         modifier = Modifier.padding(top = 32.dp, end = 48.dp),
                         horizontalAlignment = Alignment.End
                     ) {
-                        val titleText = movie.title ?: ""
-                        val isMovie = movie.videoUrl?.contains("type=movie") == true
-                        
                         Text(
-                            text = titleText.cleanTitle(keepAfterHyphen = true, includeYear = false),
+                            text = movie.title ?: "",
                             color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
                             style = LocalTextStyle.current.copy(shadow = Shadow(Color.Black, androidx.compose.ui.geometry.Offset(2f, 2f), 4f))
                         )
                         
-                        if (!isMovie) {
-                            val season = movie.season_number ?: titleText.extractSeason()
-                            val episode = movie.episode_number ?: try {
-                                titleText.extractEpisode()?.filter { it.isDigit() }?.toIntOrNull()
-                            } catch (e: Exception) {
-                                null
-                            }
-                            
-                            val infoLabel = buildString {
-                                if (season > 0) append("시즌 $season ")
-                                if (episode != null && episode > 0) append(": ${episode}화")
-                            }
-                            
-                            if (infoLabel.isNotBlank()) {
-                                Text(
-                                    text = infoLabel,
-                                    color = Color.White.copy(alpha = 0.8f), fontSize = 18.sp,
-                                    style = LocalTextStyle.current.copy(shadow = Shadow(Color.Black, androidx.compose.ui.geometry.Offset(2f, 2f), 4f))
-                                )
-                            }
+                        val season = movie.season_number ?: 0
+                        val episode = movie.episode_number ?: 0
+                        
+                        val infoLabel = buildString {
+                            if (season > 0) append("시즌 $season ")
+                            if (episode > 0) append(": ${episode}화")
+                        }
+                        
+                        if (infoLabel.isNotBlank()) {
+                            Text(
+                                text = infoLabel,
+                                color = Color.White.copy(alpha = 0.8f), fontSize = 18.sp,
+                                style = LocalTextStyle.current.copy(shadow = Shadow(Color.Black, androidx.compose.ui.geometry.Offset(2f, 2f), 4f))
+                            )
                         }
                     }
                 }
@@ -383,7 +377,7 @@ fun VideoPlayerScreen(
                     }
                 }
                 
-                // 오프닝 건너뛰기 버튼: 오프닝 구간이면 항상 노출하여 접근성 강화
+                // 오프닝 건너뛰기 버튼
                 if (isDuringOpening) {
                     AnimatedVisibility(
                         visible = !isSeeking, 
@@ -428,7 +422,7 @@ fun VideoPlayerScreen(
                     }
                     Row(modifier = Modifier.fillMaxWidth().padding(bottom = 48.dp, start = 48.dp, end = 60.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (userPaused) Icons.Default.PlayArrow else MyPauseIcon, null, tint = Color.White, modifier = Modifier.size(56.dp))
-                        Spacer(Modifier.width(24.dp))
+                        Spacer(Modifier.width(14.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             val progress = if (totalDuration > 0) (if(isSeeking) seekTime else currentPosition).toFloat() / totalDuration else 0f
                             Box(modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.2f))) {

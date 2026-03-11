@@ -1608,13 +1608,31 @@ def get_series_detail_api():
         sub_folder = db_path.split('/')[1] if is_special and len(db_path.split('/')) > 2 else ""
         if sub_folder and sub_folder not in base_title: base_title = f"{sub_folder} > {base_title}"
 
-        final_display_name = f"{base_title} [{tag}]" if tag and f"[{tag}]" not in base_title else base_title
-        series_data["name"] = final_display_name.strip()
+        final_display_name = (c_name if c_name else nfc(series_data.get('tmdbTitle') or series_data.get('name', ''))).strip()
+
+        # 🔴 이 부분이 중요합니다. 클라이언트가 이 'name' 필드를 제목으로 사용합니다.
+        series_data["name"] = final_display_name
+        series_data["tmdbTitle"] = final_display_name  # 재생 화면이 이 필드를 참조할 경우를 대비
+        # 🔴 [핵심 수정] 클라이언트(Android)가 movie.title을 참조하므로, 여기에 한글 제목을 할당
+        series_data.pop("title", None)  # 기존 영문 title 삭제
+        series_data["title"] = final_display_name
+        # 🔴 서버 터미널에서 한글이 잘 찍히는지 눈으로 직접 확인하세요!
+        print(f"[DEBUG] 최종 응답 JSON의 title 필드값: {final_display_name}", flush=True)
+        # --- [최종 수정] 서버가 보낼 응답을 완전히 새로 구성 ---
+        final_display_name = (
+            c_name if c_name else nfc(series_data.get('tmdbTitle') or series_data.get('name', ''))).strip()
 
         response_data = {
-            **series_data,
+            "id": series_data.get('tmdbId') or series_data.get('path'),
+            "title": final_display_name,  # 🔴 오직 이것만 사용됨
+            "videoUrl": series_data.get('videoUrl'),  # 만약 여기에 파일명이 있다면? (에피소드 정보 확인 필요)
+            "overview": series_data.get('overview'),
+            "season_number": series_data.get('season_number'),
+            "episode_number": series_data.get('episode_number'),
             "seasonCount": final_season_count,
-            "episodes": final_sorted_eps, "movies": final_sorted_eps, "seasons": seasons_map,
+            "episodes": final_sorted_eps,
+            "movies": final_sorted_eps,
+            "seasons": seasons_map,
             "genreIds": json.loads(series_data.get('genreIds', '[]')) if series_data.get('genreIds') else [],
             "genreNames": json.loads(series_data.get('genreNames', '[]')) if series_data.get('genreNames') else [],
             "actors": json.loads(series_data.get('actors', '[]')) if series_data.get('actors') else []
