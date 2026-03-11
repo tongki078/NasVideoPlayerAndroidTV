@@ -157,7 +157,8 @@ fun VideoPlayerScreen(
     }
 
     LaunchedEffect(Unit) {
-        mainBoxFocusRequester.requestFocus()
+        delay(100)
+        try { mainBoxFocusRequester.requestFocus() } catch(e: Exception) {}
     }
 
     LaunchedEffect(currentPosition, totalDuration, movie.id) {
@@ -210,23 +211,23 @@ fun VideoPlayerScreen(
                     android.view.KeyEvent.KEYCODE_DPAD_UP -> {
                         if (!isControllerVisible) { isControllerVisible = true; true }
                         else if (isSubtitleButtonFocused || isSkipOpeningFocused) {
-                            backButtonFocusRequester.requestFocus()
+                            try { backButtonFocusRequester.requestFocus() } catch(e:Exception){}
                             true
                         } else if (!isBackButtonFocused && !isReplayButtonFocused && !isNextButtonFocused) {
-                            backButtonFocusRequester.requestFocus()
+                            try { backButtonFocusRequester.requestFocus() } catch(e:Exception){}
                             true
                         } else false
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
                         if (!isControllerVisible) { isControllerVisible = true; true }
                         else if (isBackButtonFocused || isReplayButtonFocused || isNextButtonFocused) {
-                            mainBoxFocusRequester.requestFocus()
+                            try { mainBoxFocusRequester.requestFocus() } catch(e:Exception){}
                             true
                         } else {
                             if (isDuringOpening) {
-                                try { skipOpeningFocusRequester.requestFocus() } catch(_:Exception) { subtitleButtonFocusRequester.requestFocus() }
+                                try { skipOpeningFocusRequester.requestFocus() } catch(_:Exception) { try { subtitleButtonFocusRequester.requestFocus() } catch(e:Exception){} }
                             } else {
-                                try { subtitleButtonFocusRequester.requestFocus() } catch(_:Exception) { mainBoxFocusRequester.requestFocus() }
+                                try { subtitleButtonFocusRequester.requestFocus() } catch(_:Exception) { try { mainBoxFocusRequester.requestFocus() } catch(e:Exception){} }
                             }
                             true
                         }
@@ -268,7 +269,7 @@ fun VideoPlayerScreen(
                         } else if (isSkipOpeningFocused) {
                             finalSeekPosition = introEnd
                             isControllerVisible = false
-                            mainBoxFocusRequester.requestFocus()
+                            try { mainBoxFocusRequester.requestFocus() } catch(e:Exception){}
                             true
                         } else if (isBackButtonFocused || isReplayButtonFocused || isNextButtonFocused || isSubtitleButtonFocused) {
                             false
@@ -362,7 +363,7 @@ fun VideoPlayerScreen(
                         NetflixIconButton(
                             icon = Icons.Default.Refresh,
                             isFocused = isReplayButtonFocused,
-                            onClick = { finalSeekPosition = 0L; mainBoxFocusRequester.requestFocus() },
+                            onClick = { finalSeekPosition = 0L; try { mainBoxFocusRequester.requestFocus() } catch(e:Exception){} },
                             modifier = Modifier.focusRequester(replayButtonFocusRequester).onFocusChanged { isReplayButtonFocused = it.isFocused }
                         )
 
@@ -370,7 +371,7 @@ fun VideoPlayerScreen(
                             NetflixIconButton(
                                 icon = Icons.AutoMirrored.Filled.ArrowForward,
                                 isFocused = isNextButtonFocused,
-                                onClick = { nextMovie.let { onNextMovie(it) }; mainBoxFocusRequester.requestFocus() },
+                                onClick = { nextMovie.let { onNextMovie(it) }; try { mainBoxFocusRequester.requestFocus() } catch(e:Exception){} },
                                 modifier = Modifier.focusRequester(nextButtonFocusRequester).onFocusChanged { isNextButtonFocused = it.isFocused }
                             )
                         }
@@ -392,7 +393,7 @@ fun VideoPlayerScreen(
                             onClick = {
                                 finalSeekPosition = introEnd
                                 isControllerVisible = false
-                                mainBoxFocusRequester.requestFocus()
+                                try { mainBoxFocusRequester.requestFocus() } catch(e:Exception){}
                             },
                             modifier = Modifier.focusRequester(skipOpeningFocusRequester).onFocusChanged { isSkipOpeningFocused = it.isFocused }
                         )
@@ -440,13 +441,13 @@ fun VideoPlayerScreen(
 
         if (isSubtitlePanelOpen) {
             Dialog(
-                onDismissRequest = { isSubtitlePanelOpen = false; mainBoxFocusRequester.requestFocus() },
+                onDismissRequest = { isSubtitlePanelOpen = false; try { mainBoxFocusRequester.requestFocus() } catch(e:Exception){} },
                 properties = DialogProperties(usePlatformDefaultWidth = false)
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).clickable {
                         isSubtitlePanelOpen = false
-                        mainBoxFocusRequester.requestFocus()
+                        try { mainBoxFocusRequester.requestFocus() } catch(e:Exception){}
                     })
 
                     Surface(
@@ -476,7 +477,7 @@ fun VideoPlayerScreen(
                                         onClick = {
                                             selectedSubtitleIndex = trackIdx
                                             isSubtitlePanelOpen = false
-                                            mainBoxFocusRequester.requestFocus()
+                                            try { mainBoxFocusRequester.requestFocus() } catch(e:Exception){}
                                         },
                                         color = if (isItemFocused) Color.White.copy(alpha = 0.2f) else Color.Transparent,
                                         shape = RoundedCornerShape(8.dp),
