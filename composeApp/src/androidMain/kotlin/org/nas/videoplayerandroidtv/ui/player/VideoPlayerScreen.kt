@@ -95,7 +95,7 @@ fun VideoPlayerScreen(
     Log.d("VideoPlayerDebug", "Movie Data: title=${movie.title}, season=${movie.season_number}, ep=${movie.episode_number}")
 
     val scope = rememberCoroutineScope()
-    
+
     // key를 movie.id로 지정하여 movie가 바뀌면 상태를 초기화하도록 수정
     var isSeeking by remember(movie.id) { mutableStateOf(false) }
     var userPaused by remember(movie.id) { mutableStateOf(false) }
@@ -103,12 +103,12 @@ fun VideoPlayerScreen(
     var finalSeekPosition by remember(movie.id) { mutableLongStateOf(-1L) }
     var currentPosition by remember(movie.id) { mutableLongStateOf(0L) }
     var totalDuration by remember(movie.id) { mutableLongStateOf(0L) }
-    
-    val startPosition = remember(movie.id) { 
+
+    val startPosition = remember(movie.id) {
         val serverPos = ((movie.position ?: 0.0) * 1000).toLong()
         val durationMs = ((movie.duration ?: 0.0) * 1000).toLong()
-        
-        // [버그 수정] 다 본 영상(95% 이상 시청)을 다시 클릭했을 때 
+
+        // [버그 수정] 다 본 영상(95% 이상 시청)을 다시 클릭했을 때
         // 자동으로 다음 화로 넘어가는 현상을 방지하기 위해, 다 본 영상은 처음부터 재생함.
         if (durationMs > 0 && serverPos > durationMs * 0.95) {
             0L
@@ -118,7 +118,7 @@ fun VideoPlayerScreen(
             initialPosition
         }
     }
-    
+
     var isControllerVisible by remember { mutableStateOf(true) }
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
@@ -132,7 +132,7 @@ fun VideoPlayerScreen(
     val nextButtonFocusRequester = remember { FocusRequester() }
     val skipOpeningFocusRequester = remember { FocusRequester() }
     val subtitleButtonFocusRequester = remember { FocusRequester() }
-    
+
     val thumbListState = rememberLazyListState()
 
     var isBackButtonFocused by remember { mutableStateOf(false) }
@@ -185,7 +185,7 @@ fun VideoPlayerScreen(
     val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp.dp
     val horizontalPadding = (screenWidth - 280.dp) / 2
-    
+
     LaunchedEffect(seekTime, isSeeking) {
         if (isSeeking && allThumbnails.isNotEmpty()) {
             val targetIndex = (seekTime / 10000L).toInt().coerceIn(allThumbnails.indices)
@@ -202,10 +202,10 @@ fun VideoPlayerScreen(
             .onKeyEvent { keyEvent ->
                 if (isSubtitlePanelOpen) return@onKeyEvent false
                 if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
-                
+
                 lastInteractionTime = System.currentTimeMillis()
                 val keyCode = keyEvent.nativeKeyEvent.keyCode
-                
+
                 when (keyCode) {
                     android.view.KeyEvent.KEYCODE_DPAD_UP -> {
                         if (!isControllerVisible) { isControllerVisible = true; true }
@@ -233,10 +233,10 @@ fun VideoPlayerScreen(
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                         if (isBackButtonFocused || isReplayButtonFocused || isNextButtonFocused) {
-                            false 
-                        } else if (isSubtitleButtonFocused && isDuringOpening) { 
+                            false
+                        } else if (isSubtitleButtonFocused && isDuringOpening) {
                             try { skipOpeningFocusRequester.requestFocus() } catch(_:Exception) {}
-                            true 
+                            true
                         }
                         else {
                             isControllerVisible = true
@@ -247,10 +247,10 @@ fun VideoPlayerScreen(
                     }
                     android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
                         if (isBackButtonFocused || isReplayButtonFocused || isNextButtonFocused) {
-                            false 
-                        } else if (isSkipOpeningFocused) { 
+                            false
+                        } else if (isSkipOpeningFocused) {
                             try { subtitleButtonFocusRequester.requestFocus() } catch(_:Exception) {}
-                            true 
+                            true
                         }
                         else {
                             isControllerVisible = true
@@ -300,7 +300,7 @@ fun VideoPlayerScreen(
             onSeekFinished = { finalSeekPosition = -1L },
             onSubtitleTracksAvailable = { subtitleTracks = it },
             selectedSubtitleIndex = selectedSubtitleIndex,
-            onSubtitleSelected = { } 
+            onSubtitleSelected = { }
         )
 
         AnimatedVisibility(visible = isSeeking, enter = fadeIn(), exit = fadeOut()) {
@@ -324,15 +324,15 @@ fun VideoPlayerScreen(
                             color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
                             style = LocalTextStyle.current.copy(shadow = Shadow(Color.Black, androidx.compose.ui.geometry.Offset(2f, 2f), 4f))
                         )
-                        
+
                         val season = movie.season_number ?: 0
                         val episode = movie.episode_number ?: 0
-                        
+
                         val infoLabel = buildString {
                             if (season > 0) append("시즌 $season ")
                             if (episode > 0) append(": ${episode}화")
                         }
-                        
+
                         if (infoLabel.isNotBlank()) {
                             Text(
                                 text = infoLabel,
@@ -376,29 +376,29 @@ fun VideoPlayerScreen(
                         }
                     }
                 }
-                
+
                 // 오프닝 건너뛰기 버튼
                 if (isDuringOpening) {
                     AnimatedVisibility(
-                        visible = !isSeeking, 
-                        enter = fadeIn() + slideInHorizontally(), 
-                        exit = fadeOut() + slideOutHorizontally(), 
+                        visible = isControllerVisible && !isSeeking,
+                        enter = fadeIn() + slideInHorizontally(),
+                        exit = fadeOut() + slideOutHorizontally(),
                         modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 96.dp).zIndex(5f)
                     ) {
                         NetflixPlayerButton(
-                            text = "오프닝 건너뛰기", 
-                            icon = Icons.AutoMirrored.Filled.ArrowForward, 
-                            isFocused = isSkipOpeningFocused, 
-                            onClick = { 
+                            text = "오프닝 건너뛰기",
+                            icon = Icons.AutoMirrored.Filled.ArrowForward,
+                            isFocused = isSkipOpeningFocused,
+                            onClick = {
                                 finalSeekPosition = introEnd
                                 isControllerVisible = false
-                                mainBoxFocusRequester.requestFocus() 
+                                mainBoxFocusRequester.requestFocus()
                             },
                             modifier = Modifier.focusRequester(skipOpeningFocusRequester).onFocusChanged { isSkipOpeningFocused = it.isFocused }
                         )
                     }
                 }
-                
+
                 AnimatedVisibility(visible = isControllerVisible && !isSeeking, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 80.dp)) {
                     NetflixIconButton(Icons.Default.Settings, isSubtitleButtonFocused, onClick = { isSubtitlePanelOpen = true },
                         modifier = Modifier.focusRequester(subtitleButtonFocusRequester).onFocusChanged { isSubtitleButtonFocused = it.isFocused })
@@ -444,11 +444,11 @@ fun VideoPlayerScreen(
                 properties = DialogProperties(usePlatformDefaultWidth = false)
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).clickable { 
+                    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).clickable {
                         isSubtitlePanelOpen = false
                         mainBoxFocusRequester.requestFocus()
                     })
-                    
+
                     Surface(
                         modifier = Modifier.fillMaxHeight().width(450.dp).align(Alignment.CenterEnd),
                         color = Color.Black,
@@ -456,7 +456,7 @@ fun VideoPlayerScreen(
                     ) {
                         Column(modifier = Modifier.padding(48.dp).fillMaxSize()) {
                             Text("자막", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 32.dp))
-                            
+
                             val options = listOf("자막 끔") + subtitleTracks
                             LazyColumn(modifier = Modifier.weight(1f)) {
                                 itemsIndexed(options) { index, title ->
@@ -473,7 +473,7 @@ fun VideoPlayerScreen(
                                     }
 
                                     Surface(
-                                        onClick = { 
+                                        onClick = {
                                             selectedSubtitleIndex = trackIdx
                                             isSubtitlePanelOpen = false
                                             mainBoxFocusRequester.requestFocus()
