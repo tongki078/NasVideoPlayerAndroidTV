@@ -420,8 +420,20 @@ private fun EpisodeOverlay(
                     Text(text = currentSeason?.name ?: "회차 정보", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(20.dp))
                     LazyColumn(state = episodeListState, verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
-                        items(currentSeason?.episodes ?: emptyList()) { movie -> 
-                            EpisodeItem(movie = movie, seriesOverview = seriesOverview, seriesPosterPath = seriesPosterPath, onPlay = { onEpisodeClick(movie) }) 
+                        items(currentSeason?.episodes ?: emptyList()) { movie ->
+                            // 1. 회차 정보를 가져옵니다. (없으면 0으로 처리)
+                            val episodeNum = movie.episode_number ?: 0
+
+                            // 2. 제목을 "회차 - 제목" 형태로 만듭니다.
+                            val displayTitle = if (episodeNum > 0) "${episodeNum}화 - ${movie.title}" else (movie.title ?: "제목 없음")
+
+                            // 3. title만 회차 정보가 포함된 것으로 바꿔서 전달합니다.
+                            EpisodeItem(
+                                movie = movie.copy(title = displayTitle),
+                                seriesOverview = seriesOverview,
+                                seriesPosterPath = seriesPosterPath,
+                                onPlay = { onEpisodeClick(movie) }
+                            )
                         }
                     }
                 }

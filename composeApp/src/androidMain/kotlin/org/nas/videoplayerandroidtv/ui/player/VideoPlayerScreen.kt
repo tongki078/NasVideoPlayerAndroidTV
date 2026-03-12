@@ -460,39 +460,45 @@ fun VideoPlayerScreen(
 
                             val options = listOf("자막 끔") + subtitleTracks
                             LazyColumn(modifier = Modifier.weight(1f)) {
-                                itemsIndexed(options) { index, title ->
-                                    val trackIdx = index - 1
-                                    val isSelected = selectedSubtitleIndex == trackIdx
-                                    var isItemFocused by remember { mutableStateOf(false) }
-                                    val itemFocusRequester = remember { FocusRequester() }
+                               itemsIndexed(options) { index, title ->
+    val trackIdx = index - 1
+    val isSelected = selectedSubtitleIndex == trackIdx
+    var isItemFocused by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val itemFocusRequester = androidx.compose.runtime.remember { androidx.compose.ui.focus.FocusRequester() }
 
-                                    if (index == 0) {
-                                        LaunchedEffect(Unit) {
-                                            delay(150)
-                                            try { itemFocusRequester.requestFocus() } catch(_:Exception) {}
-                                        }
-                                    }
+    // 🔴 [수정] 자막 리스트 아이템에 회차 정보 조합하여 표시
+    val epDisplay = if (movie.episode_number != null) "${movie.episode_number}화 - " else ""
+    val displayText = if (index > 0) "$epDisplay$title" else title
 
-                                    Surface(
-                                        onClick = {
-                                            selectedSubtitleIndex = trackIdx
-                                            isSubtitlePanelOpen = false
-                                            try { mainBoxFocusRequester.requestFocus() } catch(e:Exception){}
-                                        },
-                                        color = if (isItemFocused) Color.White.copy(alpha = 0.2f) else Color.Transparent,
-                                        shape = RoundedCornerShape(8.dp),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .focusRequester(itemFocusRequester)
-                                            .onFocusChanged { isItemFocused = it.isFocused }
-                                            .focusable()
-                                    ) {
-                                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            Text(text = title, color = if (isSelected) Color.Red else Color.White, fontSize = 22.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            if (isSelected) { Icon(Icons.Default.Check, null, tint = Color.Red, modifier = Modifier.size(32.dp)) }
-                                        }
-                                    }
-                                }
+    if (index == 0) {
+        androidx.compose.runtime.LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(150)
+            try { itemFocusRequester.requestFocus() } catch(_:Exception) {}
+        }
+    }
+
+    androidx.compose.material3.Surface(
+        onClick = {
+            selectedSubtitleIndex = trackIdx
+            isSubtitlePanelOpen = false
+            try { mainBoxFocusRequester.requestFocus() } catch(e:Exception){}
+        },
+        color = if (isItemFocused) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.2f) else androidx.compose.ui.graphics.Color.Transparent,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        modifier = androidx.compose.ui.Modifier
+            .fillMaxWidth()
+            .focusRequester(itemFocusRequester)
+            .onFocusChanged { isItemFocused = it.isFocused }
+            .focusable()
+    ) {
+        androidx.compose.foundation.layout.Row(modifier = androidx.compose.ui.Modifier.padding(16.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            // 🔴 [수정] displayText 변수 사용
+            androidx.compose.material3.Text(text = displayText, color = if (isSelected) androidx.compose.ui.graphics.Color.Red else androidx.compose.ui.graphics.Color.White, fontSize = 22.sp, fontWeight = if (isSelected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal, modifier = androidx.compose.ui.Modifier.weight(1f), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            if (isSelected) {
+                androidx.compose.material3.Icon(Icons.Default.Check, null, tint = androidx.compose.ui.graphics.Color.Red, modifier = androidx.compose.ui.Modifier.size(32.dp)) }
+        }
+    }
+}
                             }
                         }
                     }
