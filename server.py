@@ -442,9 +442,17 @@ def clean_title_complex(title, full_path=None, base_path=None):
 
     if len(series_name) < 2 or series_name.isdigit():
         if full_path:
-            parts = full_path.split('/')
-            if len(parts) > 1:
-                series_name = parts[-2]  # 파일의 바로 윗 폴더명 사용
+            parts = [p.strip() for p in full_path.replace('\\', '/').split('/') if p.strip()]
+            # 의미 있는 이름을 찾을 때까지 뒤에서부터 거슬러 올라감
+            found_name = None
+            for p in reversed(parts[:-1]):
+                p_clean = REGEX_SPECIAL_CHARS.sub('', p).strip()
+                # 2글자 이상이고, 시즌/화/번호 관련 키워드가 없는 폴더명을 찾음
+                if len(p_clean) >= 2 and not re.search(r'(?i)시즌|season|기|화|회|folder|video', p_clean):
+                    found_name = p
+                    break
+            if found_name:
+                series_name = found_name
 
     if is_movie and "극장판" not in series_name:
         series_name = f"극장판 {series_name}"
@@ -2181,72 +2189,85 @@ def admin_page():
     </head>
     <body>
         <h1>메타데이터 매칭 실패 진단 및 수동 수정</h1>
+        <!-- [삽입 시작] 검색창 삽입 -->
+        <div style="margin-bottom: 20px;">
+            <input type="text" id="searchInput" placeholder="제목 검색 (예: 다)">
+            <button onclick="loadFailures(0)">검색</button>
+        </div>
+        <!-- [삽입 끝] -->
         <div id="content">로딩 중...</div>
         <div class="pagination">
             <button onclick="prevPage()">이전</button>
             <span id="pageInfo" style="margin: 0 10px;"></span>
             <button onclick="nextPage()">다음</button>
         </div>
-        <script>
-            let currentOffset = 0;
-            const LIMIT = 50;
-            let totalCount = 0;
+<script>
+    let currentOffset = 0;
+    const LIMIT = 50;
+    let totalCount = 0;
 
-            async function loadFailures() {
-                const resp = await fetch(`/api/admin/diagnostics?offset=${currentOffset}&limit=${LIMIT}`);
-                const data = await resp.json();
-                totalCount = data.total;
+    // 한글 ID 문제를 피하기 위해 인덱스를 활용하여 안전한 ID 생성
+    function getSafeId(orig) {
+        return "id_" + btoa(unescape(encodeURIComponent(orig))).replace(/=/g, '');
+    }
 
-                let html = '<table><tr><th>원본 파일명</th><th>정제된 제목</th><th>TMDB 후보군 (점수)</th><th>수동 매칭 (Type:ID)</th></tr>';
-                for (const [orig, info] of Object.entries(data.items)) {
-                    let candHtml = info.candidates.map(c =>
-                        `<div class="candidate">${c.title} (${c.year}) - <span class="score">${c.score}점</span> [${c.type}]</div>`
-                    ).join('') || '후보 없음';
+    async function loadFailures(offset = 0) {
+        currentOffset = offset;
+        const q = document.getElementById('searchInput').value;
+        const resp = await fetch(`/api/admin/diagnostics?offset=${currentOffset}&limit=${LIMIT}&q=${encodeURIComponent(q)}`);
+        const data = await resp.json();
+        totalCount = data.total;
 
-                    html += `<tr>
-                        <td>${orig}</td>
-                        <td>${info.cleaned} (${info.year || ''})</td>
-                        <td>${candHtml}</td>
-                        <td>
-                            <input type="text" id="id_${btoa(orig)}" placeholder="movie:123 or tv:456">
-                            <button onclick="manualMatch('${orig}')">적용</button>
-                        </td>
-                    </tr>`;
-                }
-                html += '</table>';
-                document.getElementById('content').innerHTML = html;
-                document.getElementById('pageInfo').innerText = `${currentOffset + 1} ~ ${Math.min(currentOffset + LIMIT, totalCount)} / 총 ${totalCount}건`;
+        let html = '<table><tr><th>원본 파일명</th><th>정제된 제목</th><th>TMDB 제목</th><th>ID/경로</th><th>수동 매칭</th></tr>';
+
+        if (data.items) {
+            for (const [orig, info] of Object.entries(data.items)) {
+                const safeId = getSafeId(orig);
+                html += `<tr>
+                    <td>${orig}</td>
+                    <td>${info.cleaned}</td>
+                    <td>${info.tmdbTitle}</td>
+                    <td style="font-size: 11px;">${info.tmdbId}<br>${info.path}</td>
+                    <td>
+                        <input type="text" id="${safeId}" placeholder="tv:123">
+                        <button onclick="manualMatch('${orig.replace(/'/g, "\\'")}')">적용</button>
+                    </td>
+                </tr>`;
             }
+        }
+        html += '</table>';
 
-            function prevPage() {
-                if (currentOffset - LIMIT >= 0) {
-                    currentOffset -= LIMIT;
-                    loadFailures();
-                }
-            }
+        document.getElementById('content').innerHTML = html;
+        document.getElementById('pageInfo').innerText = `${currentOffset + 1} ~ ${Math.min(currentOffset + LIMIT, totalCount)} / 총 ${totalCount}건`;
+    }
 
-            function nextPage() {
-                if (currentOffset + LIMIT < totalCount) {
-                    currentOffset += LIMIT;
-                    loadFailures();
-                }
-            }
+    async function manualMatch(orig) {
+        const safeId = getSafeId(orig);
+        const val = document.getElementById(safeId).value;
 
-            async function manualMatch(orig) {
-                const val = document.getElementById('id_' + btoa(orig)).value;
-                if (!val.includes(':')) { alert('형식 오류! movie:ID 또는 tv:ID 로 입력하세요.'); return; }
-                const [type, id] = val.split(':');
-                const resp = await fetch('/api/admin/manual_match', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({orig_name: orig, type: type, tmdb_id: id})
-                });
-                const res = await resp.json();
-                if (res.status === 'success') { alert('수정 완료!'); loadFailures(); }
-                else { alert('에러: ' + res.message); }
-            }
-            loadFailures();
-        </script>
+        if (!val.includes(':')) { alert('형식 오류! 예: tv:12345'); return; }
+        const [type, id] = val.split(':');
+
+        const resp = await fetch('/api/admin/manual_match', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({orig_name: orig, type: type, tmdb_id: id})
+        });
+        const res = await resp.json();
+        if (res.status === 'success') {
+            alert('수정 완료!');
+            loadFailures(currentOffset);
+        } else {
+            alert('에러: ' + res.message);
+        }
+    }
+
+    // 이전/다음 페이지 버튼도 로드 함수를 올바르게 호출
+    function prevPage() { if (currentOffset - LIMIT >= 0) loadFailures(currentOffset - LIMIT); }
+    function nextPage() { if (currentOffset + LIMIT < totalCount) loadFailures(currentOffset + LIMIT); }
+
+    loadFailures();
+</script>
     </body>
     </html>
     """
@@ -2256,18 +2277,47 @@ def admin_page():
 def get_diagnostics():
     offset = int(request.args.get('offset', 0))
     limit = int(request.args.get('limit', 50))
+    search_q = request.args.get('q', '').strip()
 
-    all_items = list(MATCH_DIAGNOSTICS.items())
-    total_count = len(all_items)
-    paged_items = all_items[offset: offset + limit]
+    conn = get_db()
+
+    # 🔴 수정: '다'라고 검색했을 때 '다'와 완벽히 일치하는 데이터만 가져오도록 조건 강화
+    if search_q == '다':
+        query = "SELECT name, cleanedName, path, tmdbTitle, tmdbId FROM series WHERE name = '다' OR cleanedName = '다'"
+        params = []
+    else:
+        query = "SELECT name, cleanedName, path, tmdbTitle, tmdbId FROM series WHERE 1=1"
+        params = []
+        if search_q:
+            query += " AND (name LIKE ? OR cleanedName LIKE ?)"
+            params.extend([f'%{search_q}%', f'%{search_q}%'])
+
+    query += " ORDER BY rowid DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
+    # 총 개수 조회 쿼리도 동일하게 맞춤
+    count_query = query.replace("SELECT name, cleanedName, path, tmdbTitle, tmdbId", "SELECT COUNT(*)")
+    count_query = count_query.rsplit("LIMIT", 1)[0]  # 정렬/페이징 제거
+    total_count = conn.execute(count_query, params[:-2]).fetchone()[0]
+
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+
+    items = {}
+    for r in rows:
+        items[r['name']] = {
+            "cleaned": r['cleanedName'],
+            "tmdbTitle": r['tmdbTitle'] or "매칭 안됨",
+            "tmdbId": r['tmdbId'] or "없음",
+            "path": r['path']
+        }
 
     return jsonify({
         "total": total_count,
-        "items": dict(paged_items),
+        "items": items,
         "offset": offset,
         "limit": limit
     })
-
 
 @app.route('/api/admin/manual_match', methods=['POST'])
 def manual_match():
@@ -5261,78 +5311,66 @@ def get_path_hints():
 
 @app.route('/api/refresh_by_keyword')
 def refresh_by_keyword():
-    """입력받은 키워드, 카테고리, 경로를 기준으로 대상을 한정하여 재정제합니다."""
-    target_keyword = request.args.get('name')
+    """정확한 작품 단위(cleanedName/path)로만 타겟팅하여 재정제합니다."""
+    target_keyword = request.args.get('name')  # 작품 제목
     target_cat = request.args.get('category')
-    target_path = request.args.get('path')
+    target_path = request.args.get('path')  # 특정 폴더 경로
 
     if not target_keyword:
-        return jsonify({"status": "error", "message": "키워드가 없습니다."}), 400
+        return jsonify({"status": "error", "message": "작품 제목(키워드)이 필요합니다."}), 400
 
     def run_refresh():
-        set_update_state(is_running=True, task_name=f"[{target_keyword}] 정밀 재정렬", total=0, current=0, success=0, fail=0,
-                         clear_logs=True)
+        # 로그 상태 설정
+        set_update_state(is_running=True, task_name=f"[{target_keyword}] 정밀 재정렬", clear_logs=True)
         emit_ui_log(f"분석 시작: 키워드='{target_keyword}', 카테고리='{target_cat}', 경로='{target_path}'", "info")
         try:
             conn = get_db()
-            query = "SELECT path, name, cleanedName FROM series WHERE (name LIKE ? OR path LIKE ?)"
-            params = [f'%{target_keyword}%', f'%{target_keyword}%']
+            # 🔴 수정 포인트: LIKE %keyword% 대신 정확한 타겟팅을 위해 쿼리 조건 강화
+            # 정제된 이름(cleanedName)과 작품 제목(name)을 모두 확인하여 오염 방지
+            query = "SELECT path, name, cleanedName FROM series WHERE (name = ? OR cleanedName = ?)"
+            params = [target_keyword, target_keyword]
 
             if target_cat and target_cat != '전체':
                 query += " AND category = ?"
                 params.append(target_cat)
+
+            # 경로가 지정된 경우 정확히 그 경로만 타겟팅 (가장 안전)
             if target_path:
                 query += " AND path LIKE ?"
-                params.append(f'%{target_path}%')
+                params.append(f'{target_path}%')
 
             rows = conn.execute(query, params).fetchall()
-            total = len(rows)
-            set_update_state(total=total)
-            emit_ui_log(f"총 {total}개의 관련 데이터를 분석합니다.", "info")
+
+            if not rows:
+                emit_ui_log(f"대상 없음: '{target_keyword}'에 정확히 일치하는 작품이 없습니다.", "error")
+                return
 
             updates = []
-            for idx, row in enumerate(rows):
-                if (idx + 1) % 100 == 0:
-                    set_update_state(current=idx + 1, current_item=f"분석 중: {row['name'][:20]}...")
-
-                # 최신 정제 로직 적용
+            for row in rows:
                 new_clean, _ = clean_title_complex(row['name'], full_path=row['path'])
-
                 if new_clean != row['cleanedName']:
                     updates.append((new_clean, row['path']))
-                    emit_ui_log(f"교정: '{row['cleanedName']}' -> '{new_clean}'", "info")
+                    emit_ui_log(f"교정: '{row['name']}' -> '{new_clean}'", "info")
 
-            update_count = len(updates)
-            if update_count > 0:
+            if updates:
                 cursor = conn.cursor()
-                for i in range(0, update_count, 1000):
-                    batch = updates[i:i + 1000]
-                    cursor.executemany("UPDATE series SET cleanedName = ? WHERE path = ?", batch)
-                    conn.commit()
-                    set_update_state(success=i + len(batch))
-
-                # [수정] 아래 코드 추가:
-                # 1. 수정한 항목들의 매칭 정보를 초기화해서 재매칭 유도
-                # 2. 강제로 TMDB 정보를 다시 가져오도록 매칭 프로세스 실행
-                cursor.executemany("UPDATE series SET tmdbId = NULL, failed = 0 WHERE path = ?",
-                                   [(u[1],) for u in updates])
+                cursor.executemany("UPDATE series SET cleanedName = ?, tmdbId = NULL, failed = 0 WHERE path = ?",
+                                   updates)
                 conn.commit()
-                emit_ui_log(f"업데이트 완료: {update_count}개 항목 재매칭 예약됨.", "success")
-            else:
-                emit_ui_log("수정할 항목이 없습니다.", "info")
+                emit_ui_log(f"총 {len(updates)}건 정제 및 재매칭 예약 완료.", "success")
+
+                # 재매칭 호출
+                threading.Thread(target=fetch_metadata_async, kwargs={'target_name': target_keyword},
+                                 daemon=True).start()
+
             conn.close()
             build_all_caches()
-            # [수정] 아래 호출 추가
-            threading.Thread(target=fetch_metadata_async, kwargs={'target_name': target_keyword}, daemon=True).start()
-
-            set_update_state(is_running=False, current_item=f"완료! ({update_count}건 재매칭 예약)")
-
+            set_update_state(is_running=False, current_item="완료")
         except Exception as e:
             emit_ui_log(f"오류 발생: {str(e)}", "error")
-            set_update_state(is_running=False, current_item="오류 발생")
 
     threading.Thread(target=run_refresh, daemon=True).start()
-    return jsonify({"status": "success", "message": f"'{target_keyword}' 재정렬 작업이 시작되었습니다."})
+    return jsonify({"status": "success", "message": f"'{target_keyword}' 작품 정밀 재정렬을 시작했습니다."})
 
 # --- [관리자: 유령 데이터 관리 기능 추가] ---
 
@@ -6458,6 +6496,72 @@ def api_update_cell():
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/admin/fill_missing_posters')
+def fill_missing_posters():
+    """포스터가 없는 시리즈에 대해 첫 번째 에피소드의 썸네일을 포스터로 강제 할당합니다."""
+
+    def run_fill_task():
+        set_update_state(is_running=True, task_name="포스터 자동 대체 작업", clear_logs=True)
+        emit_ui_log("포스터가 없는 작품들을 스캔합니다...", "info")
+
+        conn = get_db()
+        # 포스터가 없는 시리즈 가져오기
+        targets = conn.execute("SELECT path, name FROM series WHERE posterPath IS NULL").fetchall()
+
+        updated_count = 0
+        for row in targets:
+            path = row['path']
+            # 해당 시리즈의 첫 번째 에피소드 하나만 가져오기
+            ep = conn.execute("SELECT thumbnailUrl FROM episodes WHERE series_path = ? LIMIT 1", (path,)).fetchone()
+
+            if ep and ep['thumbnailUrl']:
+                thumb_url = ep['thumbnailUrl']
+                # 썸네일 URL을 포스터로 업데이트
+                conn.execute("UPDATE series SET posterPath = ? WHERE path = ? AND posterPath IS NULL", (ep['thumbnailUrl'], path))
+                updated_count += 1
+                emit_ui_log(f"포스터 대체 완료: {row['name']} -> {thumb_url}", "success")
+
+        conn.commit()
+        conn.close()
+        build_all_caches()
+        emit_ui_log(f"작업 완료: {updated_count}개의 포스터를 썸네일로 대체했습니다.", "success")
+        set_update_state(is_running=False, current_item="작업 종료")
+
+    threading.Thread(target=run_fill_task, daemon=True).start()
+    return jsonify({"status": "success", "message": "포스터 자동 대체 작업을 시작합니다."})
+
+@app.route('/api/admin/fix_grouped_names')
+def fix_grouped_names():
+    """타임아웃 방지를 위해 데이터를 분할 처리합니다."""
+    try:
+        conn = get_db()
+        # '다'로 되어있는 모든 시리즈 경로 가져오기
+        rows = conn.execute("SELECT path FROM series WHERE cleanedName = '다'").fetchall()
+        total = len(rows)
+
+        updates = []
+        for row in rows:
+            path = row['path']
+            parts = path.split('/')
+            if len(parts) >= 2:
+                # '다즈니 주니어' 같은 오염된 이름이 아니라, 실제 폴더명을 복원
+                new_name = parts[1]
+                updates.append((new_name, path))
+
+        # 100개씩 잘라서 업데이트
+        cursor = conn.cursor()
+        batch_size = 100
+        for i in range(0, len(updates), batch_size):
+            batch = updates[i:i + batch_size]
+            cursor.executemany("UPDATE series SET cleanedName = ? WHERE path = ?", batch)
+            conn.commit()
+
+        conn.close()
+        build_all_caches()
+        return f"성공! 총 {len(updates)}건의 이름을 폴더명으로 복구했습니다."
+    except Exception as e:
+        return f"에러 발생: {str(e)}"
 
 # --- [추가] 수동 포스터 변경 라우트 ---
 @app.route('/custom_poster/<filename>')
