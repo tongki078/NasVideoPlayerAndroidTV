@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class Category(
     val name: String? = "",
+    val cleanedName: String? = "",
     val movies: List<Movie>? = emptyList(),
     val seasons: Map<String, List<Movie>>? = emptyMap(),
     val path: String? = null,
@@ -16,10 +17,10 @@ data class Category(
     val posterPath: String? = null,
     val overview: String? = null,
     val year: String? = null,
-    val rating: String? = null,      // 추가
-    val seasonCount: Int? = null,    // 추가
+    val rating: String? = null,
+    val seasonCount: Int? = null,
     val tmdbTitle: String? = null,
-    val tmdbId: String? = null,         // [수정] String? 으로 변경하여 타입 호환성 확보
+    val tmdbId: String? = null,
     val chosung: String? = null
 )
 
@@ -37,7 +38,7 @@ data class Movie(
     val introEnd: Long? = null,
     val position: Double? = 0.0,
     val duration: Double? = 0.0,
-    val runtime: Int? = null    // 추가: TMDB에서 제공하는 분 단위 런타임 정보
+    val runtime: Int? = null
 )
 
 @Serializable
@@ -56,6 +57,7 @@ data class HomeSection(
 
 data class Series(
     val title: String,
+    val cleanedName: String? = null,
     val episodes: List<Movie>,
     val seasons: Map<String, List<Movie>> = emptyMap(),
     val thumbnailUrl: String? = null,

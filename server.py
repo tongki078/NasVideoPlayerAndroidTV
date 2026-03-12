@@ -1735,6 +1735,7 @@ def search_videos():
 
             processed = {
                 "name": f"{base_name}{tag_str}".strip(),
+                "cleanedName": item['cleanedName'] if 'cleanedName' in r.keys() else "",
                 "path": item['path'], "category": item['category'],
                 "posterPath": item['posterPath'] or "", "year": item['year'] or "",
                 "overview": (item['overview'] or "")[:200],
@@ -4217,7 +4218,7 @@ def _rebuild_fast_memory_cache():
                 if tag and f"[{tag}]" not in display_name: display_name = f"{display_name} [{tag}]"
 
             item = {
-                "path": path, "name": display_name.strip(), "posterPath": r['posterPath'],
+                "path": path, "name": display_name.strip(), "cleanedName": r['cleanedName'] if 'cleanedName' in r.keys() else "", "posterPath": r['posterPath'],
                 "year": r['year'], "genreNames": [], "tmdbId": r['tmdbId'], "rating": r['rating'],
                 "seasonCount": r['actual_seasons'] if r['actual_seasons'] and r['actual_seasons'] > 0 else (
                             r['seasonCount'] or 1),

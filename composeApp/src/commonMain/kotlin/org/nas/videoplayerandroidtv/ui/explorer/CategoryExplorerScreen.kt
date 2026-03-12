@@ -79,7 +79,10 @@ fun CategoryExplorerScreen(
                 LazyColumn {
                     items(items) { item ->
                         ListItem(
-                            headlineContent = { Text((item.name ?: "").cleanTitle(), color = Color.White) },
+                            headlineContent = { 
+                                val displayName = item.cleanedName ?: item.name ?: ""
+                                Text(text = displayName.cleanTitle(), color = Color.White) 
+                            },
                             leadingContent = { Icon(Icons.AutoMirrored.Filled.List, null, tint = Color.Gray) },
                             trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Color.Gray) },
                             modifier = Modifier.clickable { pathStack = pathStack + (item.name ?: "") },
@@ -114,5 +117,11 @@ private fun ExplorerSkeletonGrid() {
 
 private fun List<Movie>.groupBySeries(): List<Series> = 
     this.groupBy { (it.title ?: "").cleanTitle(includeYear = false) }
-        .map { (title, eps) -> Series(title, eps.sortedBy { it.title ?: "" }) }
+        .map { (title, eps) -> 
+            Series(
+                title = title, 
+                cleanedName = null, 
+                episodes = eps.sortedBy { it.title ?: "" }
+            ) 
+        }
         .sortedBy { it.title }
