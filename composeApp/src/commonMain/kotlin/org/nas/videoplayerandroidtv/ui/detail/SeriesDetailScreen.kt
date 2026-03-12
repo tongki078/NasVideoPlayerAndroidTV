@@ -155,7 +155,15 @@ fun SeriesDetailScreen(
                             metadataItems.add { MetadataText(text = "시즌 ${state.seasons.size}개") }
                         }
                         metadataItems.add { InfoBadge(text = "HD", isOutlined = true) }
-                        currentSeries.rating?.let { r -> metadataItems.add { DetailRatingBadge(r) } }
+                        
+                        currentSeries.rating?.let { r ->
+                            val rating = r.uppercase()
+                            if (rating.contains("19") || rating.contains("18") || rating.contains("청불") ||
+                                rating.contains("15") || rating.contains("12") || 
+                                rating.contains("전체") || rating.contains("ALL")) {
+                                metadataItems.add { DetailRatingBadge(r) }
+                            }
+                        }
 
                         metadataItems.forEachIndexed { index, component ->
                             component()
@@ -257,34 +265,37 @@ private fun MetadataSeparator() {
 
 @Composable
 private fun DetailRatingBadge(rating: String) {
-    val backgroundColor = when {
-        rating.contains("19") || rating.contains("18") || rating.contains("청불") -> Color(0xFFE50914)
-        rating.contains("15") -> Color(0xFFF5A623)
-        rating.contains("12") -> Color(0xFFF8E71C)
-        rating.contains("전체") || rating.contains("All") -> Color(0xFF46D369)
-        else -> Color.Gray.copy(alpha = 0.5f)
+    val r = rating.uppercase()
+    val (backgroundColor, displayText) = when {
+        r.contains("19") || r.contains("18") || r.contains("청불") -> Color(0xFFE50914) to "19"
+        r.contains("15") -> Color(0xFFF5A623) to "15"
+        r.contains("12") -> Color(0xFFF8E71C) to "12"
+        r.contains("전체") || r.contains("ALL") -> Color(0xFF46D369) to "All"
+        else -> return
     }
-    
-    val displayRating = rating.filter { it.isDigit() }.ifEmpty { if(rating.contains("전체")) "All" else rating.take(2) }
-    
+
     Surface(
         color = backgroundColor,
         shape = RoundedCornerShape(2.dp),
-        modifier = Modifier.padding(horizontal = 2.dp)
+        modifier = Modifier.padding(horizontal = 2.dp).requiredWidth(26.dp)
     ) {
         Box(
-            modifier = Modifier
-                .height(20.dp)
-                .widthIn(min = 24.dp)
-                .padding(horizontal = 6.dp),
+            modifier = Modifier.height(20.dp).fillMaxWidth(),
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = displayRating,
+                text = displayText,
                 color = if (backgroundColor == Color(0xFFF8E71C)) Color.Black else Color.White,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Black,
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                lineHeight = 12.sp,
+                style = LocalTextStyle.current.copy(
+                    lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(
+                        alignment = androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
+                        trim = androidx.compose.ui.text.style.LineHeightStyle.Trim.None
+                    )
+                )
             )
         }
     }
@@ -308,7 +319,15 @@ private fun InfoBadge(text: String, isOutlined: Boolean = true) {
                 text = text, 
                 color = Color.White.copy(alpha = 0.9f), 
                 fontSize = 11.sp, 
-                fontWeight = FontWeight.ExtraBold
+                fontWeight = FontWeight.ExtraBold,
+                textAlign = TextAlign.Center,
+                lineHeight = 11.sp,
+                style = LocalTextStyle.current.copy(
+                    lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(
+                        alignment = androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
+                        trim = androidx.compose.ui.text.style.LineHeightStyle.Trim.None
+                    )
+                )
             )
         }
     }
@@ -420,20 +439,10 @@ private fun EpisodeOverlay(
                     Text(text = currentSeason?.name ?: "회차 정보", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(20.dp))
                     LazyColumn(state = episodeListState, verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
-                        items(currentSeason?.episodes ?: emptyList()) { movie ->
-                            // 1. 회차 정보를 가져옵니다. (없으면 0으로 처리)
+                        items(currentSeason?.episodes ?: emptyList()) { movie -> 
                             val episodeNum = movie.episode_number ?: 0
-
-                            // 2. 제목을 "회차 - 제목" 형태로 만듭니다.
                             val displayTitle = if (episodeNum > 0) "${episodeNum}화 - ${movie.title}" else (movie.title ?: "제목 없음")
-
-                            // 3. title만 회차 정보가 포함된 것으로 바꿔서 전달합니다.
-                            EpisodeItem(
-                                movie = movie.copy(title = displayTitle),
-                                seriesOverview = seriesOverview,
-                                seriesPosterPath = seriesPosterPath,
-                                onPlay = { onEpisodeClick(movie) }
-                            )
+                            EpisodeItem(movie = movie.copy(title = displayTitle), seriesOverview = seriesOverview, seriesPosterPath = seriesPosterPath, onPlay = { onEpisodeClick(movie) })
                         }
                     }
                 }
