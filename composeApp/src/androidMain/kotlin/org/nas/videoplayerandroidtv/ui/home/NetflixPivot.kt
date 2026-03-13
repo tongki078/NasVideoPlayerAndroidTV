@@ -128,7 +128,7 @@ fun NetflixPivotItem(
     val tags = remember(title) {
         val tagRegex = Regex("\\[(.*?)\\]")
         val matches = tagRegex.findAll(title)
-        
+
         matches.map { it.groupValues[1].trim() }
             .filter { it.isNotEmpty() }
             .distinct()
@@ -232,7 +232,7 @@ fun NetflixPivotItem(
                             contentScale = ContentScale.Crop
                         )
                     }
-                    
+
                     // 뱃지 추가 (좌측 상단에 태그 정보 상시 노출)
                     if (tags.isNotEmpty()) {
                         Surface(
@@ -261,9 +261,10 @@ fun NetflixPivotItem(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                         // 제목 표시할 때 태그 정보(자막, 기수 등)를 명시적으로 뒤에 붙여줌
+                        val displayTitle = title.replace(Regex("\\[(더빙|자막)\\]"), "").trim()
                         val tagString = if (tags.isNotEmpty()) " [${tags.joinToString("][")}]" else ""
                         Text(
-                            text = "$title$tagString",
+                            text = "$displayTitle$tagString", // 정제된 제목 + 태그
                             color = Color.White,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
