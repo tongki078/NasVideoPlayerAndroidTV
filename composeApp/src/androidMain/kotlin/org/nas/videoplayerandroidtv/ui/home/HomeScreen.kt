@@ -194,7 +194,9 @@ fun HomeScreen(
                                 keySelector = { history: WatchHistory -> "history_${history.id}" }
                             ) { history: WatchHistory, index: Int, rowState: LazyListState, focusRequester: androidx.compose.ui.focus.FocusRequester, marginPx: Int, focusedIndex: Int ->
                                 NetflixPivotItem(
-                                    title = history.title, 
+                                    title = (history.seriesTitle ?: history.title).also {
+                                        println("DEBUG_TITLE_PIVOT: seriesTitle=${history.seriesTitle}, title=${history.title}, 최종결과=$it")
+                                    },
                                     posterPath = history.posterPath,
                                     initialVideoUrl = null,
                                     categoryPath = history.seriesPath,

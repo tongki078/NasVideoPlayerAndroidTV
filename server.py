@@ -1735,7 +1735,7 @@ def search_videos():
 
             processed = {
                 "name": f"{base_name}{tag_str}".strip(),
-                "cleanedName": item['cleanedName'] if 'cleanedName' in r.keys() else "",
+                "cleanedName": item['cleanedName'],
                 "path": item['path'], "category": item['category'],
                 "posterPath": item['posterPath'] or "", "year": item['year'] or "",
                 "overview": (item['overview'] or "")[:200],
@@ -3377,6 +3377,8 @@ def updater_ui():
                     </button>
                 </div>
             </div>
+
+
                 <!-- 수동 메타데이터 정보 수정 -->
                 <div class="action-card">
                     <div class="card-title"><i class="fas fa-edit"></i> 수동 텍스트 정보 수정</div>
@@ -3430,6 +3432,15 @@ def updater_ui():
                                 <i class="fas fa-save"></i> 정보 수정 저장
                             </button>
                         </div>
+                    </div>
+                    <!-- [SQL 실행 섹션 추가] -->
+                    <div class="action-card" style="margin-top: 20px;">
+                        <div class="card-title"><i class="fas fa-database"></i> SQL 쿼리 실행기</div>
+                        <div class="input-group">
+                            <textarea id="sqlInput" rows="3" placeholder="SELECT * FROM series LIMIT 5" style="width: 100%; background: #000; color: #10b981; font-family: monospace; padding: 10px; border-radius: 8px; border: 1px solid #334155;"></textarea>
+                            <button class="btn-meta" onclick="runSqlQuery()" style="margin-top: 5px; background: #8b5cf6;"><i class="fas fa-play"></i> 쿼리 실행</button>
+                        </div>
+                        <div id="sqlResult" style="margin-top: 15px; overflow-x: auto; font-size: 12px;"></div>
                     </div>
                 </div>
                 <div class="action-card">
@@ -3540,6 +3551,34 @@ def updater_ui():
         </div>
 
     <script>
+        async function runSqlQuery() {
+            const sql = document.getElementById('sqlInput').value;
+            const resDiv = document.getElementById('sqlResult');
+            resDiv.innerHTML = '실행 중...';
+
+            const resp = await fetch('/api/admin/sql_query', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ sql: sql })
+            });
+            const res = await resp.json();
+
+            if(res.status === 'success') {
+                let html = '<table style="width:100%; border-collapse:collapse; background:#000;"><thead><tr>';
+                res.columns.forEach(c => html += `<th style="border:1px solid #334; padding:5px;">${c}</th>`);
+                html += '</tr></thead><tbody>';
+                res.data.forEach(row => {
+                    html += '<tr>';
+                    res.columns.forEach(c => html += `<td style="border:1px solid #334; padding:5px;">${row[c]}</td>`);
+                    html += '</tr>';
+                });
+                html += '</tbody></table>';
+                resDiv.innerHTML = html;
+            } else {
+                resDiv.innerHTML = `<div style="color:red;">에러: ${res.message}</div>`;
+            }
+        }
+
     function applyStillsByCategory() {
         const category = document.getElementById('stillsCategory').value;
         const catName = category || '전체';
@@ -3570,30 +3609,35 @@ def updater_ui():
     }
 
     // 그룹화 재정렬
-    async function regroupByKeyword() {
-        const keyword = document.getElementById('regroupKeyword').value.trim();
-        const category = document.getElementById('regroupCategory').value;
-        const path = document.getElementById('regroupPath').value.trim();
+async function regroupByKeyword() {
+    const keyword = document.getElementById('regroupKeyword').value.trim();
+    const catSelect = document.getElementById('regroupCategory');
+    const category = catSelect ? catSelect.value : '전체';
+    const path = document.getElementById('regroupPath').value.trim();
 
-        if (!keyword) { alert('키워드를 입력하세요.'); return; }
+    if (!keyword) {
+        alert('키워드를 입력하세요.');
+        return;
+    }
 
-        if (confirm(`'${keyword}' 관련 데이터를 재분석하시겠습니까?\n범위: ${category}${path ? ' > ' + path : ''}`)) {
-            let url = `/api/refresh_by_keyword?name=${encodeURIComponent(keyword)}`;
-            if (category !== '전체') url += `&category=${encodeURIComponent(category)}`;
-            if (path) url += `&path=${encodeURIComponent(path)}`;
+    if (confirm(`'${keyword}' 정밀 재정렬을 시작할까요?`)) {
+        // 서버로 URL 인코딩하여 파라미터 전달
+        let url = `/api/refresh_by_keyword?name=${encodeURIComponent(keyword)}&category=${encodeURIComponent(category)}&path=${encodeURIComponent(path)}`;
 
-            try {
-                const resp = await fetch(url);
-                const data = await resp.json();
-                if (data.status === 'success') {
-                    alert('재정렬 시작! 로그 창을 확인하세요.');
-                    document.getElementById('terminalBox').scrollIntoView({ behavior: 'smooth' });
-                } else {
-                    alert('에러: ' + data.message);
-                }
-            } catch (e) { alert('요청 오류: ' + e); }
+        try {
+            const resp = await fetch(url);
+            const data = await resp.json();
+            if (data.status === 'success') {
+                // 로그창으로 자동 이동
+                document.getElementById('terminalBox').scrollIntoView({ behavior: 'smooth' });
+            } else {
+                alert('에러: ' + data.message);
+            }
+        } catch (e) {
+            alert('통신 오류: ' + e);
         }
     }
+}
 
 
             async function scanTargetedFolder() {
@@ -3632,25 +3676,7 @@ def updater_ui():
                     alert(await resp.text());
                 }
             }
-            async function regroupByKeyword() {
-                const keyword = document.getElementById('regroupKeyword').value.trim();
-                if (!keyword) { alert('키워드를 입력하세요.'); return; }
 
-                if (confirm(`'${keyword}' 관련 데이터를 원본 기준으로 재분석하고 그룹화를 다시 수행하시겠습니까?`)) {
-                    try {
-                        const resp = await fetch(`/api/refresh_by_keyword?name=${encodeURIComponent(keyword)}`);
-                        const data = await resp.json();
-                        if (data.status === 'success') {
-                            // 상단 로그 창으로 시선 이동
-                            document.getElementById('terminalBox').scrollIntoView({ behavior: 'smooth' });
-                        } else {
-                            alert('에러: ' + data.message);
-                        }
-                    } catch (e) {
-                        alert('요청 중 오류 발생: ' + e);
-                    }
-                }
-            }
             async function resetAndRefresh() {
                 const name = document.getElementById('fixNameInput').value.trim();
                 const category = document.getElementById('fixCategorySelect').value;
@@ -4218,7 +4244,7 @@ def _rebuild_fast_memory_cache():
                 if tag and f"[{tag}]" not in display_name: display_name = f"{display_name} [{tag}]"
 
             item = {
-                "path": path, "name": display_name.strip(), "cleanedName": r['cleanedName'] if 'cleanedName' in r.keys() else "", "posterPath": r['posterPath'],
+                "path": path, "name": display_name.strip(), "cleanedName": r['cleanedName'], "posterPath": r['posterPath'],
                 "year": r['year'], "genreNames": [], "tmdbId": r['tmdbId'], "rating": r['rating'],
                 "seasonCount": r['actual_seasons'] if r['actual_seasons'] and r['actual_seasons'] > 0 else (
                             r['seasonCount'] or 1),
@@ -4619,26 +4645,38 @@ def fix_xfile_seasons():
 def update_progress():
     data = request.json
     episode_id = data.get('episode_id')
-    position = data.get('position')  # 현재 재생 위치(초)
-    duration = data.get('duration')  # 영상 전체 길이(초)
+    position = data.get('position')
+    duration = data.get('duration')
 
     if not episode_id:
         return jsonify({"status": "error", "message": "Missing episode_id"}), 400
 
     try:
         conn = get_db()
+        # 1. 시청 중인 에피소드가 어떤 시리즈(series)에 속하는지 확인하여 cleanedName을 가져옴
+        query = """
+            SELECT s.cleanedName
+            FROM episodes e
+            JOIN series s ON e.series_path = s.path
+            WHERE e.id = ?
+        """
+        row = conn.execute(query, (episode_id,)).fetchone()
+        series_clean_name = row['cleanedName'] if row and row['cleanedName'] else "Unknown"
+
+        # 2. playback_progress 테이블에 cleanedName을 함께 저장 (테이블에 컬럼이 없다면 추가 필요)
+        # 만약 테이블 구조 변경이 부담된다면, 적어도 이 시점에서 로그를 남겨두는 것도 좋습니다.
         conn.execute('''
             INSERT OR REPLACE INTO playback_progress (episode_id, position, duration, last_watched)
             VALUES (?, ?, ?, CURRENT_TIMESTAMP)
         ''', (episode_id, position, duration))
+
         conn.commit()
         conn.close()
 
-        # 🔴 [추가] 시청 기록이 업데이트되면 상세 페이지 캐시를 비워야 앱에 즉시 반영됩니다.
         global _DETAIL_MEM_CACHE
         _DETAIL_MEM_CACHE = {}
 
-        return jsonify({"status": "success"})
+        return jsonify({"status": "success", "series_clean_name": series_clean_name})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -5302,48 +5340,55 @@ def save_manual_metadata():
 
 @app.route('/api/admin/get_path_hints')
 def get_path_hints():
-    """카테고리별 하위 폴더 힌트 API"""
     cat = request.args.get('category')
+    log("HINT_DEBUG", f"요청받은 카테고리: {cat}")
+    log("HINT_DEBUG", f"현재 캐시 상태: {list(_FAST_CATEGORY_CACHE.keys())}")  # 어떤 카테고리가 캐시되어 있는지 확인
+
     if not cat or cat == '전체' or cat not in _FAST_CATEGORY_CACHE:
         return jsonify([])
-    # 폴더 구조에서 힌트 가져오기
+
     hints = sorted(list(_FAST_CATEGORY_CACHE[cat].get('folders', {}).keys()))
     return jsonify(hints)
 
 @app.route('/api/refresh_by_keyword')
 def refresh_by_keyword():
     """정확한 작품 단위(cleanedName/path)로만 타겟팅하여 재정제합니다."""
-    target_keyword = request.args.get('name')  # 작품 제목
+    target_keyword = request.args.get('name')
     target_cat = request.args.get('category')
-    target_path = request.args.get('path')  # 특정 폴더 경로
+
+    # 🔴 [경로 정제] 브라우저에서 넘어온 경로의 끝부분 특수문자/공백 제거
+    raw_path = request.args.get('path', '').strip()
+    target_path = re.sub(r'[【『「（\[\(\{\s]+$', '', raw_path)
 
     if not target_keyword:
         return jsonify({"status": "error", "message": "작품 제목(키워드)이 필요합니다."}), 400
 
     def run_refresh():
-        # 로그 상태 설정
         set_update_state(is_running=True, task_name=f"[{target_keyword}] 정밀 재정렬", clear_logs=True)
         emit_ui_log(f"분석 시작: 키워드='{target_keyword}', 카테고리='{target_cat}', 경로='{target_path}'", "info")
+
         try:
             conn = get_db()
-            # 🔴 수정 포인트: LIKE %keyword% 대신 정확한 타겟팅을 위해 쿼리 조건 강화
-            # 정제된 이름(cleanedName)과 작품 제목(name)을 모두 확인하여 오염 방지
-            query = "SELECT path, name, cleanedName FROM series WHERE (name = ? OR cleanedName = ?)"
-            params = [target_keyword, target_keyword]
+            # 쿼리 조건 생성
+            query = "SELECT path, name, cleanedName FROM series WHERE (name LIKE ? OR cleanedName LIKE ?)"
+            params = [f'%{target_keyword}%', f'%{target_keyword}%']
 
             if target_cat and target_cat != '전체':
                 query += " AND category = ?"
                 params.append(target_cat)
 
-            # 경로가 지정된 경우 정확히 그 경로만 타겟팅 (가장 안전)
+            # 🔴 경로가 지정된 경우 (부분 일치 검색)
             if target_path:
+                # 사용자가 입력한 경로에 공백이나 특수문자가 섞여있어도 찾을 수 있게 검색패턴 최적화
+                search_path = target_path.strip().replace('【', '%').replace('】', '%')
                 query += " AND path LIKE ?"
-                params.append(f'{target_path}%')
+                params.append(f'%{search_path}%')
 
             rows = conn.execute(query, params).fetchall()
 
             if not rows:
-                emit_ui_log(f"대상 없음: '{target_keyword}'에 정확히 일치하는 작품이 없습니다.", "error")
+                emit_ui_log(f"대상 없음: '{target_keyword}'(카테고리: {target_cat}, 경로: {target_path})에 해당하는 작품을 찾을 수 없습니다.",
+                            "error")
                 return
 
             updates = []
@@ -5359,15 +5404,16 @@ def refresh_by_keyword():
                                    updates)
                 conn.commit()
                 emit_ui_log(f"총 {len(updates)}건 정제 및 재매칭 예약 완료.", "success")
-
-                # 재매칭 호출
                 threading.Thread(target=fetch_metadata_async, kwargs={'target_name': target_keyword},
                                  daemon=True).start()
+            else:
+                emit_ui_log("이미 최신 정제 상태입니다.", "success")
 
             conn.close()
             build_all_caches()
-            set_update_state(is_running=False, current_item="완료")
+            set_update_state(is_running=False, current_item="작업 완료")
         except Exception as e:
+            log("REPAIR_ERROR", traceback.format_exc())
             emit_ui_log(f"오류 발생: {str(e)}", "error")
 
     threading.Thread(target=run_refresh, daemon=True).start()
@@ -6563,6 +6609,39 @@ def fix_grouped_names():
         return f"성공! 총 {len(updates)}건의 이름을 폴더명으로 복구했습니다."
     except Exception as e:
         return f"에러 발생: {str(e)}"
+
+@app.route('/api/admin/sql_query', methods=['POST'])
+def api_sql_query():
+    # 🔴 [수정] UPDATE를 허용하기 위해 forbidden 리스트에서 제거했습니다.
+    data = request.json
+    sql = data.get('sql', '').strip()
+
+    # 변경을 금지할 위험한 명령어들만 제한
+    forbidden = ['DROP', 'INSERT', 'CREATE', 'REPLACE', 'DELETE']
+
+    if any(cmd in sql.upper() for cmd in forbidden):
+        return jsonify({"status": "error", "message": f"데이터 삭제나 구조 변경 명령어({','.join(forbidden)})는 금지되어 있습니다."}), 403
+
+    conn = get_db()
+    try:
+        cursor = conn.execute(sql)
+
+        # INSERT/UPDATE/DELETE 처럼 결과셋이 없는 쿼리인 경우
+        if cursor.description is None:
+            conn.commit()
+            result = {"status": "success", "message": f"실행 완료. 영향을 받은 행 수: {cursor.rowcount}"}
+            conn.close()
+            return jsonify(result)
+
+        # SELECT 처럼 결과를 반환하는 쿼리인 경우
+        columns = [d[0] for d in cursor.description]
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return jsonify({"status": "success", "columns": columns, "data": rows})
+
+    except Exception as e:
+        conn.close()
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # --- [추가] 수동 포스터 변경 라우트 ---
 @app.route('/custom_poster/<filename>')

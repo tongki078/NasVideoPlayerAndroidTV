@@ -152,9 +152,26 @@ fun App(driver: SqlDriver) {
 
     val saveWatchHistory: (Movie, String?, Long, Long, String?, String?) -> Unit = { movie, posterPath, pos, dur, sTitle, sPath ->
         scope.launch(Dispatchers.Default) {
+            // 🔴 수정: 저장할 제목으로 sTitle(시리즈 정제 제목)을 우선 사용
+            val recordTitle = if (!sTitle.isNullOrBlank()) sTitle else (movie.title ?: "")
+
             // 시리즈물인 경우 시리즈 경로를 고유 ID로 사용하여 중복 방지
             val recordId = sPath ?: movie.id ?: ""
-            watchHistoryDataSource.insertWatchHistory(recordId, movie.title ?: "", movie.videoUrl ?: "", movie.thumbnailUrl ?: "", currentTimeMillis(), "movie", "", posterPath, pos, dur, sTitle, sPath)
+
+            watchHistoryDataSource.insertWatchHistory(
+                recordId,
+                recordTitle, // 🔴 수정된 변수 사용
+                movie.videoUrl ?: "",
+                movie.thumbnailUrl ?: "",
+                currentTimeMillis(),
+                "movie",
+                "",
+                posterPath,
+                pos,
+                dur,
+                sTitle,
+                sPath
+            )
         }
     }
 

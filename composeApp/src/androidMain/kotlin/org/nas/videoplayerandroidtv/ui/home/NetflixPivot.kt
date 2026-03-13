@@ -263,13 +263,13 @@ fun NetflixPivotItem(
                         // 제목 표시할 때 태그 정보(자막, 기수 등)를 명시적으로 뒤에 붙여줌
                         val tagString = if (tags.isNotEmpty()) " [${tags.joinToString("][")}]" else ""
                         Text(
-                            text = "${title.cleanTitle()}$tagString",
+                            text = "$title$tagString",
                             color = Color.White,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
-                            maxLines = 1,
+                            maxLines = 2, // 이미 2로 설정되어 있습니다.
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
+                            modifier = Modifier.weight(1f) // fill = false를 제거하여 남은 공간을 적극적으로 사용하게 함
                         )
 
                         if (!itemYear.isNullOrBlank()) {
