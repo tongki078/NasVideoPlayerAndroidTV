@@ -120,6 +120,7 @@ fun NetflixPivotItem(
     var itemRating by remember { mutableStateOf(rating) }
     var itemGenres by remember { mutableStateOf<List<String>>(emptyList()) }
     var itemEpisodeCount by remember { mutableStateOf<Int?>(null) }
+    var isDataLoaded by remember { mutableStateOf(false) } 
     var showPreview by remember { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
@@ -154,11 +155,15 @@ fun NetflixPivotItem(
                             if (itemRating.isNullOrBlank()) itemRating = details.rating
                             itemGenres = details.genreNames
                             itemEpisodeCount = details.episodes.size
+                            isDataLoaded = true
                         }
-                    } catch (_: Exception) {}
+                    } catch (_: Exception) { isDataLoaded = true }
+                } else {
+                    isDataLoaded = true
                 }
             }
         } else {
+            isDataLoaded = false
             dataLoadingJob?.cancel()
             previewJob?.cancel()
             showPreview = false
@@ -204,33 +209,33 @@ fun NetflixPivotItem(
             if (isFocused) {
                 Column(modifier = Modifier.fillMaxWidth().height(infoAreaHeight).padding(horizontal = 10.dp, vertical = 8.dp)) {
                     Text(text = title.replace(Regex("\\[(더빙|자막)\\]"), "").trim(), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-
+                    
                     Spacer(Modifier.height(4.dp))
                     
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                        val metaItems = mutableListOf<@Composable () -> Unit>()
-                        
-                        // 장르
-                        if (itemGenres.isNotEmpty()) metaItems.add { Text(text = itemGenres.take(2).joinToString(", "), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp) }
-
-                        // 연도 (Bold)
-                        if (!itemYear.isNullOrBlank()) metaItems.add { Text(text = itemYear!!, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
-
-                        // 에피소드 수 (Bold)
-                        if (itemEpisodeCount != null) metaItems.add { Text(text = "에피소드 ${itemEpisodeCount}개", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
-
-                        // 등급 배지
-                        if (!itemRating.isNullOrBlank()) {
-                            metaItems.add { NetflixRatingBadge(itemRating!!) }
-                        }
-
-                        metaItems.forEachIndexed { index, composable ->
-                            composable()
-                            if (index < metaItems.size - 1) Text(text = " • ", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                    // 레이아웃 높이를 고정하여 정보가 튀는 것을 방지
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(20.dp)) {
+                        if (isDataLoaded) {
+                            val metaItems = mutableListOf<@Composable () -> Unit>()
+                            if (itemGenres.isNotEmpty()) metaItems.add { Text(text = itemGenres.take(2).joinToString(", "), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp) }
+                            if (!itemYear.isNullOrBlank()) metaItems.add { Text(text = itemYear!!, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                            if (itemEpisodeCount != null) metaItems.add { Text(text = "에피소드 ${itemEpisodeCount}개", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                            
+                            metaItems.forEachIndexed { index, composable ->
+                                composable()
+                                if (index < metaItems.size - 1) Text(text = " • ", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                            }
+                            
+                            if (!itemRating.isNullOrBlank()) {
+                                Spacer(Modifier.width(8.dp))
+                                NetflixRatingBadge(itemRating!!)
+                            }
+                        } else {
+                            // 로딩 중에는 최소한의 높이 공간을 유지
+                            Spacer(Modifier.width(1.dp))
                         }
                     }
 
-                    if (!itemOverview.isNullOrBlank()) {
+                    if (isDataLoaded && !itemOverview.isNullOrBlank()) {
                         Spacer(Modifier.height(4.dp))
                         Text(text = itemOverview!!, color = Color.LightGray.copy(alpha = 0.8f), fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 14.sp)
                     }
