@@ -118,6 +118,8 @@ fun NetflixPivotItem(
     var itemOverview by remember { mutableStateOf(overview) }
     var itemYear by remember { mutableStateOf(year) }
     var itemRating by remember { mutableStateOf(rating) }
+    var itemGenres by remember { mutableStateOf<List<String>>(emptyList()) }
+    var itemEpisodeCount by remember { mutableStateOf<Int?>(null) }
     var showPreview by remember { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
@@ -160,6 +162,8 @@ fun NetflixPivotItem(
                             if (itemOverview.isNullOrBlank()) itemOverview = details.overview
                             if (itemYear.isNullOrBlank()) itemYear = details.year
                             if (itemRating.isNullOrBlank()) itemRating = details.rating
+                            itemGenres = details.genreNames
+                            itemEpisodeCount = details.episodes.size
                         }
                     } catch (_: Exception) {}
                 }
@@ -187,7 +191,7 @@ fun NetflixPivotItem(
 
     val itemWidth = if (isFocused) 330.dp else 135.dp
     val posterMaxHeight = 185.dp
-    val infoAreaHeight = 85.dp
+    val infoAreaHeight = 120.dp 
     val totalItemHeight = posterMaxHeight + infoAreaHeight
 
     Box(
@@ -259,31 +263,52 @@ fun NetflixPivotItem(
                         .height(infoAreaHeight)
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                        // 제목 표시할 때 태그 정보(자막, 기수 등)를 명시적으로 뒤에 붙여줌
-                        val displayTitle = title.replace(Regex("\\[(더빙|자막)\\]"), "").trim()
-                        val tagString = if (tags.isNotEmpty()) " [${tags.joinToString("][")}]" else ""
-                        Text(
-                            text = "$displayTitle$tagString", // 정제된 제목 + 태그
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 2, // 이미 2로 설정되어 있습니다.
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f) // fill = false를 제거하여 남은 공간을 적극적으로 사용하게 함
-                        )
+                    // 첫째 줄: 제목만
+                    Text(
+                        text = title.replace(Regex("\\[(더빙|자막)\\]"), "").trim(),
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
 
+                    Spacer(Modifier.height(4.dp))
+
+                    // 둘째 줄: 메타 정보 (장르 · 년도 · 에피소드 수 · 연령)
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        val metaItems = mutableListOf<@Composable () -> Unit>()
+
+                        if (itemGenres.isNotEmpty()) {
+                            metaItems.add {
+                                Text(text = itemGenres.take(2).joinToString(", "), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                            }
+                        }
                         if (!itemYear.isNullOrBlank()) {
-                            Spacer(Modifier.width(8.dp))
-                            Text(text = itemYear!!, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+                            metaItems.add {
+                                Text(text = itemYear!!, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        if (itemEpisodeCount != null) {
+                            metaItems.add {
+                                Text(text = "$itemEpisodeCount 에피소드", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        if (!itemRating.isNullOrBlank()) {
+                            metaItems.add {
+                                Text(text = itemRating!!, color = Color(0xFF46D369), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
 
-                        if (!itemRating.isNullOrBlank()) {
-                            Spacer(Modifier.width(6.dp))
-                            Text(text = itemRating!!, color = Color(0xFF46D369), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        metaItems.forEachIndexed { index, composable ->
+                            composable()
+                            if (index < metaItems.size - 1) {
+                                Text(text = " • ", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                            }
                         }
                     }
 
+                    // 셋째 줄: 개요
                     if (!itemOverview.isNullOrBlank()) {
                         Spacer(Modifier.height(4.dp))
                         Text(
@@ -292,7 +317,7 @@ fun NetflixPivotItem(
                             fontSize = 11.sp,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
-                            lineHeight = 15.sp
+                            lineHeight = 14.sp
                         )
                     }
                 }
