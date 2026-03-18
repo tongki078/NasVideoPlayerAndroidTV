@@ -216,18 +216,31 @@ fun NetflixPivotItem(
                     
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(20.dp)) {
                         if (isDataLoaded) {
-                            val metaItems = mutableListOf<@Composable () -> Unit>()
-                            if (itemGenres.isNotEmpty()) metaItems.add { Text(text = itemGenres.take(2).joinToString(", "), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp) }
-                            if (!itemYear.isNullOrBlank()) metaItems.add { Text(text = itemYear!!, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
-                            if (itemEpisodeCount != null) metaItems.add { Text(text = "에피소드 ${itemEpisodeCount}개", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
-                            
-                            metaItems.forEachIndexed { index, composable ->
-                                composable()
-                                if (index < metaItems.size - 1) Text(text = " • ", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                            // 1. 장르 (최대 1개, 길면 줄임)
+                            if (itemGenres.isNotEmpty()) {
+                                Text(
+                                    text = itemGenres.first(), 
+                                    color = Color.White.copy(alpha = 0.7f), 
+                                    fontSize = 11.sp, 
+                                    maxLines = 1, 
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 80.dp)
+                                )
+                                Text(text = " • ", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
                             }
                             
+                            // 2. 나머지 정보 (년도, 에피소드)
+                            if (!itemYear.isNullOrBlank()) {
+                                Text(text = itemYear!!, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(text = " • ", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                            }
+                            if (itemEpisodeCount != null) {
+                                Text(text = "에피소드 ${itemEpisodeCount}개", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                            
+                            // 3. 등급 배지: 우측 끝으로 밀지 않고, 좌측부터 순서대로 배치
                             if (!itemRating.isNullOrBlank()) {
-                                Spacer(Modifier.width(8.dp))
+                                Text(text = " • ", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
                                 NetflixRatingBadge(itemRating!!)
                             }
                         } else {
