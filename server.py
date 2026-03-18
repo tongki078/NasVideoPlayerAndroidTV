@@ -6999,6 +6999,97 @@ def repair_wrong_tmdb_title():
         log("REPAIR_ERROR", f"오류 발생: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
+@app.route('/api/admin/patch_ratings_only', methods=['POST'])
+def patch_ratings_only():
+    try:
+        conn = get_db()
+        rows = conn.execute("SELECT id, name, tmdbId, category FROM series WHERE tmdbId IS NOT NULL AND (rating IS NULL OR rating = '')").fetchall()
+
+        total = len(rows)
+        if total == 0:
+            return jsonify({"status": "warning", "message": "등급 정보를 채울 항목이 없습니다."})
+
+        log("PATCH", f"🔍 등급 정보가 없는 {total}개의 항목 보수 시작...")
+        emit_ui_log(f"🛠 등급 정보 업데이트 시작 (대상: {total}개)", "info")
+
+        count = 0
+        for idx, row in enumerate(rows):
+            name = row['name']
+            tmdb_id = row['tmdbId'].split(':')[-1]
+            cat = row['category']
+
+            # 진행 상황 로그 (10개 단위)
+            if (idx + 1) % 10 == 0 or idx == 0:
+                progress = int(((idx + 1) / total) * 100)
+                emit_ui_log(f"⏳ 진행 중... ({idx + 1}/{total} | {progress}%) - 작업 중: {name}", "info")
+
+            try:
+                # API 호출 사이 안전 대기 (Rate Limit 방지)
+                time.sleep(0.25)
+
+                new_rating = get_tmdb_rating(tmdb_id, cat)
+
+                if new_rating:
+                    conn.execute("UPDATE series SET rating = ? WHERE id = ?", (new_rating, row['id']))
+                    count += 1
+                    log("PATCH", f"✅ [성공] '{name}' -> {new_rating}")
+                else:
+                    log("PATCH", f"⚠️ [정보없음] '{name}' (ID: {tmdb_id})")
+
+            except Exception as e:
+                log("PATCH_ERROR", f"❌ [에러] '{name}': {str(e)}")
+                # 429 에러(Too many requests)일 경우 좀 더 길게 대기
+                if "429" in str(e):
+                    time.sleep(5)
+                continue
+
+        conn.commit()
+        conn.close()
+
+        build_all_caches()
+        final_msg = f"🎉 총 {count}/{total}개의 항목에 연령 정보를 추가했습니다."
+        log("PATCH", final_msg)
+        emit_ui_log(final_msg, "success")
+        return jsonify({"status": "success", "message": final_msg})
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+def get_tmdb_rating(tmdb_id, category):
+    # 보안을 위해 토큰은 서버 설정 파일(config.py 등)에서 불러오도록 하세요!
+    BEARER_TOKEN = "YOUR_NEW_TOKEN_HERE"
+    BASE_URL = "https://api.themoviedb.org/3"
+    headers = {"accept": "application/json", "Authorization": f"Bearer {BEARER_TOKEN}"}
+
+    try:
+        # 영화인 경우
+        if category == 'movies':
+            url = f"{BASE_URL}/movie/{tmdb_id}/release_dates"
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 429: raise Exception("429 Too Many Requests")
+            data = response.json()
+            for result in data.get('results', []):
+                if result.get('iso_3166_1') == 'KR':
+                    for release in result.get('release_dates', []):
+                        if release.get('certification'): return release['certification']
+
+        # TV 시리즈인 경우
+        else:
+            url = f"{BASE_URL}/tv/{tmdb_id}/content_ratings"
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 429: raise Exception("429 Too Many Requests")
+            data = response.json()
+            for result in data.get('results', []):
+                if result.get('iso_3166_1') == 'KR':
+                    return result.get('rating')
+        return None
+    except Exception as e:
+        # 상위 함수에서 처리하도록 에러를 그대로 전달/로그
+        raise e
+
+
+
 # --- [추가] 수동 포스터 변경 라우트 ---
 @app.route('/custom_poster/<filename>')
 def serve_custom_poster(filename):
