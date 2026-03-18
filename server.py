@@ -141,7 +141,7 @@ _SECTION_CACHE = {}  # 카테고리 섹션 결과 캐시 추가
 _GZIP_SECTION_CACHE = {} # Gzipped 섹션 결과 캐시
 _DETAIL_CACHE = deque(maxlen=200)
 
-THUMB_SEMAPHORE = threading.Semaphore(4)
+THUMB_SEMAPHORE = threading.Semaphore(6)
 STORYBOARD_SEMAPHORE = threading.Semaphore(2)  # [추가] 스토리보드 생성용 세마포어
 THUMB_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 SUBTITLE_EXECUTOR = ThreadPoolExecutor(max_workers=2)  # 자막 추출 전용 대기열 (최대 2개 동시 처리)
@@ -377,6 +377,21 @@ def clean_title_complex(title, full_path=None, base_path=None):
     is_movie = any(x in t_low for x in ['극장판', 'themovie', '劇場版', 'thelast'])
 
     series_name = ""
+    # [추가] 극장판이 포함된 제목은 정제 로직을 타지 않도록 보호
+    # if "극장판" in t_orig:
+    #     # 폴더명(예: 극장판 하이큐!! 쓰레기장의 결전 (2024))에서 연도 제외한 전체를 제목으로
+    #     series_name = t_orig.split('(')[0].strip()
+    #     series_name = series_name.replace('극장판 ', '')  # '극장판 ' 제거 후 진짜 제목만
+
+    # [수정] '극장판'이 들어간 제목을 다룰 때 하위 폴더명('가')을 결합하지 않도록 수정
+    if "극장판" in t_orig:
+        # 파일명에서 '극장판'을 포함한 전체 문자열을 일단 제목으로 잡음
+        series_name = t_orig.split('(')[0].strip()
+        # 기술적 태그나 확장자만 제거하고 '가' 같은 폴더명을 더하지 않음
+        series_name = REGEX_EXT.sub('', series_name)
+        # 여기서 바로 리턴하여 하위 폴더를 거슬러 올라가는 후속 로직(400행 이후) 진입을 방지
+        return series_name.strip(), extracted_year
+
     if is_movie and year_match:
         potential = t_orig[:year_match.start()].replace('.', ' ').strip()
         if len(potential) >= 2:
@@ -385,20 +400,26 @@ def clean_title_complex(title, full_path=None, base_path=None):
 
     if full_path:
         parts = [p.strip() for p in full_path.replace('\\', '/').split('/') if p.strip()]
+        # 기존 SKIP_DIRS에 'other', 'season' 관련 키워드 추가
         SKIP_DIRS = {'애니메이션', '일본애니메이션', '라프텔', '시리즈', '기타', 'video', 'volume1', 'volume2', 'movies', 'animations_all',
                      'koreantv', 'foreigntv', 'air', 'gdrive', 'nas', 'share', '더빙', '자막', 'gds3', 'video', 'GDS3',
-                     'GDRIVE', 'VIDEO', 'specials', 'season', '시즌', '가', '나', '다', '라', '마', '바', '사', '아', '자', '차',
-                     '카', '타', '파', '하', '극장판', '극장', 'movie', 'themovie'}
+                     'GDRIVE', 'VIDEO', 'specials', 'season', '시즌', '극장판', '극장', 'movie', 'themovie',
+                     'other', '0z', 'featurettes'}  # 여기 추가!
 
         if not series_name:
             for p in reversed(parts[:-1]):
                 p_clean = nfc(p.lower().replace(" ", ""))
-                if p_clean in SKIP_DIRS or len(p_clean) <= 1: continue
-                if re.search(r'\d+~\d+|\d+-\d+', p_clean): continue
-                if any(p_clean.endswith(ext) for ext in VIDEO_EXTS): continue
-                if re.search(r'(?i)season\s*\d+|시즌\s*\d+|part\s*\d+|s\d+', p_clean): continue
+
+                # [핵심] 'Season', '시즌', 'other' 등 의미 없는 폴더는 무조건 무시
+                if any(x in p_clean for x in ['season', '시즌', 'other', 'featurettes', '0z']):
+                    continue
+                # [기존] 1글자 초성 건너뛰기
+                if len(p_clean) == 1 and re.match(r'[가-하0-9]', p_clean):
+                    continue
+                if p_clean in SKIP_DIRS:
+                    continue
+
                 series_name = p
-                if is_bleach: print(f"[DEBUG] 2단계(폴더추출): {series_name}")
                 break
 
     if not series_name:
@@ -440,19 +461,32 @@ def clean_title_complex(title, full_path=None, base_path=None):
     series_name = REGEX_SPECIAL_CHARS.sub(' ', series_name)
     series_name = REGEX_SPACES.sub(' ', series_name).strip()
 
-    if len(series_name) < 2 or series_name.isdigit():
+    # if len(series_name) < 1 or series_name.isdigit():
+    #     if full_path:
+    #         parts = [p.strip() for p in full_path.replace('\\', '/').split('/') if p.strip()]
+    #         # 폴더명에서 의미 있는 이름을 끝까지 찾아냄
+    #         for p in reversed(parts[:-1]):
+    #             p_clean = REGEX_SPECIAL_CHARS.sub('', p).strip()
+    #             if len(p_clean) >= 1:  # 1글자라도 폴더명이라면 인정
+    #                 series_name = p
+    #                 break
+    #     else:
+    #         series_name = t_orig  # 정제 실패 시 원래 이름 그대로 유지
+
+    # [수정] 24, 1박2일 같이 숫자가 포함되었거나 길이가 충분하면 정제 성공으로 간주
+    is_meaningful = (len(series_name) >= 2) or (any(c.isdigit() for c in series_name))
+
+    if not is_meaningful:
         if full_path:
             parts = [p.strip() for p in full_path.replace('\\', '/').split('/') if p.strip()]
-            # 의미 있는 이름을 찾을 때까지 뒤에서부터 거슬러 올라감
-            found_name = None
             for p in reversed(parts[:-1]):
                 p_clean = REGEX_SPECIAL_CHARS.sub('', p).strip()
-                # 2글자 이상이고, 시즌/화/번호 관련 키워드가 없는 폴더명을 찾음
-                if len(p_clean) >= 2 and not re.search(r'(?i)시즌|season|기|화|회|folder|video', p_clean):
-                    found_name = p
+                # 1글자 초성이나 숫자 폴더가 아닌 폴더를 찾을 때까지 거슬러 올라감
+                if len(p_clean) >= 2 or (len(p_clean) == 1 and not re.match(r'[가-하0-9]', p_clean)):
+                    series_name = p
                     break
-            if found_name:
-                series_name = found_name
+        else:
+            series_name = t_orig
 
     if is_movie and "극장판" not in series_name:
         series_name = f"극장판 {series_name}"
@@ -1357,6 +1391,37 @@ def get_sections_for_category(cat, kw=None):
     _SECTION_CACHE[cache_key] = sections
     return sections
 
+def run_full_refresh_logic():
+    """NULL이 된 cleanedName을 다시 정제 로직으로 통과시켜 올바른 이름을 찾습니다."""
+    log("SYSTEM", "⚡ 전체 정제 루프를 시작합니다...")
+    conn = get_db()
+    # cleanedName이 NULL인 것들만 싹 다 불러옴
+    rows = conn.execute("SELECT path, name FROM series WHERE cleanedName IS NULL").fetchall()
+
+    total = len(rows)
+    set_update_state(total=total)
+
+    for idx, row in enumerate(rows):
+        # 1. 강화된 정제 로직 호출
+        new_clean, _ = clean_title_complex(row['name'], full_path=row['path'])
+
+        # 2. 결과가 또 NULL이거나 이상하면 폴더명으로 강제 할당
+        if not new_clean or new_clean == '가' or new_clean == '나':
+            # 최후의 수단: 경로에서 가져오기
+            parts = row['path'].split('/')
+            new_clean = parts[1] if len(parts) > 1 else row['name']
+
+        conn.execute("UPDATE series SET cleanedName = ? WHERE path = ?", (new_clean, row['path']))
+
+        if (idx + 1) % 500 == 0:
+            conn.commit()
+            set_update_state(current=idx + 1)
+
+    conn.commit()
+    conn.close()
+    build_all_caches()
+    set_update_state(is_running=False, current_item="모든 복구 완료")
+    emit_ui_log("모든 잘못된 그룹의 정제가 완료되었습니다.", "success")
 
 @app.route('/category_sections')
 def get_category_sections():
@@ -2291,7 +2356,7 @@ def get_diagnostics():
         params = []
         if search_q:
             query += " AND (name LIKE ? OR cleanedName LIKE ?)"
-            params.extend([f'%{search_q}%', f'%{search_q}%'])
+            params.extend([f'{search_q}%', f'{search_q}%'])
 
     query += " ORDER BY rowid DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
@@ -2395,8 +2460,9 @@ def manual_match():
 
 
 def _generate_thumb_file(path_raw, prefix, tid, t, w):
-    # 기본 너비를 1280 정도로 조정 (너무 크면 NAS가 힘들어하고, 작으면 화질이 깨짐)
-    target_w = "1280"
+    # 기존: target_w = "1280"
+    # 수정: 720 정도로 낮추어 로딩 속도 최적화
+    target_w = "720"
     tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{target_w}.jpg")
     if os.path.exists(tp) and os.path.getsize(tp) > 0: return tp
 
@@ -2414,13 +2480,14 @@ def _generate_thumb_file(path_raw, prefix, tid, t, w):
             if os.path.exists(tp): return tp
             log("THUMB_DIAG", f"📸 썸네일 생성 중: {os.path.basename(vp)} ({t}초 지점)")
 
-            # 생성 속도를 위해 고속 추출 옵션(-ss를 -i 앞에) 사용
+            # 2. 압축 옵션 개선: -q:v 5 (중간) -> 8 (더 높은 압축률)
+            # JPEG 품질 수치는 높을수록 용량이 커집니다. 8~10 정도로 설정하는 것이 좋습니다.
             subprocess.run([
                 FFMPEG_PATH, "-y",
                 "-ss", str(t),
                 "-i", vp,
                 "-frames:v", "1",
-                "-q:v", "5",
+                "-q:v", "8",
                 "-vf", f"scale={target_w}:-1",
                 tp
             ], timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -3551,33 +3618,49 @@ def updater_ui():
         </div>
 
     <script>
-        async function runSqlQuery() {
-            const sql = document.getElementById('sqlInput').value;
-            const resDiv = document.getElementById('sqlResult');
-            resDiv.innerHTML = '실행 중...';
+async function runSqlQuery() {
+    const sql = document.getElementById('sqlInput').value;
+    const resDiv = document.getElementById('sqlResult');
 
-            const resp = await fetch('/api/admin/sql_query', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ sql: sql })
-            });
-            const res = await resp.json();
+    // 실행 중 표시 (이걸로 로딩 상태를 알림)
+    resDiv.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 실행 중...';
 
-            if(res.status === 'success') {
-                let html = '<table style="width:100%; border-collapse:collapse; background:#000;"><thead><tr>';
-                res.columns.forEach(c => html += `<th style="border:1px solid #334; padding:5px;">${c}</th>`);
+    try {
+        const resp = await fetch('/api/admin/sql_query', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ sql: sql })
+        });
+
+        const res = await resp.json();
+
+        if (res.status === 'success') {
+            // SELECT 문 결과가 있을 때 (컬럼/데이터 존재)
+            if (res.columns && res.data) {
+                let html = '<table style="width:100%; border-collapse:collapse;"><thead><tr>';
+                res.columns.forEach(c => html += `<th style="border:1px solid #444; padding:5px;">${c}</th>`);
                 html += '</tr></thead><tbody>';
                 res.data.forEach(row => {
                     html += '<tr>';
-                    res.columns.forEach(c => html += `<td style="border:1px solid #334; padding:5px;">${row[c]}</td>`);
+                    res.columns.forEach(c => html += `<td style="border:1px solid #444; padding:5px;">${row[c]}</td>`);
                     html += '</tr>';
                 });
                 html += '</tbody></table>';
                 resDiv.innerHTML = html;
-            } else {
-                resDiv.innerHTML = `<div style="color:red;">에러: ${res.message}</div>`;
             }
+            // INSERT/UPDATE/CREATE 등 성공 메시지
+            else {
+                resDiv.innerHTML = '<div style="color: #4ade80;">✅ ' + (res.message || '완료되었습니다!') + '</div>';
+            }
+        } else {
+            // 서버에서 에러 응답이 온 경우
+            resDiv.innerHTML = '<div style="color: #f87171;">❌ 에러: ' + res.message + '</div>';
         }
+    } catch (e) {
+        // 네트워크 통신 자체가 실패한 경우
+        resDiv.innerHTML = '<div style="color: #f87171;">❌ 통신 에러: ' + e.message + '</div>';
+    }
+}
 
     function applyStillsByCategory() {
         const category = document.getElementById('stillsCategory').value;
@@ -4680,164 +4763,165 @@ def update_progress():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
 @app.route('/api/manual_match_simple')
 def manual_match_simple():
-    """TMDB 정보를 연결하되, 원래 제목(미공개X파일 등)은 유지하는 최종 로직"""
+    """TMDB 정보를 연결하되, 원래 제목(미공개X파일 등)은 유지하고 에피소드 상세 정보까지 갱신"""
     target_name = request.args.get('name')
     full_id = request.args.get('id')
 
     if not target_name or not full_id or ':' not in full_id:
         return "오류: 작품 키워드와 TMDB ID가 필요합니다.", 400
 
-    # 1. 띄어쓰기를 무시하고 검색할 수 있도록 검색어 다듬기
-    safe_target = target_name.strip()
-    search_pattern = f"%{safe_target}%"
-    search_pattern_no_space = f"%{safe_target.replace(' ', '')}%"
-
-    emit_ui_log(f"수동 ID 매칭 시작: '{safe_target}' -> {full_id}", "info")
+    emit_ui_log(f"수동 ID 매칭 시작(제목유지): '{target_name}' -> {full_id}", "info")
     m_type, t_id = full_id.split(':')
+    headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
 
     try:
         # 1. TMDB 데이터 조회
-        headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
         d_resp = requests.get(
-            f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings,credits",
+            f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=credits",
             headers=headers, timeout=10).json()
 
         if 'id' not in d_resp:
             emit_ui_log(f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", "error")
             return f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", 404
 
-        # 2. 데이터 가공 (제목 제외)
+        # 2. 데이터 가공
         yv = (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0]
         genre_names = [g['name'] for g in d_resp.get('genres', [])]
         cast_data = d_resp.get('credits', {}).get('cast', [])
         actors = [{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in cast_data[:10]]
         crew_data = d_resp.get('credits', {}).get('crew', [])
         director = next((c['name'] for c in crew_data if c.get('job') == 'Director'), "")
-        runtime = d_resp.get('runtime')  # 영화의 경우
+        runtime = d_resp.get('runtime')
 
-        # 3. DB 업데이트 (tmdbTitle은 업데이트 목록에서 제외!!)
-        conn = None
-        updated_count = 0
-        for attempt in range(5):
-            try:
-                conn = get_db()
-                cursor = conn.cursor()
-                # 제목(tmdbTitle)을 뺀 나머지 정보만 업데이트
-                up = (
-                    d_resp.get('poster_path'), yv, d_resp.get('overview'),
-                    d_resp.get('number_of_seasons'),
-                    json.dumps([g['id'] for g in d_resp.get('genres', [])]),
-                    json.dumps(genre_names, ensure_ascii=False),
-                    director,
-                    json.dumps(actors, ensure_ascii=False),
-                    full_id,
-                    runtime
-                )
+        conn = get_db()
+        cursor = conn.cursor()
+        search_pattern = f'%{target_name}%'
 
-                # [수정포인트] 검색 조건을 더 강력하게 (띄어쓰기 무시 조건 추가)
-                cursor.execute("""
-                    UPDATE series
-                    SET posterPath=?, year=?, overview=?, seasonCount=?,
-                        genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
-                        runtime=?
-                    WHERE name LIKE ? OR cleanedName LIKE ?
-                       OR REPLACE(name, ' ', '') LIKE ? OR REPLACE(cleanedName, ' ', '') LIKE ?
-                """, (*up, search_pattern, search_pattern, search_pattern_no_space, search_pattern_no_space))
+        # 3. 시리즈 정보 업데이트
+        up = (d_resp.get('poster_path'), yv, d_resp.get('overview'), d_resp.get('number_of_seasons'),
+              json.dumps([g['id'] for g in d_resp.get('genres', [])]), json.dumps(genre_names, ensure_ascii=False),
+              director, json.dumps(actors, ensure_ascii=False), full_id, runtime,
+              search_pattern, search_pattern)
 
-                updated_count = cursor.rowcount
-                conn.commit()
-                break
-            except sqlite3.OperationalError:
-                time.sleep(2)
-            finally:
-                if conn: conn.close()
+        cursor.execute("""
+            UPDATE series
+            SET posterPath=?, year=?, overview=?, seasonCount=?,
+                genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0, runtime=?
+            WHERE name LIKE ? OR cleanedName LIKE ?
+        """, up)
 
-        if updated_count > 0:
-            build_all_caches()
-            emit_ui_log(f"성공! '{safe_target}' 관련 {updated_count}건에 깨끗한 포스터를 연결했습니다. (제목은 유지됨)", "success")
-            return f"성공! {updated_count}개 항목의 포스터를 교체했습니다."
+        series_updated = cursor.rowcount  # 시리즈 업데이트 건수 확인
 
-        # [수정포인트] 대상이 없을 경우, DB에 어떤 비슷한 이름들이 있는지 힌트를 주도록 에러 메시지 보강
-        emit_ui_log(f"실패: DB에 '{safe_target}' 이름이 들어간 작품을 찾을 수 없습니다.", "warning")
-        return f"대상 없음: DB에서 '{safe_target}'을(를) 찾을 수 없습니다. 철자와 띄어쓰기를 확인하세요.", 404
+        # 4. 에피소드 상세 정보 업데이트
+        ep_updated = 0
+        if m_type == 'tv':
+            s_count = d_resp.get('number_of_seasons', 1)
+            for s_num in range(1, s_count + 1):
+                s_resp = requests.get(f"{TMDB_BASE_URL}/tv/{t_id}/season/{s_num}?language=ko-KR", headers=headers,
+                                      timeout=10).json()
+                if 'episodes' in s_resp:
+                    for ep in s_resp['episodes']:
+                        cursor.execute("""
+                            UPDATE episodes
+                            SET overview = ?, air_date = ?, thumbnailUrl = COALESCE(?, thumbnailUrl)
+                            WHERE series_path IN (SELECT path FROM series WHERE name LIKE ? OR cleanedName LIKE ?)
+                            AND season_number = ? AND episode_number = ?
+                        """, (ep.get('overview'), ep.get('air_date'),
+                              f"https://image.tmdb.org/t/p/w500{ep.get('still_path')}" if ep.get(
+                                  'still_path') else None,
+                              search_pattern, search_pattern, s_num, ep.get('episode_number')))
+                        ep_updated += cursor.rowcount  # 에피소드 업데이트 건수 누적
+
+        conn.commit()
+        conn.close()
+        build_all_caches()
+
+        emit_ui_log(f"✅ 성공! 시리즈 {series_updated}건, 에피소드 {ep_updated}건 정보 갱신 완료.", "success")
+        return f"성공! 시리즈 {series_updated}건, 에피소드 {ep_updated}건 갱신 완료."
 
     except Exception as e:
-        emit_ui_log(f"에러: {str(e)}", "error")
+        emit_ui_log(f"에러 발생: {str(e)}", "error")
         return f"에러 발생: {str(e)}"
 
 @app.route('/api/manual_match_v2')
 def manual_match_v2():
-    """TMDB 정보를 연결하고, 제목(tmdbTitle)과 그룹명(cleanedName)까지 TMDB 공식 명칭으로 강제 업데이트하는 기능"""
     target_name = request.args.get('name')
     full_id = request.args.get('id')
 
     if not target_name or not full_id or ':' not in full_id:
         return "오류: 작품 키워드와 TMDB ID가 필요합니다.", 400
 
-    emit_ui_log(f"수동 연결 v2 시작: '{target_name}' -> {full_id} (제목 및 그룹명 갱신 포함)", "info")
+    emit_ui_log(f"수동 연결 v2 시작: '{target_name}' -> {full_id}", "info")
     m_type, t_id = full_id.split(':')
 
     try:
         headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
         d_resp = requests.get(
-            f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings,credits",
+            f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=credits",
             headers=headers, timeout=10).json()
 
-        if 'id' not in d_resp:
-            return f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", 404
+        if 'id' not in d_resp: return f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", 404
 
-        yv = (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0]
-        genre_names = [g['name'] for g in d_resp.get('genres', [])]
-        cast_data = d_resp.get('credits', {}).get('cast', [])
-        actors = [{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in cast_data[:10]]
-        crew_data = d_resp.get('credits', {}).get('crew', [])
-        director = next((c['name'] for c in crew_data if c.get('job') == 'Director'), "")
-
-        # 런타임 정보 수집 (아까 만든 로직 적용)
-        runtime = d_resp.get('runtime')
-
-        # 공식 제목(TMDB)
         tmdb_title = d_resp.get('title') or d_resp.get('name')
 
         conn = get_db()
         cursor = conn.cursor()
 
-        # 업데이트 데이터 (tmdbTitle과 cleanedName 동시 갱신)
+        # 1. 시리즈 정보 업데이트
         up = (
-            d_resp.get('poster_path'), yv, d_resp.get('overview'),
-            d_resp.get('number_of_seasons'),
-            json.dumps([g['id'] for g in d_resp.get('genres', [])]),
-            json.dumps(genre_names, ensure_ascii=False),
-            director,
-            json.dumps(actors, ensure_ascii=False),
-            full_id,
-            tmdb_title,  # <-- 1. 공식 제목 (tmdbTitle)
-            runtime,  # <-- 2. 런타임
-            tmdb_title,  # <-- 3. [추가] cleanedName도 TMDB 이름으로 덮어씀
-            f'%{target_name}%', f'%{target_name}%'
-        )
+        d_resp.get('poster_path'), (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0],
+        d_resp.get('overview'), d_resp.get('number_of_seasons'),
+        json.dumps([g['id'] for g in d_resp.get('genres', [])]),
+        json.dumps([g['name'] for g in d_resp.get('genres', [])], ensure_ascii=False),
+        next((c['name'] for c in d_resp.get('credits', {}).get('crew', []) if c.get('job') == 'Director'), ""),
+        json.dumps([{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in
+                    d_resp.get('credits', {}).get('cast', [])[:10]], ensure_ascii=False),
+        full_id, tmdb_title, d_resp.get('runtime'), tmdb_title,
+        f'%{target_name}%', f'%{target_name}%')
 
         cursor.execute("""
             UPDATE series
             SET posterPath=?, year=?, overview=?, seasonCount=?,
                 genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
-                tmdbTitle=?, runtime=?, cleanedName=?  -- <-- cleanedName 추가됨
+                tmdbTitle=?, runtime=?, cleanedName=?
             WHERE name LIKE ? OR cleanedName LIKE ?
         """, up)
 
-        updated_count = cursor.rowcount
+        series_updated = cursor.rowcount  # 🔴 시리즈 업데이트 건수 확인
+
+        # 2. 에피소드 정보 업데이트
+        ep_updated = 0
+        if m_type == 'tv':
+            s_count = d_resp.get('number_of_seasons', 1)
+            for s_num in range(1, s_count + 1):
+                s_resp = requests.get(f"{TMDB_BASE_URL}/tv/{t_id}/season/{s_num}?language=ko-KR", headers=headers,
+                                      timeout=10).json()
+                if 'episodes' in s_resp:
+                    for ep in s_resp['episodes']:
+                        cursor.execute("""
+                            UPDATE episodes
+                            SET overview = ?, air_date = ?, thumbnailUrl = COALESCE(?, thumbnailUrl)
+                            WHERE series_path IN (SELECT path FROM series WHERE name LIKE ? OR cleanedName LIKE ?)
+                            AND season_number = ? AND episode_number = ?
+                        """, (ep.get('overview'), ep.get('air_date'),
+                              f"https://image.tmdb.org/t/p/w500{ep.get('still_path')}" if ep.get(
+                                  'still_path') else None,
+                              f'%{target_name}%', f'%{target_name}%', s_num, ep.get('episode_number')))
+                        ep_updated += cursor.rowcount  # 🔴 에피소드 누적 업데이트 건수
+
         conn.commit()
         conn.close()
+        build_all_caches()
 
-        if updated_count > 0:
-            build_all_caches()
-            emit_ui_log(f"성공! '{target_name}' 관련 {updated_count}건의 제목과 메타데이터를 모두 갱신했습니다.", "success")
-            return f"성공! {updated_count}개 항목의 제목과 정보를 교체했습니다."
-        return "대상 없음", 404
+        # 🔴 상세 로그 출력
+        emit_ui_log(f"✅ 성공! 시리즈 {series_updated}건, 에피소드 {ep_updated}건의 정보가 갱신되었습니다.", "success")
+        return f"성공! 시리즈 {series_updated}건, 에피소드 {ep_updated}건 갱신 완료."
 
     except Exception as e:
+        emit_ui_log(f"에러: {str(e)}", "error")
         return f"에러 발생: {str(e)}"
 
 @app.route('/api/manual_match_targeted')
@@ -6247,7 +6331,8 @@ def api_db_pro_data():
     table = request.args.get('table', 'series')
     kw = request.args.get('q', '').strip()
     cat_filter = request.args.get('cat', '전체')
-    limit = int(request.args.get('limit', 50))
+    # 데이터를 한 번에 최대 200개로 제한하여 브라우저 메모리 폭주 방지
+    limit = min(int(request.args.get('limit', 50)), 200)
     offset = int(request.args.get('offset', 0))
     sort = request.args.get('sort', '')
     direction = request.args.get('dir', 'ASC')
@@ -6259,20 +6344,17 @@ def api_db_pro_data():
     where_clauses = []
     params = []
 
-    # 1. 키워드 검색 (테이블별 컬럼 대응)
+    # [최적화] 검색어(kw)가 있을 때만 검색 수행 (인덱스 활용을 위해 '키워드%' 패턴 사용)
     if kw:
         if table == 'series':
-            where_clauses.append("(name LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ? OR path LIKE ?)")
-            params.extend([f'%{kw}%', f'%{kw}%', f'%{kw}%', f'%{kw}%'])
+            where_clauses.append("(name LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ?)")
+            params.extend([f'{kw}%', f'{kw}%', f'{kw}%'])
         elif table == 'episodes':
-            where_clauses.append("(title LIKE ? OR series_path LIKE ?)")
-            params.extend([f'%{kw}%', f'%{kw}%'])
-        elif table == 'playback_progress':
-            where_clauses.append("(episode_id LIKE ?)")
-            params.append(f'%{kw}%')
+            where_clauses.append("(title LIKE ?)")
+            params.append(f'{kw}%')
 
-    # 2. 카테고리 필터
-    if cat_filter and cat_filter != '전체':
+    # 카테고리 필터
+    if cat_filter != '전체':
         if table == 'series':
             where_clauses.append("category = ?")
             params.append(cat_filter)
@@ -6283,32 +6365,35 @@ def api_db_pro_data():
     where_stmt = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
 
     try:
-        # 전체 개수 확인
+        # 전체 개수 확인 (필터링된 조건 내에서만 카운트)
         total_count = conn.execute(f"SELECT COUNT(*) FROM {table} {where_stmt}", params).fetchone()[0]
 
-        # 정렬 및 쿼리 실행
-        order_by = ""
-        if sort:
-            order_by = f" ORDER BY {sort} {direction}"
-        elif table == 'series':
-            order_by = " ORDER BY path ASC"
-        elif table == 'episodes':
-            order_by = " ORDER BY series_path ASC, episode_number ASC"
+        # 정렬 설정
+        order_by = f" ORDER BY {sort} {direction}" if sort else ""
 
+        # 쿼리 실행 (LIMIT과 OFFSET 적용)
         query = f"SELECT * FROM {table} {where_stmt} {order_by} LIMIT ? OFFSET ?"
         cursor = conn.execute(query, params + [limit, offset])
 
-        # 컬럼 추출 및 정렬 (중복 방지 및 우선순위 정렬)
-        columns = [d[0] for d in cursor.description]
-        prio = ['posterPath', 'path', 'series_path', 'name', 'title', 'cleanedName', 'season_number', 'episode_number']
-        columns = sorted(list(dict.fromkeys(columns)), key=lambda x: prio.index(x) if x in prio else 999)
+        # 🔴 [수정] 컬럼 순서를 posterPath가 맨 앞에 오도록 강제 정렬
+        raw_columns = [d[0] for d in cursor.description]
+        if 'posterPath' in raw_columns:
+            columns = ['posterPath'] + [c for c in raw_columns if c != 'posterPath']
+        else:
+            columns = raw_columns
 
         data = [dict(row) for row in cursor.fetchall()]
         conn.close()
 
-        return jsonify({"columns": columns, "data": data, "total": total_count, "offset": offset, "limit": limit})
+        return jsonify({
+            "columns": columns,
+            "data": data,
+            "total": total_count,
+            "offset": offset,
+            "limit": limit
+        })
     except Exception as e:
-        if conn: conn.close()
+        conn.close()
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/debug/test_movies')
@@ -6612,36 +6697,202 @@ def fix_grouped_names():
 
 @app.route('/api/admin/sql_query', methods=['POST'])
 def api_sql_query():
-    # 🔴 [수정] UPDATE를 허용하기 위해 forbidden 리스트에서 제거했습니다.
     data = request.json
     sql = data.get('sql', '').strip()
 
-    # 변경을 금지할 위험한 명령어들만 제한
-    forbidden = ['DROP', 'INSERT', 'CREATE', 'REPLACE', 'DELETE']
+    # 1. 쿼리문이 여러 개라면 세미콜론 기준으로 가장 첫 번째 쿼리만 실행 (안전장치)
+    single_sql = sql.split(';')[0].strip()
 
-    if any(cmd in sql.upper() for cmd in forbidden):
-        return jsonify({"status": "error", "message": f"데이터 삭제나 구조 변경 명령어({','.join(forbidden)})는 금지되어 있습니다."}), 403
+    # 2. 금지어 체크 (필요시 추가)
+    forbidden = ['DROP', 'INSERT', 'REPLACE', 'DELETE']
+    # forbidden = ['DROP']
+    if any(cmd in single_sql.upper() for cmd in forbidden):
+        return jsonify({"status": "error", "message": "DROP 명령어는 금지되어 있습니다."}), 403
 
     conn = get_db()
     try:
-        cursor = conn.execute(sql)
+        cursor = conn.execute(single_sql)
 
-        # INSERT/UPDATE/DELETE 처럼 결과셋이 없는 쿼리인 경우
-        if cursor.description is None:
-            conn.commit()
-            result = {"status": "success", "message": f"실행 완료. 영향을 받은 행 수: {cursor.rowcount}"}
+        # 3. SELECT 문인 경우 결과 반환
+        if cursor.description is not None:
+            columns = [d[0] for d in cursor.description]
+            # 데이터를 딕셔너리 리스트로 변환
+            rows = [dict(row) for row in cursor.fetchall()]
             conn.close()
-            return jsonify(result)
+            return jsonify({"status": "success", "columns": columns, "data": rows})
 
-        # SELECT 처럼 결과를 반환하는 쿼리인 경우
-        columns = [d[0] for d in cursor.description]
-        rows = [dict(row) for row in cursor.fetchall()]
+        # 4. 데이터 변경 문(UPDATE/INSERT 등)인 경우
+        conn.commit()
         conn.close()
-        return jsonify({"status": "success", "columns": columns, "data": rows})
+        return jsonify({"status": "success", "message": f"실행 완료. 행 수: {cursor.rowcount}"})
 
     except Exception as e:
         conn.close()
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/admin/repair_ga_group')
+def repair_ga_group():
+    """cleanedName이 '가'인 항목들만 선택적으로 재정제합니다."""
+
+    def run_repair():
+        set_update_state(is_running=True, task_name="[가] 그룹 정밀 복구", clear_logs=True)
+        emit_ui_log("cleanedName이 '가'인 항목들을 찾습니다...", "info")
+
+        try:
+            conn = get_db()
+            cursor = conn.cursor()
+
+            # '가'로 묶인 대상들 조회
+            rows = conn.execute("SELECT path, name FROM series WHERE cleanedName = '가'").fetchall()
+            total = len(rows)
+            set_update_state(total=total)
+            emit_ui_log(f"총 {total}개의 '가' 그룹 항목을 정제합니다.", "info")
+
+            updates = []
+            for idx, row in enumerate(rows):
+                # 정제 로직 실행
+                new_clean, year = clean_title_complex(row['name'], full_path=row['path'])
+
+                # 정제된 결과가 또 '가'면 의미가 없으므로 체크
+                if new_clean != '가':
+                    updates.append((new_clean, year, row['path']))
+
+                if (idx + 1) % 100 == 0:
+                    set_update_state(current=idx + 1)
+
+            # 일괄 업데이트
+            if updates:
+                cursor.executemany("UPDATE series SET cleanedName = ?, yearVal = ? WHERE path = ?", updates)
+                conn.commit()
+                emit_ui_log(f"✅ {len(updates)}개 항목 복구 완료.", "success")
+            else:
+                emit_ui_log("정제 가능한 항목이 없습니다.", "warning")
+
+            conn.close()
+            build_all_caches()
+            set_update_state(is_running=False, current_item="복구 완료")
+            emit_ui_log("데이터 복구 및 캐시 갱신 완료!", "success")
+
+        except Exception as e:
+            emit_ui_log(f"오류 발생: {str(e)}", "error")
+            set_update_state(is_running=False)
+
+    import threading
+    threading.Thread(target=run_repair, daemon=True).start()
+    return "복구 작업이 백그라운드에서 시작되었습니다. /updater 창을 확인하세요."
+
+
+@app.route('/api/admin/repair_all_initials_force')
+def repair_all_initials_force():
+    """초성그룹뿐만 아니라 Season, other, 0Z 등 잘못된 그룹을 모두 초기화하고 재정제합니다."""
+
+    def run_repair():
+        set_update_state(is_running=True, task_name="[전체] 잘못된 그룹 강제 복구", clear_logs=True)
+        emit_ui_log("잘못된 그룹(초성, Season, other 등)을 초기화합니다...", "info")
+
+        try:
+            conn = get_db()
+            cursor = conn.cursor()
+
+            # [수정] 재정제 대상 범위 확대
+            # 1. 1글자 (초성/숫자)
+            # 2. 정제 로직에서 거부해야 할 키워드들 (Season, other, 0Z, Featurettes 등)
+            bad_groups = ['Season 1', 'Season 2', 'other', '0Z', 'Featurettes']
+
+            # 1글자 그룹들 초기화
+            cursor.execute("UPDATE series SET cleanedName = NULL WHERE LENGTH(cleanedName) <= 1")
+
+            # Season 등 명시적 잘못된 그룹 초기화
+            placeholders = ','.join(['?'] * len(bad_groups))
+            cursor.execute(f"UPDATE series SET cleanedName = NULL WHERE cleanedName IN ({placeholders})", bad_groups)
+
+            updated_rows = cursor.rowcount
+            conn.commit()
+            emit_ui_log(f"초기화 완료: 총 {updated_rows}개의 잘못된 항목이 재정제 대상으로 지정되었습니다.", "success")
+
+            conn.close()
+
+            # 재정제 루프 시작
+            threading.Thread(target=run_full_refresh_logic, daemon=True).start()
+
+        except Exception as e:
+            emit_ui_log(f"오류 발생: {str(e)}", "error")
+            set_update_state(is_running=False)
+
+    # (run_full_refresh_logic 함수는 그대로 유지)
+    threading.Thread(target=run_repair, daemon=True).start()
+    return "전체 정밀 복구 작업이 시작되었습니다. /updater 창을 확인하세요."
+
+@app.route('/api/admin/summary_all_groups')
+def summary_all_groups():
+    conn = get_db()
+    # 전체 그룹 요약
+    rows = conn.execute("""
+        SELECT cleanedName, COUNT(*) as cnt, category
+        FROM series
+        GROUP BY cleanedName
+        HAVING cnt > 10
+        ORDER BY cnt DESC
+    """).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/admin/repair_ga_group_strict')
+def repair_ga_group_strict():
+    """'극장판 ' 뒤에 초성/숫자만 붙은 이상한 그룹만 핀셋으로 골라 정제합니다."""
+
+    def run_repair():
+        set_update_state(is_running=True, task_name="[핀셋 정제] 극장판 오타 복구", clear_logs=True)
+        emit_ui_log("극장판 가, 극장판 나 등 오타 항목을 찾습니다...", "info")
+
+        try:
+            conn = get_db()
+            cursor = conn.cursor()
+
+            # 🔴 핵심: '극장판 '으로 시작하고 뒤에 초성(ㄱ-ㅎ)이나 숫자(0-9)가 한 글자만 붙은 것만 핀셋으로 조회
+            # [가-힣] 중에서도 초성만 있는 것들을 찾기 위해 LIKE '극장판 _' 사용
+            # _는 정확히 한 글자를 의미합니다.
+            rows = conn.execute("SELECT path, name FROM series WHERE cleanedName LIKE '극장판 _'").fetchall()
+
+            total = len(rows)
+            set_update_state(total=total)
+            emit_ui_log(f"핀셋 정제 대상 {total}개 항목 발견.", "info")
+
+            updates = []
+            for idx, row in enumerate(rows):
+                # 1. 강화된 정제 로직으로 진짜 제목을 찾아냄
+                new_clean, year = clean_title_complex(row['name'], full_path=row['path'])
+
+                # 수정 후: 정제 결과가 '극장판 ' 딱 한 단어만 아니면(즉, 뒤에 진짜 제목이 붙어있으면) 정상으로 간주
+                if new_clean and new_clean != '극장판':
+                    updates.append((new_clean, year, row['path']))
+
+                if (idx + 1) % 100 == 0:
+                    set_update_state(current=idx + 1)
+
+            # 일괄 업데이트
+            if updates:
+                cursor.executemany("UPDATE series SET cleanedName = ?, yearVal = ? WHERE path = ?", updates)
+                conn.commit()
+                emit_ui_log(f"✅ {len(updates)}개 항목 성공적으로 복구됨.", "success")
+            else:
+                emit_ui_log("복구할 핀셋 대상이 없습니다.", "warning")
+
+            conn.close()
+            build_all_caches()
+            set_update_state(is_running=False, current_item="복구 완료")
+            emit_ui_log("데이터 복구 및 캐시 갱신 완료!", "success")
+
+        except Exception as e:
+            emit_ui_log(f"오류 발생: {str(e)}", "error")
+            set_update_state(is_running=False)
+
+    import threading
+    threading.Thread(target=run_repair, daemon=True).start()
+    return "핀셋 복구 작업이 시작되었습니다. /updater 창을 확인하세요."
+
 
 # --- [추가] 수동 포스터 변경 라우트 ---
 @app.route('/custom_poster/<filename>')
