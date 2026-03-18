@@ -26,6 +26,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -212,7 +214,6 @@ fun NetflixPivotItem(
                     
                     Spacer(Modifier.height(4.dp))
                     
-                    // 레이아웃 높이를 고정하여 정보가 튀는 것을 방지
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(20.dp)) {
                         if (isDataLoaded) {
                             val metaItems = mutableListOf<@Composable () -> Unit>()
@@ -230,7 +231,6 @@ fun NetflixPivotItem(
                                 NetflixRatingBadge(itemRating!!)
                             }
                         } else {
-                            // 로딩 중에는 최소한의 높이 공간을 유지
                             Spacer(Modifier.width(1.dp))
                         }
                     }
@@ -254,7 +254,21 @@ fun NetflixRatingBadge(rating: String) {
         rating.contains("전체") -> Color(0xFF46D369)
         else -> Color.Gray.copy(alpha = 0.5f)
     }
-    Surface(color = backgroundColor, shape = RoundedCornerShape(2.dp)) {
-        Text(text = rating.filter { it.isDigit() }.ifEmpty { if(rating.contains("전체")) "All" else rating.take(2) }, color = if (backgroundColor == Color(0xFFF8E71C)) Color.Black else Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+    Surface(
+        color = backgroundColor,
+        shape = RoundedCornerShape(2.dp),
+        modifier = Modifier.height(18.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = rating.filter { it.isDigit() }.ifEmpty { if(rating.contains("전체")) "All" else rating.take(2) },
+                color = if (backgroundColor == Color(0xFFF8E71C)) Color.Black else Color.White,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Black,
+                modifier = Modifier.padding(horizontal = 4.dp),
+                lineHeight = 11.sp,
+                style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+            )
+        }
     }
 }
