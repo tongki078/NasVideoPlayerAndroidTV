@@ -374,8 +374,8 @@ def clean_title_complex(title, full_path=None, base_path=None):
     extracted_year = year_match.group().strip('()') if year_match else None
 
     t_low = t_orig.lower().replace(" ", "")
-    is_movie = any(x in t_low for x in ['극장판', 'themovie', '劇場版', 'thelast'])
-
+    # is_movie = any(x in t_low for x in ['극장판', 'themovie', '劇場版', 'thelast'])
+    is_movie = any(x in t_low for x in ['극장판', '劇場版'])
     series_name = ""
     # [추가] 극장판이 포함된 제목은 정제 로직을 타지 않도록 보호
     # if "극장판" in t_orig:
@@ -637,7 +637,18 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  
     hint_id = extract_tmdb_id(title)
     if not hint_id and path: # 제목에 ID가 없으면 경로(폴더명)에서 추출 시도
         hint_id = extract_tmdb_id(path)
-    ct, year = clean_title_complex(title)
+    # ct, year = clean_title_complex(title)
+    # 검색 전 정제: 파일명에 포함된 'Movie' 관련 키워드 제거
+    ct = title
+    ct = re.sub(r'(?i)\b(?:the\s+)?movie(?:\s+night|\s+madness|\s+time)?\b', '', ct)
+
+    try:
+        # 안전한 정제 호출
+        ct, year_from_clean = clean_title_complex(ct, full_path=path)
+    except Exception as e:
+        log("TMDB_CLEAN_ERROR", f"정제 중 오류: {e}")
+        ct = title  # 정제 실패 시 원본 사용
+
     if not ct or REGEX_FORBIDDEN_TITLE.match(ct):
         return {"failed": True, "forbidden": True}
 
@@ -2461,8 +2472,8 @@ def manual_match():
 
 def _generate_thumb_file(path_raw, prefix, tid, t, w):
     # 기존: target_w = "1280"
-    # 수정: 720 정도로 낮추어 로딩 속도 최적화
-    target_w = "720"
+    # 수정: 480 정도로 낮추어 로딩 속도 최적화
+    target_w = "480"
     tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{target_w}.jpg")
     if os.path.exists(tp) and os.path.getsize(tp) > 0: return tp
 
@@ -3591,27 +3602,36 @@ def updater_ui():
 
                     <!-- 3. 고급 도구 -->
                     <div class="action-card">
-    <div class="card-title"><i class="fas fa-tools"></i> 고급 도구</div>
-    <div class="input-group" style="margin-top: 0;">
-        <select id="stillsCategory" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
-            <option value="">전체 카테고리</option>
-            <option value="movies">영화</option>
-            <option value="koreantv">국내TV</option>
-            <option value="foreigntv">외국TV</option>
-            <option value="animations_all">애니메이션</option>
-            <option value="air">방송중</option>
-        </select>
-        <button class="btn-maintenance" onclick="applyStillsByCategory()"><i class="fas fa-image"></i> 선택 카테고리 스틸컷 적용</button>
+                        <div class="card-title"><i class="fas fa-tools"></i> 고급 도구</div>
+                        <div class="input-group" style="margin-top: 0;">
+                            <select id="stillsCategory" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
+                                <option value="">전체 카테고리</option>
+                                <option value="movies">영화</option>
+                                <option value="koreantv">국내TV</option>
+                                <option value="foreigntv">외국TV</option>
+                                <option value="animations_all">애니메이션</option>
+                                <option value="air">방송중</option>
+                            </select>
+                            <button class="btn-maintenance" onclick="applyStillsByCategory()"><i class="fas fa-image"></i> 선택 카테고리 스틸컷 적용</button>
+                        </div>
+                        <div class="btn-list" style="margin-top:15px; border-top: 1px solid #334155; padding-top: 15px;">
+                            <button class="btn-maintenance" onclick="triggerTask('/pre_extract_subtitles')"><i class="fas fa-closed-captioning"></i> 영화 자막 일괄 추출</button>
+                            <button class="btn-maintenance" onclick="triggerTask('/refresh_cleaned_names')"><i class="fas fa-broom"></i> 제목 정제 및 그룹화 재정렬</button>
+                            <button class="btn-danger-alt" onclick="triggerTask('/reset_episodes_metadata')"><i class="fas fa-undo"></i> 에피소드 회차 정보 초기화</button>
+                            <button class="btn-danger-alt" onclick="triggerTask('/reset_all_tmdb_data')"><i class="fas fa-trash-alt"></i> 전체 TMDB 데이터 초기화</button>
+                            <button class="btn-meta" onclick="triggerTask('/api/admin/match_movies_all')" style="background: #E50914;">
+                        <i class="fas fa-film"></i> 영화 카테고리 포스터 집중 매칭
+                        </button>
+                        </div>
+                        <!-- 잘못된 TMDB 제목 복구 (신규 추가) -->
+<div class="action-card">
+    <div class="card-title"><i class="fas fa-undo-alt"></i> 잘못된 메타데이터 복구</div>
+    <div class="btn-list">
+        <button class="btn-danger-alt" onclick="repairWrongTmdbTitles()" style="background: #ef4444;">
+            <i class="fas fa-exclamation-triangle"></i> '옹정황제' 오매칭 일괄 복구
+        </button>
     </div>
-    <div class="btn-list" style="margin-top:15px; border-top: 1px solid #334155; padding-top: 15px;">
-        <button class="btn-maintenance" onclick="triggerTask('/pre_extract_subtitles')"><i class="fas fa-closed-captioning"></i> 영화 자막 일괄 추출</button>
-        <button class="btn-maintenance" onclick="triggerTask('/refresh_cleaned_names')"><i class="fas fa-broom"></i> 제목 정제 및 그룹화 재정렬</button>
-        <button class="btn-danger-alt" onclick="triggerTask('/reset_episodes_metadata')"><i class="fas fa-undo"></i> 에피소드 회차 정보 초기화</button>
-        <button class="btn-danger-alt" onclick="triggerTask('/reset_all_tmdb_data')"><i class="fas fa-trash-alt"></i> 전체 TMDB 데이터 초기화</button>
-        <button class="btn-meta" onclick="triggerTask('/api/admin/match_movies_all')" style="background: #E50914;">
-    <i class="fas fa-film"></i> 영화 카테고리 포스터 집중 매칭
-    </button>
-    </div>
+</div>
                     </div>
                 </div>
             </div>
@@ -3984,6 +4004,29 @@ async function regroupByKeyword() {
                         if (isAtBottom) term.scrollTop = term.scrollHeight;
                     }
                 } catch (e) { console.error(e); }
+            }
+
+            async function repairWrongTmdbTitles() {
+                if(!confirm("잘못 매칭된 '옹정황제의 여인 극장판' 오매칭 항목들을 파일명 기준으로 복구하시겠습니까?")) return;
+
+                // 버튼 상태 표시 (선택사항)
+                const btn = event.target;
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 실행 중...';
+                btn.disabled = true;
+
+                try {
+                    const resp = await fetch('/api/admin/repair_wrong_tmdb_title', {
+                        method: 'POST'
+                    });
+                    const res = await resp.json();
+                    alert(res.message);
+                } catch (e) {
+                    alert('통신 오류: ' + e);
+                } finally {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                }
             }
 
             setInterval(updateStatus, 1000);
@@ -6377,10 +6420,19 @@ def api_db_pro_data():
 
         # 🔴 [수정] 컬럼 순서를 posterPath가 맨 앞에 오도록 강제 정렬
         raw_columns = [d[0] for d in cursor.description]
-        if 'posterPath' in raw_columns:
-            columns = ['posterPath'] + [c for c in raw_columns if c != 'posterPath']
-        else:
-            columns = raw_columns
+        # 현재 테이블에 있는 컬럼들만 추려서 순서를 만듭니다.
+        priority = ['posterPath', 'cleanedName', 'tmdbTitle']
+        columns = []
+
+        # 우선순위 컬럼을 먼저 넣음
+        for p in priority:
+            if p in raw_columns:
+                columns.append(p)
+
+        # 나머지 컬럼들 추가
+        for c in raw_columns:
+            if c not in columns:
+                columns.append(c)
 
         data = [dict(row) for row in cursor.fetchall()]
         conn.close()
@@ -6893,6 +6945,59 @@ def repair_ga_group_strict():
     threading.Thread(target=run_repair, daemon=True).start()
     return "핀셋 복구 작업이 시작되었습니다. /updater 창을 확인하세요."
 
+
+@app.route('/api/admin/repair_wrong_tmdb_title', methods=['POST'])
+def repair_wrong_tmdb_title():
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+
+        # 1. 대상 조회
+        query = """
+            SELECT path, name
+            FROM series
+            WHERE tmdbTitle = '옹정황제의 여인 극장판'
+              AND path NOT LIKE '%옹정황제의 여인%'
+        """
+        rows = conn.execute(query).fetchall()
+
+        if not rows:
+            conn.close()
+            return jsonify({"status": "warning", "message": "복구할 대상이 없습니다."})
+
+        log("REPAIR", f"🔍 {len(rows)}개의 오매칭 항목 복구 시작...")
+
+        updates = []
+        for row in rows:
+            # 2. 제목 추출
+            new_title, _ = clean_title_complex(row['name'], full_path=row['path'])
+
+            # 로그: 변환 과정 상세 기록
+            log("REPAIR", f"✅ [복구] '{row['name']}' -> '{new_title}' (Path: {row['path']})")
+
+            updates.append((new_title, row['path']))
+
+        # 3. 일괄 업데이트 및 로그
+        if updates:
+            cursor.executemany("""
+                UPDATE series
+                SET tmdbTitle = ?, tmdbId = NULL, posterPath = NULL, failed = 0
+                WHERE path = ?
+            """, updates)
+            conn.commit()
+            conn.close()
+
+            import threading
+            threading.Thread(target=build_all_caches, daemon=True).start()
+            log("REPAIR", f"🎉 총 {len(updates)}개의 잘못된 제목을 복구 완료했습니다.")
+            return jsonify({"status": "success", "message": f"{len(updates)}개의 잘못된 제목을 파일 기반 제목으로 복구했습니다."})
+
+        conn.close()
+        return jsonify({"status": "warning", "message": "업데이트할 항목이 없습니다."})
+
+    except Exception as e:
+        log("REPAIR_ERROR", f"오류 발생: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # --- [추가] 수동 포스터 변경 라우트 ---
 @app.route('/custom_poster/<filename>')
