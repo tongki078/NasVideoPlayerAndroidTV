@@ -3552,29 +3552,28 @@ def updater_ui():
 
                 <!-- Right: Actions Sidebar -->
                 <!-- 특정 작품 그룹화 재정렬 -->
-            <div class="action-card">
-                <div class="card-title"><i class="fas fa-layer-group"></i> 특정 작품 그룹화 재정렬</div>
-                <div class="input-group">
-                    <select id="regroupCategory" onchange="fetchPathHints()" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
-                        <option value="전체">전체 카테고리</option>
-                        <option value="movies">영화</option>
-                        <option value="koreantv">국내TV</option>
-                        <option value="foreigntv">외국TV</option>
-                        <option value="animations_all">애니메이션</option>
-                        <option value="air">방송중</option>
-                    </select>
-                    <input type="text" id="regroupKeyword" placeholder="검색 키워드 (예: 블리치)">
-                    <input type="text" id="regroupPath" list="pathHints" placeholder="포함할 경로 (선택 또는 직접 입력)">
-                    <datalist id="pathHints"></datalist>
-                    <button class="btn-meta" onclick="regroupByKeyword()" style="justify-content: center; background: var(--accent); margin-top: 5px;">
-                        <i class="fas fa-sync-alt"></i> 지정 범위 재정렬 실행
-                    </button>
+                <div class="action-card">
+                    <div class="card-title"><i class="fas fa-layer-group"></i> 특정 작품 그룹화 재정렬</div>
+                    <div class="input-group">
+                        <select id="regroupCategory" onchange="fetchPathHints()" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
+                            <option value="전체">전체 카테고리</option>
+                            <option value="movies">영화</option>
+                            <option value="koreantv">국내TV</option>
+                            <option value="foreigntv">외국TV</option>
+                            <option value="animations_all">애니메이션</option>
+                            <option value="air">방송중</option>
+                        </select>
+                        <input type="text" id="regroupKeyword" placeholder="검색 키워드 (예: 블리치)">
+                        <input type="text" id="regroupPath" list="pathHints" placeholder="포함할 경로 (선택 또는 직접 입력)">
+                        <datalist id="pathHints"></datalist>
+                        <button class="btn-meta" onclick="regroupByKeyword()" style="justify-content: center; background: var(--accent); margin-top: 5px;">
+                            <i class="fas fa-sync-alt"></i> 지정 범위 재정렬 실행
+                        </button>
+                    </div>
                 </div>
-            </div>
-
-
                 <!-- 수동 메타데이터 정보 수정 -->
                 <div class="action-card">
+
                     <div class="card-title"><i class="fas fa-edit"></i> 수동 텍스트 정보 수정</div>
                     <div class="input-group">
                         <select id="editCategorySelect" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
@@ -3639,24 +3638,40 @@ def updater_ui():
                 </div>
                 <div class="action-card">
                 <div class="sidebar">
-                <!-- 특정 폴더 정밀 스캔 및 갱신 -->
-<div class="action-card">
-    <div class="card-title"><i class="fas fa-folder-search"></i> 특정 폴더 정밀 스캔</div>
-    <div class="input-group">
-        <select id="scanTargetCategory" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
-            <option value="movies">영화 (movies)</option>
-            <option value="koreantv">국내TV (koreantv)</option>
-            <option value="foreigntv">외국TV (foreigntv)</option>
-            <option value="animations_all" selected>애니메이션 (animations_all)</option>
-            <option value="air">방송중 (air)</option>
-        </select>
-        <input type="text" id="scanTargetFolder" placeholder="스캔할 폴더명 (예: 원피스)">
-        <button class="btn-meta" onclick="scanTargetedFolder()" style="justify-content: center; background: var(--primary); margin-top: 5px;">
-            <i class="fas fa-search-plus"></i> 폴더 스캔 & 메타데이터 갱신
-        </button>
-        <p style="font-size: 11px; color: var(--text-dim); margin-top: 5px;">* 서버의 실제 폴더명을 입력하세요. 해당 폴더만 다시 읽고 정보를 가져옵니다.</p>
-    </div>
-</div>
+                    <!-- 카테고리별 일괄 보수 섹션 추가 -->
+                    <div class="action-card" style="margin-top: 20px; border: 1px solid var(--accent);">
+                        <div class="card-title"><i class="fas fa-magic"></i> 카테고리별 메타데이터 일괄 보수</div>
+                        <div class="input-group">
+                            <select id="patchCategory" style="padding: 10px; border-radius: 8px; background: #0f172a; color: white;">
+                                <option value="animations_all">애니메이션</option>
+                                <option value="movies">영화</option>
+                                <option value="koreantv">국내TV</option>
+                                <option value="foreigntv">외국TV</option>
+                                <option value="air">방송중</option>
+                            </select>
+                            <button class="btn-meta" onclick="startCategoryPatch()" style="background: var(--accent);">
+                                <i class="fas fa-play-circle"></i> 선택 카테고리 보수 시작
+                            </button>
+                        </div>
+                    </div>
+                    <!-- 특정 폴더 정밀 스캔 및 갱신 -->
+                    <div class="action-card">
+                        <div class="card-title"><i class="fas fa-folder-search"></i> 특정 폴더 정밀 스캔</div>
+                        <div class="input-group">
+                            <select id="scanTargetCategory" style="width: 100%; background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; color: white; font-size: 13px; margin-bottom: 5px;">
+                                <option value="movies">영화 (movies)</option>
+                                <option value="koreantv">국내TV (koreantv)</option>
+                                <option value="foreigntv">외국TV (foreigntv)</option>
+                                <option value="animations_all" selected>애니메이션 (animations_all)</option>
+                                <option value="air">방송중 (air)</option>
+                            </select>
+                            <input type="text" id="scanTargetFolder" placeholder="스캔할 폴더명 (예: 원피스)">
+                            <button class="btn-meta" onclick="scanTargetedFolder()" style="justify-content: center; background: var(--primary); margin-top: 5px;">
+                                <i class="fas fa-search-plus"></i> 폴더 스캔 & 메타데이터 갱신
+                            </button>
+                            <p style="font-size: 11px; color: var(--text-dim); margin-top: 5px;">* 서버의 실제 폴더명을 입력하세요. 해당 폴더만 다시 읽고 정보를 가져옵니다.</p>
+                        </div>
+                    </div>
                     <div class="action-card">
                         <div class="card-title"><i class="fas fa-search"></i> 스캔 및 매칭 (전체)</div>
                         <div class="btn-list">
@@ -3740,63 +3755,79 @@ def updater_ui():
                         </button>
                         </div>
                         <!-- 잘못된 TMDB 제목 복구 (신규 추가) -->
-<div class="action-card">
-    <div class="card-title"><i class="fas fa-undo-alt"></i> 잘못된 메타데이터 복구</div>
-    <div class="btn-list">
-        <button class="btn-danger-alt" onclick="repairWrongTmdbTitles()" style="background: #ef4444;">
-            <i class="fas fa-exclamation-triangle"></i> '옹정황제' 오매칭 일괄 복구
-        </button>
-    </div>
-</div>
+        <div class="action-card">
+            <div class="card-title"><i class="fas fa-undo-alt"></i> 잘못된 메타데이터 복구</div>
+            <div class="btn-list">
+                <button class="btn-danger-alt" onclick="repairWrongTmdbTitles()" style="background: #ef4444;">
+                    <i class="fas fa-exclamation-triangle"></i> '옹정황제' 오매칭 일괄 복구
+                </button>
+            </div>
+        </div>
                     </div>
                 </div>
             </div>
         </div>
 
     <script>
-async function runSqlQuery() {
-    const sql = document.getElementById('sqlInput').value;
-    const resDiv = document.getElementById('sqlResult');
 
-    // 실행 중 표시 (이걸로 로딩 상태를 알림)
-    resDiv.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 실행 중...';
+    async function startCategoryPatch() {
+        const cat = document.getElementById('patchCategory').value;
+        if (!confirm(`'${cat}' 카테고리의 모든 작품에 대해 메타데이터 보수 작업을 시작할까요?`)) return;
 
-    try {
-        const resp = await fetch('/api/admin/sql_query', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ sql: sql })
-        });
-
-        const res = await resp.json();
-
-        if (res.status === 'success') {
-            // SELECT 문 결과가 있을 때 (컬럼/데이터 존재)
-            if (res.columns && res.data) {
-                let html = '<table style="width:100%; border-collapse:collapse;"><thead><tr>';
-                res.columns.forEach(c => html += `<th style="border:1px solid #444; padding:5px;">${c}</th>`);
-                html += '</tr></thead><tbody>';
-                res.data.forEach(row => {
-                    html += '<tr>';
-                    res.columns.forEach(c => html += `<td style="border:1px solid #444; padding:5px;">${row[c]}</td>`);
-                    html += '</tr>';
-                });
-                html += '</tbody></table>';
-                resDiv.innerHTML = html;
-            }
-            // INSERT/UPDATE/CREATE 등 성공 메시지
-            else {
-                resDiv.innerHTML = '<div style="color: #4ade80;">✅ ' + (res.message || '완료되었습니다!') + '</div>';
-            }
-        } else {
-            // 서버에서 에러 응답이 온 경우
-            resDiv.innerHTML = '<div style="color: #f87171;">❌ 에러: ' + res.message + '</div>';
+        try {
+            const resp = await fetch(`/api/admin/patch_by_category?category=${cat}`);
+            const data = await resp.json();
+            alert(data.message);
+            // 로그창으로 자동 이동
+            document.getElementById('terminalBox').scrollIntoView({ behavior: 'smooth' });
+        } catch (e) {
+            alert('요청 실패: ' + e);
         }
-    } catch (e) {
-        // 네트워크 통신 자체가 실패한 경우
-        resDiv.innerHTML = '<div style="color: #f87171;">❌ 통신 에러: ' + e.message + '</div>';
     }
-}
+
+    async function runSqlQuery() {
+        const sql = document.getElementById('sqlInput').value;
+        const resDiv = document.getElementById('sqlResult');
+
+        // 실행 중 표시 (이걸로 로딩 상태를 알림)
+        resDiv.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 실행 중...';
+
+        try {
+            const resp = await fetch('/api/admin/sql_query', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ sql: sql })
+            });
+
+            const res = await resp.json();
+
+            if (res.status === 'success') {
+                // SELECT 문 결과가 있을 때 (컬럼/데이터 존재)
+                if (res.columns && res.data) {
+                    let html = '<table style="width:100%; border-collapse:collapse;"><thead><tr>';
+                    res.columns.forEach(c => html += `<th style="border:1px solid #444; padding:5px;">${c}</th>`);
+                    html += '</tr></thead><tbody>';
+                    res.data.forEach(row => {
+                        html += '<tr>';
+                        res.columns.forEach(c => html += `<td style="border:1px solid #444; padding:5px;">${row[c]}</td>`);
+                        html += '</tr>';
+                    });
+                    html += '</tbody></table>';
+                    resDiv.innerHTML = html;
+                }
+                // INSERT/UPDATE/CREATE 등 성공 메시지
+                else {
+                    resDiv.innerHTML = '<div style="color: #4ade80;">✅ ' + (res.message || '완료되었습니다!') + '</div>';
+                }
+            } else {
+                // 서버에서 에러 응답이 온 경우
+                resDiv.innerHTML = '<div style="color: #f87171;">❌ 에러: ' + res.message + '</div>';
+            }
+        } catch (e) {
+            // 네트워크 통신 자체가 실패한 경우
+            resDiv.innerHTML = '<div style="color: #f87171;">❌ 통신 에러: ' + e.message + '</div>';
+        }
+    }
 
     function applyStillsByCategory() {
         const category = document.getElementById('stillsCategory').value;
@@ -7453,12 +7484,10 @@ def pilot_patch_single():
 
         try:
             conn = get_db()
-            # 🔴 수정: cleanedName을 먼저 찾도록 쿼리 최적화
             row = conn.execute(
                 "SELECT path, name, category, tmdbId, posterPath FROM series WHERE cleanedName = ? LIMIT 1",
                 (target_name,)).fetchone()
 
-            # 만약 정확히 안 찾아지면 부분 일치로 시도
             if not row:
                 emit_ui_log(f"⚠️ 정확한 cleanedName 없음, LIKE 검색 시도: {target_name}", "warning")
                 row = conn.execute(
@@ -7469,24 +7498,21 @@ def pilot_patch_single():
                 emit_ui_log(f"❌ DB에서 '{target_name}'을 찾을 수 없습니다.", "error")
                 return
 
-            emit_ui_log(f"🔍 DB 발견: name='{row['name']}', cleanedName='{target_name}'", "info")
+            emit_ui_log(f"🔍 DB 발견: name='{row['name']}', path='{row['path']}'", "info")
 
             # 매칭 엔진 실행
             info = get_tmdb_info_server(target_name, category=row['category'], ignore_cache=True, path=row['path'])
 
             if info and not info.get('failed'):
-                emit_ui_log(f"✅ [TMDB 매칭 성공] ID: {info.get('tmdbId')}", "success")
+                # 🔴 성공 시 가독성 높은 로그 출력
+                emit_ui_log("✅ [TMDB 매칭 성공]", "success")
+                emit_ui_log(f"   - TMDB ID: {info.get('tmdbId')}", "info")
+                emit_ui_log(f"   - 제목: {info.get('title')}", "info")
+                emit_ui_log(f"   - 감독: {info.get('director') or '없음'}", "info")
+                emit_ui_log(f"   - 평점: {info.get('rating') or '없음'}", "info")
+                emit_ui_log(f"   - 줄거리: {len(info.get('overview', ''))}자 확보", "info")
+                emit_ui_log(f"   - 출연진: {len(info.get('actors', []))}명", "info")
 
-                # 업데이트 수행
-                # conn.execute("""
-                #     UPDATE series SET
-                #         tmdbId = COALESCE(NULLIF(tmdbId, ''), ?),
-                #         tmdbTitle = COALESCE(NULLIF(tmdbTitle, ''), ?),
-                #         posterPath = COALESCE(NULLIF(posterPath, ''), ?),
-                #         overview = COALESCE(NULLIF(overview, ''), ?),
-                #         failed = 0
-                #     WHERE path = ?
-                # """, (info.get('tmdbId'), info.get('title'), info.get('posterPath'), info.get('overview'), row['path']))
                 # 업데이트 수행
                 conn.execute("""
                     UPDATE series SET
@@ -7513,13 +7539,18 @@ def pilot_patch_single():
                     json.dumps(info.get('actors', []), ensure_ascii=False),
                     json.dumps(info.get('genreNames', []), ensure_ascii=False),
                     info.get('metadata_json'),
-                    row['path']  # 해당 경로의 시리즈만 정확히 타겟팅
+                    row['path']
                 ))
+
                 conn.commit()
                 build_all_caches()
                 emit_ui_log(f"💾 [완료] DB 업데이트 및 캐시 갱신", "success")
             else:
-                emit_ui_log(f"❌ [TMDB 매칭 실패]", "error")
+                # 🔴 실패 시 원인을 분류하여 상세 출력
+                reason = info.get('failed_reason', '정보 없음') if info else 'TMDB 응답 없음'
+                emit_ui_log("❌ [TMDB 매칭 실패]", "error")
+                emit_ui_log(f"   - 타겟 검색어: {target_name}", "error")
+                emit_ui_log(f"   - 실패 원인: {reason}", "error")
 
         except Exception as e:
             emit_ui_log(f"💥 [에러] {str(e)}", "error")
@@ -7529,6 +7560,94 @@ def pilot_patch_single():
 
     threading.Thread(target=run_pilot, daemon=True).start()
     return jsonify({"message": "테스트 시작. /updater 로그 확인하세요."})
+
+@app.route('/api/admin/patch_by_category')
+def patch_by_category():
+    target_cat = request.args.get('category')
+    if not target_cat:
+        return jsonify({"status": "error", "message": "카테고리가 없습니다."})
+
+    # 작업 시작 (비동기)
+    threading.Thread(target=run_patch_task_by_cat, args=(target_cat,), daemon=True).start()
+    return jsonify({"status": "success", "message": f"{target_cat} 카테고리 보수 작업을 시작합니다."})
+
+def run_patch_task_by_cat(target_cat):
+    # target_cat = request.args.get('category')  # 예: animations_all
+    if not target_cat:
+        return jsonify({"error": "category 파라미터를 입력하세요."}), 400
+
+    def run_patch_task():
+        set_update_state(is_running=True, task_name=f"[{target_cat}] 카테고리 일괄 보수", clear_logs=True)
+        emit_ui_log(f"🚀 [{target_cat}] 카테고리 메타데이터 보수 시작...", "info")
+
+        try:
+            conn = get_db()
+            # 해당 카테고리의 모든 시리즈 조회
+            rows = conn.execute("SELECT path, name, cleanedName FROM series WHERE category = ?",
+                                (target_cat,)).fetchall()
+
+            total = len(rows)
+            set_update_state(total=total)
+            success_count = 0
+
+            for idx, row in enumerate(rows):
+                name, path, cleaned = row['name'], row['path'], row['cleanedName']
+
+                with UPDATE_LOCK:
+                    UPDATE_STATE["current"] = idx + 1
+                    UPDATE_STATE["current_item"] = cleaned
+
+                # 1. 매칭 엔진 실행 (이미 정제된 cleanedName 사용)
+                try:
+                    info = get_tmdb_info_server(cleaned, category=target_cat, ignore_cache=True, path=path)
+                except Exception as e:
+                    emit_ui_log(f"⚠️ 요청 중 에러 발생: {str(e)}", "warning")
+                    time.sleep(2)  # 에러 시에는 더 길게 대기
+                    continue
+
+                if info and not info.get('failed'):
+                    # 2. 업데이트 수행
+                    conn.execute("""
+                        UPDATE series SET
+                            tmdbId = COALESCE(NULLIF(tmdbId, ''), ?),
+                            tmdbTitle = COALESCE(NULLIF(tmdbTitle, ''), ?),
+                            posterPath = COALESCE(NULLIF(posterPath, ''), ?),
+                            year = COALESCE(NULLIF(year, ''), ?),
+                            rating = COALESCE(NULLIF(rating, ''), ?),
+                            overview = COALESCE(NULLIF(overview, ''), ?),
+                            director = COALESCE(NULLIF(director, ''), ?),
+                            actors = COALESCE(NULLIF(actors, '[]'), ?),
+                            genreNames = COALESCE(NULLIF(genreNames, '[]'), ?),
+                            metadata_json = COALESCE(NULLIF(metadata_json, '{}'), ?),
+                            failed = 0
+                        WHERE path = ?
+                    """, (
+                        info.get('tmdbId'), info.get('title'), info.get('posterPath'), info.get('year'),
+                        info.get('rating'), info.get('overview'), info.get('director'),
+                        json.dumps(info.get('actors', []), ensure_ascii=False),
+                        json.dumps(info.get('genreNames', []), ensure_ascii=False),
+                        info.get('metadata_json'), path
+                    ))
+                    conn.commit()
+                    success_count += 1
+                    emit_ui_log(f"✅ [{idx + 1}/{total}] '{cleaned}' 매칭 성공", "success")
+                else:
+                    emit_ui_log(f"❌ [{idx + 1}/{total}] '{cleaned}' 매칭 실패", "error")
+
+                sleep_time = random.uniform(0.5, 1.2)
+                time.sleep(sleep_time)
+
+            build_all_caches()
+            emit_ui_log(f"🏁 [{target_cat}] 보수 완료 (성공: {success_count}/{total})", "success")
+
+        except Exception as e:
+            emit_ui_log(f"💥 치명적 에러: {str(e)}", "error")
+        finally:
+            conn.close()
+            set_update_state(is_running=False)
+
+    threading.Thread(target=run_patch_task, daemon=True).start()
+    return jsonify({"message": f"'{target_cat}' 카테고리 일괄 매칭을 시작합니다. /updater 로그를 확인하세요."})
 
 # --- [추가] 수동 포스터 변경 라우트 ---
 @app.route('/custom_poster/<filename>')
