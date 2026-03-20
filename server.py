@@ -238,6 +238,13 @@ def init_db():
                 FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE CASCADE
             )
         ''')
+        # 기존 코드 근처에 아래와 같이 수정하세요
+        try:
+            cursor.execute('ALTER TABLE series ADD COLUMN metadata_json TEXT')
+            log("DB", "metadata_json 컬럼 추가 완료")
+        except sqlite3.OperationalError:
+            # 이미 존재하는 경우이므로 무시하고 진행
+            pass
 
         def add_col_if_missing(table, col, type):
             cursor.execute(f"PRAGMA table_info({table})")
@@ -362,136 +369,101 @@ def natural_sort_key(s):
     # 미리 정규화된 문자열을 사용하여 CPU 부하 감소
     return [int(text) if text.isdigit() else text.lower() for text in _NATURAL_SORT_RE.split(nfc(str(s)))]
 
-def clean_title_complex(title, full_path=None, base_path=None):
-    if not title: return "", None
-    t_orig = nfc(title)
 
-    # [로그] 시작 지점
-    is_bleach = "블리치" in t_orig
-    if is_bleach: print(f"\n[DEBUG] === 블리치 분석 시작: {t_orig} ===")
+def clean_title_complex(title, full_path=None, base_path=None):
+
+    # 1. 정제 시작 전, 가장 먼저 '극장판'과 그 주변 기호/공백을 완벽 제거
+    # 극장판 앞에 붙은 기호나 뒤의 공백까지 포함해서 처리합니다.
+    title = re.sub(r'(?i)\[?극장판\]?\s*', '', title)
+    title = re.sub(r'(?i)\(극장판\)\s*', '', title)
+
+    # 2. 자막/더빙 등 불필요 정보 제거
+    title = re.sub(r'(?i)[\(\[\{【『「（](자막|더빙|한글|영어)[\)\]\}】』」）]', '', title)
+    title = re.sub(r'\(자막\)|\[자막\]|\(더빙\)|\[더빙\]', '', title, flags=re.IGNORECASE)
+
+    # 3. 추가: 이제 남은 특수문자나 불필요한 공백 제거
+    title = title.strip()
+
+    if not title: return "", None
+
+    # 2. 이후 정규화 및 정제 수행
+    t_orig = nfc(title)
 
     year_match = REGEX_YEAR.search(t_orig)
     extracted_year = year_match.group().strip('()') if year_match else None
 
     t_low = t_orig.lower().replace(" ", "")
-    # is_movie = any(x in t_low for x in ['극장판', 'themovie', '劇場版', 'thelast'])
     is_movie = any(x in t_low for x in ['극장판', '劇場版'])
     series_name = ""
-    # [추가] 극장판이 포함된 제목은 정제 로직을 타지 않도록 보호
-    # if "극장판" in t_orig:
-    #     # 폴더명(예: 극장판 하이큐!! 쓰레기장의 결전 (2024))에서 연도 제외한 전체를 제목으로
-    #     series_name = t_orig.split('(')[0].strip()
-    #     series_name = series_name.replace('극장판 ', '')  # '극장판 ' 제거 후 진짜 제목만
 
-    # [수정] '극장판'이 들어간 제목을 다룰 때 하위 폴더명('가')을 결합하지 않도록 수정
+    # 1. '극장판' 처리 (영화일 경우 폴더명 결합 방지)
     if "극장판" in t_orig:
-        # 파일명에서 '극장판'을 포함한 전체 문자열을 일단 제목으로 잡음
         series_name = t_orig.split('(')[0].strip()
-        # 기술적 태그나 확장자만 제거하고 '가' 같은 폴더명을 더하지 않음
         series_name = REGEX_EXT.sub('', series_name)
-        # 여기서 바로 리턴하여 하위 폴더를 거슬러 올라가는 후속 로직(400행 이후) 진입을 방지
-        return series_name.strip(), extracted_year
+        # 영화일 경우 '극장판' 접두사 보존 로직은 아래에서 처리
+    else:
+        # 2. 폴더 구조 분석 (SKIP_DIRS 활용)
+        if full_path:
+            parts = [p.strip() for p in full_path.replace('\\', '/').split('/') if p.strip()]
+            SKIP_DIRS = {'애니메이션', '일본애니메이션', '라프텔', '시리즈', '기타', 'video', 'volume1', 'volume2', 'movies',
+                         'animations_all', 'koreantv', 'foreigntv', 'air', 'gdrive', 'nas', 'share', '더빙', '자막',
+                         'gds3', 'specials', 'season', '시즌', '극장판', '극장', 'movie', 'themovie', 'other', '0z',
+                         'featurettes'}
 
-    if is_movie and year_match:
-        potential = t_orig[:year_match.start()].replace('.', ' ').strip()
-        if len(potential) >= 2:
-            series_name = potential
-            if is_bleach: print(f"[DEBUG] 1단계(영화+연도): {series_name}")
-
-    if full_path:
-        parts = [p.strip() for p in full_path.replace('\\', '/').split('/') if p.strip()]
-        # 기존 SKIP_DIRS에 'other', 'season' 관련 키워드 추가
-        SKIP_DIRS = {'애니메이션', '일본애니메이션', '라프텔', '시리즈', '기타', 'video', 'volume1', 'volume2', 'movies', 'animations_all',
-                     'koreantv', 'foreigntv', 'air', 'gdrive', 'nas', 'share', '더빙', '자막', 'gds3', 'video', 'GDS3',
-                     'GDRIVE', 'VIDEO', 'specials', 'season', '시즌', '극장판', '극장', 'movie', 'themovie',
-                     'other', '0z', 'featurettes'}  # 여기 추가!
-
-        if not series_name:
             for p in reversed(parts[:-1]):
                 p_clean = nfc(p.lower().replace(" ", ""))
-
-                # [핵심] 'Season', '시즌', 'other' 등 의미 없는 폴더는 무조건 무시
-                if any(x in p_clean for x in ['season', '시즌', 'other', 'featurettes', '0z']):
-                    continue
-                # [기존] 1글자 초성 건너뛰기
-                if len(p_clean) == 1 and re.match(r'[가-하0-9]', p_clean):
-                    continue
-                if p_clean in SKIP_DIRS:
-                    continue
-
-                series_name = p
+                if any(x in p_clean for x in ['season', '시즌', 'other', 'featurettes', '0z']): continue
+                if len(p_clean) == 1 and re.match(r'[가-하0-9]', p_clean): continue
+                if p_clean in SKIP_DIRS: continue
+                series_name = re.sub(r'(?i)극장판', '', p).strip()
                 break
 
+    # 3. 파일명 기반 기본 이름 설정
     if not series_name:
         series_name = os.path.splitext(t_orig)[0]
-        if is_bleach: print(f"[DEBUG] 3단계(파일명기반): {series_name}")
 
     series_name = REGEX_BRACKETS.sub(' ', series_name)
-    if is_bleach: print(f"[DEBUG] 4단계(괄호제거): {series_name}")
 
+    # 4. 에피소드 마커 제거
     marker_match = REGEX_EP_MARKER_STRICT.search(series_name)
     if marker_match:
         potential = series_name[:marker_match.start()].strip()
-        if len(potential) >= 2:
-            series_name = potential
-            if is_bleach: print(f"[DEBUG] 5단계(마커절단): {series_name}")
+        if len(potential) >= 2: series_name = potential
 
-    # 범인으로 의심되는 기수/회차 제거 구간
-    # [수정] 영화(극장판)일 때는 '1기', '2기'를 지우지 않고 보존해야 함!
+    # 5. 숫자 포함 기수/시즌 제거 (범위 표기 1~4 등은 보존)
+    # (?<![\d~-]) 패턴을 사용하여 1~4 같은 범위는 남김
+    # series_name = re.sub(r'(?i)(?<![\d~-])\s*\d{1,4}\s*(?:기|화|회|부|장|쿨|편|시즌|Season|Part|파트)\b', ' ', series_name)
+    #
+    # if not is_movie:
+    #     series_name = re.sub(r'(?i)[.\s_-](?:E|EP|S)\d+\b', ' ', series_name)
+
+    series_name = re.sub(r'(?i)\d{1,4}\s*~\s*\d{1,4}\s*(?:기|화|회|부|장|쿨|편|시즌|Season|Part|파트)', '', series_name)
+    series_name = re.sub(r'(?i)\d{1,4}\s*(?:기|화|회|부|장|쿨|편|시즌|Season|Part|파트)', '', series_name)
+    series_name = re.sub(r'(?i)(?:기|화|회|부|장|쿨|편|시즌|Season|Part|파트)$', '', series_name)
+    series_name = series_name.strip()
     if not is_movie:
-        series_name = re.sub(r'(?i)\b\d{1,4}\s*(?:기|화|회|부|장|쿨|편|시즌|Season|Part|파트)\b', ' ', series_name)
-    if is_bleach: print(f"[DEBUG] 6단계(기수제거): {series_name}")
+        series_name = re.sub(r'(?i)[.\s_-](?:E|EP|S)\d+\b', '', series_name)
 
-    # 1. [핵심] '1~4기' 같은 묶음 범위를 실제 파일 회차(E01, E02...)에 맞춰서 개별화
-    # 반드시 아래 정제 로직(2, 3번)보다 먼저 실행되어야 합니다.
-    range_match = re.search(r'(\d+)[~-](\d+)\s*(?:기|화|회|부|장|쿨|편|시즌|Season|Part|파트)?', series_name)
-    if range_match:
-        actual_ep = re.search(r'(?i)(?:[.\s_-]E|EP)\s*(\d+)|(\d+)\s*(?:화|회)', t_orig)
-        if actual_ep:
-            ep_num = int(actual_ep.group(1) or actual_ep.group(2))
-            series_name = series_name.replace(range_match.group(0), f"{ep_num}기")
-
-    # 2. 일반적인 기수/회차 제거 (영화가 아닐 때만 수행하여 '극장판 블리치 1기' 같은 이름을 보호)
-    if not is_movie:
-        series_name = re.sub(r'(?i)\b\d{1,4}\s*(?:기|화|회|부|장|쿨|편|시즌|Season|Part|파트)\b', ' ', series_name)
-        series_name = re.sub(r'(?i)[.\s_-](?:E|EP|S)\d+\b', ' ', series_name)
-
-    # 3. 공통 정제 (기술 태그, 특수문자, 공백 제거)
+    # 6. 기술 태그 및 특수문자 정리
     series_name = REGEX_TECHNICAL_TAGS.sub('', series_name)
     series_name = REGEX_SPECIAL_CHARS.sub(' ', series_name)
     series_name = REGEX_SPACES.sub(' ', series_name).strip()
 
-    # if len(series_name) < 1 or series_name.isdigit():
-    #     if full_path:
-    #         parts = [p.strip() for p in full_path.replace('\\', '/').split('/') if p.strip()]
-    #         # 폴더명에서 의미 있는 이름을 끝까지 찾아냄
-    #         for p in reversed(parts[:-1]):
-    #             p_clean = REGEX_SPECIAL_CHARS.sub('', p).strip()
-    #             if len(p_clean) >= 1:  # 1글자라도 폴더명이라면 인정
-    #                 series_name = p
-    #                 break
-    #     else:
-    #         series_name = t_orig  # 정제 실패 시 원래 이름 그대로 유지
-
-    # [수정] 24, 1박2일 같이 숫자가 포함되었거나 길이가 충분하면 정제 성공으로 간주
+    # 7. 이름 유효성 검사 및 최종 보정
     is_meaningful = (len(series_name) >= 2) or (any(c.isdigit() for c in series_name))
+    if not is_meaningful and full_path:
+        parts = [p.strip() for p in full_path.replace('\\', '/').split('/') if p.strip()]
+        for p in reversed(parts[:-1]):
+            p_clean = nfc(p.lower().replace(" ", ""))
+            # ... (SKIP_DIRS 필터링 코드 그대로 유지) ...
+            if p_clean in SKIP_DIRS: continue
 
-    if not is_meaningful:
-        if full_path:
-            parts = [p.strip() for p in full_path.replace('\\', '/').split('/') if p.strip()]
-            for p in reversed(parts[:-1]):
-                p_clean = REGEX_SPECIAL_CHARS.sub('', p).strip()
-                # 1글자 초성이나 숫자 폴더가 아닌 폴더를 찾을 때까지 거슬러 올라감
-                if len(p_clean) >= 2 or (len(p_clean) == 1 and not re.match(r'[가-하0-9]', p_clean)):
-                    series_name = p
-                    break
-        else:
-            series_name = t_orig
+            # [수정] 폴더명에서 '극장판'을 강제로 제거하고 series_name에 대입
+            series_name = re.sub(r'(?i)극장판', '', p).strip()
+            break
+    # 8. 최종 보루 (반환 직전)
+    series_name = re.sub(r'(?i)극장판', '', series_name).strip()
 
-    if is_movie and "극장판" not in series_name:
-        series_name = f"극장판 {series_name}"
-
-    if is_bleach: print(f"[DEBUG] === 최종 결과: {series_name} ===\n")
     return series_name.strip(), extracted_year
 
 @app.route('/api/repair/naruto_movie_liberation')
@@ -624,46 +596,62 @@ def extract_tmdb_id(title):
     return int(match.group(1)) if match else None
 
 
+# def simple_similarity(s1, s2):
+#     s1, s2 = s1.lower().replace(" ", ""), s2.lower().replace(" ", "")
+#     if s1 == s2: return 1.0
+#     if s1 in s2 or s2 in s1: return 0.8
+#     return 0.0
+
 def simple_similarity(s1, s2):
-    s1, s2 = s1.lower().replace(" ", ""), s2.lower().replace(" ", "")
-    if s1 == s2: return 1.0
-    if s1 in s2 or s2 in s1: return 0.8
+    """기존 정제 키워드(편, 기, 화 등)를 활용하여 순수 제목만 비교합니다."""
+
+    def clean(text):
+        if not text: return ""
+        # 1. 괄호 내용 제거
+        text = re.sub(r'\(.*?\)|\[.*?\]', '', nfc(text))
+        # 2. 기존 로직에 있는 '편, 기, 화, 회, 시즌' 등 수식어 제거 (기존 정규식 활용)
+        text = re.sub(r'(?i)\s*(?:기|화|회|부|장|쿨|편|시즌|Season|Part|파트)\s*', ' ', text)
+        # 3. 특수문자 및 공백 완전 제거
+        text = re.sub(r'[^가-힣a-zA-Z0-9]', '', text)
+        return text.lower().strip()
+
+    c1, c2 = clean(s1), clean(s2)
+    if not c1 or not c2: return 0.0
+    if c1 == c2: return 1.0  # 이제 '편'이 빠져서 1.0(60점)이 나옵니다.
+    if c1 in c2 or c2 in c1: return 0.8
     return 0.0
 
-
 # --- [TMDB API 보완: 지능형 재검색 및 랭킹 시스템] ---
-def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  # category 매개변수 추가
+def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):
     if not title: return {"failed": True}
+
     hint_id = extract_tmdb_id(title)
-    if not hint_id and path: # 제목에 ID가 없으면 경로(폴더명)에서 추출 시도
-        hint_id = extract_tmdb_id(path)
-    # ct, year = clean_title_complex(title)
-    # 검색 전 정제: 파일명에 포함된 'Movie' 관련 키워드 제거
-    ct = title
-    ct = re.sub(r'(?i)\b(?:the\s+)?movie(?:\s+night|\s+madness|\s+time)?\b', '', ct)
+    # 2. 정제 로직 개선
+    if hint_id:
+        ct, year = title, None
+    else:
+        try:
+            ct, year = clean_title_complex(title, full_path=path)
+            log("DEBUG_TRACE", f"정제 완료: '{ct}' (연도: {year})")
+        except Exception as e:
+            ct, year = title, None
 
-    try:
-        # 안전한 정제 호출
-        ct, year_from_clean = clean_title_complex(ct, full_path=path)
-    except Exception as e:
-        log("TMDB_CLEAN_ERROR", f"정제 중 오류: {e}")
-        ct = title  # 정제 실패 시 원본 사용
+    # 3. 검색 타입 결정 (여기서 title 대신 ct 사용!)
+    # '극장판'이라는 단어가 정제 과정에서 다 지워졌을 테니,
+    # 이제는 category가 movies인지가 가장 확실한 기준입니다.
+    is_movie = (category == 'movies' or '극장판' in title)  # title에 극장판이 남아있을 수 있으므로 이 부분은 유지
+    search_type = 'movie' if is_movie else 'tv'
 
-    if not ct or REGEX_FORBIDDEN_TITLE.match(ct):
-        return {"failed": True, "forbidden": True}
-
-    # 카테고리에 따른 선호 타입 결정 (Taxi Driver 등 동명 타이틀 오매칭 방지)
-    pref_mtype = 'movie' if (category == 'movies' or '극장판' in title) else 'tv' if category in ['koreantv', 'foreigntv',
-                                                                                               'air',
-                                                                                               'animations_all'] else None
-
+    # pref_mtype도 마찬가지로 설정
+    pref_mtype = 'movie' if is_movie else (
+        'tv' if category in ['koreantv', 'foreigntv', 'air', 'animations_all'] else None)
+    # 3. 캐시 로직 (이제 변수명 고민할 필요 없이 ct만 사용)
     cache_key = f"{ct}_{year}_{category}" if year else f"{ct}_{category}"
     h = hashlib.md5(nfc(cache_key).encode()).hexdigest()
 
-    if not ignore_cache and h in TMDB_MEMORY_CACHE:
-        return TMDB_MEMORY_CACHE[h]
-
+    # 4. 캐시 체크
     if not ignore_cache:
+        if h in TMDB_MEMORY_CACHE: return TMDB_MEMORY_CACHE[h]
         try:
             conn = get_db()
             row = conn.execute('SELECT data FROM tmdb_cache WHERE h = ?', (h,)).fetchone()
@@ -675,10 +663,9 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  
         except:
             pass
 
-    log("TMDB", f"🔍 지능형 검색 시작: '{ct}'" + (f" ({year})" if year else "") + (f" [Cat: {category}]" if category else ""))
-    headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
-    # [수정 후: 성인물 검색 완전 차단]
     base_params = {"include_adult": "false", "region": "KR"}
+    # 🔴 여기가 바로 그 '지능형 검색 시작' 로그 찍히는 곳입니다!
+    headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
 
     def perform_search(query, lang=None, m_type='multi', search_year=None):
         if not query or len(query) < 1: return []
@@ -693,8 +680,72 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  
         except:
             return []
 
+    # def rank_results(results, target_title, target_year, pref_type=None):
+    #     if not results: return None, []
+    #     scored = []
+    #     for res in results:
+    #         if res.get('media_type') == 'person': continue
+    #         m_type = res.get('media_type') or ('movie' if res.get('title') else 'tv')
+    #         score = 0
+    #         res_title = res.get('title') or res.get('name') or ""
+    #         res_year = (res.get('release_date') or res.get('first_air_date') or "").split('-')[0]
+    #
+    #         # 1. 유사도 점수 (60점 만점)
+    #         sim = simple_similarity(target_title, res_title)
+    #         score += sim * 60
+    #
+    #         # 2. 연도 가중치 (30점 만점)
+    #         if target_year and res_year:
+    #             if target_year == res_year:
+    #                 score += 30
+    #             elif abs(int(target_year) - int(res_year)) <= 1:
+    #                 score += 15
+    #         elif not target_year:
+    #             score += 10
+    #
+    #         # 3. 기타 가중치 (인기도, 포스터 유무)
+    #         score += min(res.get('popularity', 0) / 10, 10)
+    #         if res.get('poster_path'): score += 5
+    #
+    #         # 4. 타입 가중치 (일치 시 40점 추가)
+    #         if pref_type and m_type == pref_type:
+    #             score += 40
+    #
+    #         scored.append((score, res))
+    #
+    #     # 점수순 정렬
+    #     scored.sort(key=lambda x: x[0], reverse=True)
+    #
+    #     # 진단 데이터 수집
+    #     candidates = []
+    #     for s, r in scored[:3]:
+    #         candidates.append({
+    #             "title": r.get('title') or r.get('name'),
+    #             "year": (r.get('release_date') or r.get('first_air_date') or "").split('-')[0],
+    #             "score": round(s, 1),
+    #             "type": r.get('media_type') or ('movie' if r.get('title') else 'tv')
+    #         })
+    #
+    #     # 🔴 핵심 변경:
+    #     # 1. 점수 60점 이상만 통과
+    #     # 2. 만약 pref_type(카테고리)이 있다면, 반드시 1위 결과의 타입과 일치해야만 매칭
+    #     best = None
+    #     if scored and scored[0][0] >= 60:
+    #         top_result = scored[0][1]
+    #         top_type = top_result.get('media_type') or ('movie' if top_result.get('title') else 'tv')
+    #
+    #         if pref_type is None or top_type == pref_type:
+    #             best = top_result
+    #         else:
+    #             log("PATCH", f"⚠️ [타입불일치] '{target_title}' -> 상위 매칭 타입({top_type})이 카테고리({pref_type})와 달라 거부됨")
+    #
+    #     return best, candidates
+
     def rank_results(results, target_title, target_year, pref_type=None):
-        if not results: return None, []
+        if not results:
+            log("RANK", f"⚠️ [결과없음] '{target_title}' -> 검색 결과가 없습니다.")
+            return None, []
+
         scored = []
         for res in results:
             if res.get('media_type') == 'person': continue
@@ -703,9 +754,11 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  
             res_title = res.get('title') or res.get('name') or ""
             res_year = (res.get('release_date') or res.get('first_air_date') or "").split('-')[0]
 
+            # 1. 유사도 점수 (60점 만점)
             sim = simple_similarity(target_title, res_title)
             score += sim * 60
 
+            # 2. 연도 가중치 (30점 만점)
             if target_year and res_year:
                 if target_year == res_year:
                     score += 30
@@ -714,29 +767,48 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  
             elif not target_year:
                 score += 10
 
+            # 3. 기타 가중치 (인기도, 포스터 유무)
             score += min(res.get('popularity', 0) / 10, 10)
             if res.get('poster_path'): score += 5
 
-            # [추가] 선호하는 타입(영화/TV)과 일치할 경우 큰 가중치 부여
-            if pref_type and m_type == pref_type:
-                score += 40
+            # 4. 타입 가중치 (일치 시 40점 추가)
+            # 애니메이션 카테고리(`pref_type`이 'tv')에서는 영화(movie) 타입도 허용
+            log("DEBUG_RANK",
+                f"타입 체크: target_title='{target_title}', pref_type='{pref_type}', m_type='{m_type}', 현재점수={score}")
 
+            if pref_type and (m_type == pref_type or (pref_type == 'tv' and m_type == 'movie')):
+                score += 40
+                log("DEBUG_RANK", f"✅ 타입 가중치 +40 적용됨! 최종 점수={score}")
+            else:
+                log("DEBUG_RANK", f"❌ 타입 가중치 미적용. 조건 불일치.")
             scored.append((score, res))
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
-        # [추가] 진단 데이터 수집
         candidates = []
         for s, r in scored[:3]:
             candidates.append({
                 "title": r.get('title') or r.get('name'),
-                "year": (r.get('release_date') or r.get('first_air_date') or "").split('-')[0],
                 "score": round(s, 1),
                 "type": r.get('media_type') or ('movie' if r.get('title') else 'tv')
             })
 
-        # [수정] 반환 시 항상 두 개의 값을 반환하도록 보장
-        best = scored[0][1] if scored and scored[0][0] > 35 else None
+        best = None
+        if scored:
+            best_score, best_res = scored[0]
+            top_type = best_res.get('media_type') or ('movie' if best_res.get('title') else 'tv')
+
+            # [무결성 최우선] 80점 미만이면 매칭 거부
+            if best_score >= 80:
+                best = best_res
+                if pref_type and top_type != pref_type:
+                    log("RANK",
+                        f"✅ [타입상이] '{target_title}' -> 카테고리({pref_type})와 다르지만 점수({best_score:.1f})가 높아 매칭 승인 (타입: {top_type})")
+                else:
+                    log("RANK", f"✅ [매칭승인] '{target_title}' -> 1위: {candidates[0]['title']} (점수:{best_score:.1f})")
+            else:
+                log("RANK", f"⚠️ [매칭거부] '{target_title}' -> 최고 점수 {best_score:.1f}가 기준(80) 미달")
+
         return best, candidates
 
     try:
@@ -754,12 +826,34 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  
                     break
 
         if not best_match:
-            results = perform_search(ct, "ko-KR", "multi", year)
+            # 🔴 [강력한 로그 보완] perform_search 호출 전후로 어떤 파라미터가 들어가는지 확인
+            log("TMDB_DEBUG", f"SEARCH_START: 검색어='{ct}', 타입='{search_type}', 연도='{year}'")
+            results = perform_search(ct, "ko-KR", search_type, year)
+            if not results or len(results) == 0:
+                alternative_type = 'movie' if search_type == 'tv' else 'tv'
+                log("SEARCH", f"🔄 타입 전환 재검색 시도: {search_type} -> {alternative_type}")
+                results = perform_search(ct, "ko-KR", alternative_type, year)
+
+                # 3. 그래도 없으면 타입을 바꾼 상태에서 '편'을 제거하고 마지막 재검색
+                if (not results or len(results) == 0) and ct.endswith('편'):
+                    ct_no_pyeon = ct[:-1].strip()
+                    log("SEARCH", f"🔄 '편' 제거 재검색 시도: {ct_no_pyeon}")
+                    results = perform_search(ct_no_pyeon, "ko-KR", alternative_type, year)
+            # 🔴 [핵심] 검색 결과 개수 로그 추가
+            log("TMDB_DEBUG", f"SEARCH_RESULT: {len(results)}건 발견")
+
             best_match, all_candidates = rank_results(results, ct, year, pref_mtype)
+            # 검색 결과가 있다면, 어떤 결과들이 들어왔는지 제목만이라도 로그로 확인
+            if results:
+                titles = [r.get('title') or r.get('name') for r in results[:5]]
+                log("TMDB_DEBUG", f"TOP_5_TITLES: {titles}")
+            # 만약 best_match가 없으면 왜 없는지 이유를 랭킹 결과에서 찾음
+            if not best_match:
+                log("TMDB_DEBUG", "RANKING_FAIL: best_match 없음. rank_results 로직을 통과하지 못함.")
 
             if not best_match and year:
                 log("TMDB", f"🔄 연도 제외 재검색: '{ct}'")
-                results = perform_search(ct, "ko-KR", "multi", None)
+                results = perform_search(ct, "ko-KR", search_type, None)
                 best_match, all_candidates = rank_results(results, ct, year, pref_mtype)
 
             if not best_match:
@@ -769,7 +863,7 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  
                     alt = alt.strip()
                     if len(alt) >= 2 and not REGEX_TECHNICAL_TAGS.search(alt):
                         log("TMDB", f"🔄 대체 제목 검색: '{alt}'")
-                        results = perform_search(alt, None, "multi", year)
+                        results = perform_search(alt, None, search_type, year)
                         best_match, all_candidates = rank_results(results, alt, year, pref_mtype)
                         if best_match: break
 
@@ -778,7 +872,7 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  
                 ko_only = "".join(re.findall(r'[가-힣\s]+', ct)).strip()
                 if ko_only and ko_only != ct and len(ko_only) >= 2:
                     log("TMDB", f"🔄 한글 부분 재검색: '{ko_only}'")
-                    results = perform_search(ko_only, "ko-KR", "multi", year)
+                    results = perform_search(ko_only, "ko-KR", search_type, year)
                     best_match, all_candidates = rank_results(results, ko_only, year, pref_mtype)
 
             if not best_match:
@@ -787,7 +881,7 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  
                 for part in cjk_parts:
                     if len(part) >= 2:
                         log("TMDB", f"🔄 원어 부분 검색: '{part}'")
-                        results = perform_search(part, None, "multi", year)
+                        results = perform_search(part, None, search_type, year)
                         best_match, all_candidates = rank_results(results, part, year, pref_mtype)
                         if best_match: break
 
@@ -799,7 +893,7 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  
                         sub_title = p.strip()
                         if len(sub_title) >= 2 and not REGEX_FORBIDDEN_TITLE.match(sub_title):
                             log("TMDB", f"🔄 부분 제목 검색: '{sub_title}'")
-                            results = perform_search(sub_title, "ko-KR", "multi", year)
+                            results = perform_search(sub_title, "ko-KR", search_type, year)
                             best_match, all_candidates = rank_results(results, sub_title, year, pref_mtype)
                             if best_match: break
 
@@ -825,6 +919,20 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  
             crew_data = d_resp.get('credits', {}).get('crew', [])
             director = next((c['name'] for c in crew_data if c.get('job') == 'Director'), "")
 
+            # 여기서 d_resp를 그대로 JSON으로 저장 준비
+            # 필요한 핵심 정보만 따로 뽑고, 나머지는 metadata_json에 통째로 담습니다.
+            extra_meta = {
+                "tagline": d_resp.get("tagline"),
+                "homepage": d_resp.get("homepage"),
+                "original_language": d_resp.get("original_language"),
+                "status": d_resp.get("status"),
+                "networks": d_resp.get("networks"),
+                "vote_average": d_resp.get("vote_average"),
+                "popularity": d_resp.get("popularity"),
+                "backdrop_path": d_resp.get("backdrop_path"),
+                "created_by": d_resp.get("created_by")
+            }
+
             info = {
                 "tmdbId": f"{m_type}:{t_id}",
                 "title": d_resp.get('title') or d_resp.get('name'),
@@ -837,7 +945,15 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):  
                 "overview": d_resp.get('overview'),
                 "rating": rating,
                 "seasonCount": d_resp.get('number_of_seasons'),
-                "runtime": d_resp.get('runtime'),  # <-- 영화 전체 런타임 추가 (분 단위)
+                "runtime": d_resp.get('runtime'),
+                "metadata_json": json.dumps({
+                    "tagline": d_resp.get("tagline"),
+                    "backdrop_path": d_resp.get("backdrop_path"),
+                    "homepage": d_resp.get("homepage"),
+                    "status": d_resp.get("status"),
+                    "vote_average": d_resp.get("vote_average"),
+                    "popularity": d_resp.get("popularity")
+                }, ensure_ascii=False),
                 "failed": False
             }
 
@@ -7000,95 +7116,419 @@ def repair_wrong_tmdb_title():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route('/api/admin/patch_ratings_only', methods=['POST'])
-def patch_ratings_only():
+@app.route('/api/admin/patch_all_missing_metadata', methods=['GET', 'POST'])
+def patch_all_missing_metadata():
+    # 1. 작업 시작 스레드 분리
+    threading.Thread(target=run_patch_task, daemon=True).start()
+    return jsonify({"status": "success", "message": "전체 메타데이터 보수 작업을 백그라운드에서 시작했습니다. 로그를 확인하세요."})
+
+
+# def run_patch_task():
+#     try:
+#         conn = get_db()
+#         # 1. 시리즈 단위로 그룹화하여 조회
+#         rows = conn.execute("""
+#             SELECT tmdbId, name, category, GROUP_CONCAT(path, '|') as paths
+#             FROM series
+#             WHERE tmdbId IS NOT NULL
+#             AND (rating IS NULL OR overview IS NULL OR director IS NULL)
+#             GROUP BY tmdbId
+#         """).fetchall()
+#
+#         total = len(rows)
+#         if total == 0:
+#             emit_ui_log("보수할 항목이 없습니다.", "info")
+#             return
+#
+#         log("PATCH", f"🔍 누락된 메타데이터 총 {total}개 작품 보수 시작...")
+#         emit_ui_log(f"🛠 전체 메타데이터 보수 시작 (대상: {total}개 작품)", "info")
+#
+#         count = 0
+#         for idx, row in enumerate(rows):
+#             tmdb_id, name, cat = row['tmdbId'], row['name'], row['category']
+#
+#             # 진행 상황 UI 업데이트
+#             with UPDATE_LOCK:
+#                 UPDATE_STATE["current"] = idx + 1
+#                 UPDATE_STATE["total"] = total
+#                 UPDATE_STATE["current_item"] = name
+#
+#             if (idx + 1) % 5 == 0 or idx == 0:
+#                 progress = int(((idx + 1) / total) * 100)
+#                 emit_ui_log(f"⏳ 진행 중... ({idx + 1}/{total} | {progress}%) - 보수 중: {name}", "info")
+#
+#             try:
+#                 time.sleep(0.3)
+#                 info = get_tmdb_info_server(name, category=cat, ignore_cache=False)
+#
+#                 if info and not info.get('failed'):
+#
+#                     tmdb_type = info.get('tmdbId', '').split(':')[0]
+#                     is_match_type = (cat == 'movies' and tmdb_type == 'movie') or \
+#                                     (cat != 'movies' and tmdb_type == 'tv') or \
+#                                     (row['tmdbId'] is not None)  # <--- 여기가 핵심! 이미 ID가 있으면 무조건 통과
+#                     # 🔴 타입 불일치 확인을 위한 상세 로그 추가
+#                     log("PATCH_DEBUG_TYPE", f"'{name}' 매칭 정보: [카테고리: {cat}] vs [TMDB 타입: {tmdb_type}]")
+#                     if is_match_type:
+#                         # 🔴 로그 심기: 어떤 데이터가 업데이트 되는지 확인
+#                         log("PATCH_DEBUG", f"UPDATE 대상: {name} | ID: {tmdb_id}")
+#                         log("PATCH_DEBUG", f"업데이트 내용: Rating={info.get('rating')}, Dir={info.get('director')}")
+#                         # 🔴 tmdbId가 같은 모든 시리즈 행을 한 번에 업데이트 (path 조건 대신 tmdbId 사용)
+#                         conn.execute("""
+#                                                 UPDATE series SET
+#                                                     rating = COALESCE(NULLIF(?, ''), rating),
+#                                                     overview = COALESCE(NULLIF(?, ''), overview),
+#                                                     director = COALESCE(NULLIF(?, ''), director),
+#                                                     actors = COALESCE(NULLIF(?, '[]'), actors),
+#                                                     genreNames = COALESCE(NULLIF(?, '[]'), genreNames),
+#                                                     metadata_json = COALESCE(NULLIF(?, '{}'), metadata_json)
+#                                                 WHERE tmdbId = ?
+#                                             """, (
+#                             info.get('rating'),
+#                             info.get('overview'),
+#                             info.get('director'),
+#                             json.dumps(info.get('actors', []), ensure_ascii=False),
+#                             json.dumps(info.get('genreNames', []), ensure_ascii=False),
+#                             info.get('metadata_json'),
+#                             tmdb_id
+#                         ))
+#                         conn.commit()
+#                         count += 1
+#
+#                         log("PATCH", f"✅ [성공] '{name}' (ID: {tmdb_id}) 최종 업데이트 완료")
+#                         emit_ui_log(f"✅ [성공] '{name}' 보수 완료", "success")
+#                     else:
+#                         # 🔴 로그 상세화
+#                         log("PATCH", f"⚠️ [타입불일치] '{name}' (카테고리: {cat} / TMDB타입: {tmdb_type}) 매칭 제외")
+#                 else:
+#                     log("PATCH", f"⚠️ [정보없음] '{name}' (ID: {tmdb_id})")
+#
+#             except Exception as e:
+#                 log("PATCH_ERROR", f"❌ [에러] '{name}': {str(e)}")
+#                 continue
+#
+#         build_all_caches()
+#         final_msg = f"🎉 총 {count}/{total}개의 작품 메타데이터 보수 완료."
+#         log("PATCH", final_msg)
+#         emit_ui_log(final_msg, "success")
+#
+#     except Exception as e:
+#         log("PATCH_ERROR", f"치명적 오류 발생: {str(e)}")
+#         emit_ui_log(f"❌ 작업 중 치명적 오류 발생: {str(e)}", "error")
+
+def run_patch_task():
     try:
         conn = get_db()
-        rows = conn.execute("SELECT id, name, tmdbId, category FROM series WHERE tmdbId IS NOT NULL AND (rating IS NULL OR rating = '')").fetchall()
+        rows = conn.execute("""
+            SELECT tmdbId, name, category, GROUP_CONCAT(path, '|') as paths
+            FROM series
+            WHERE tmdbId IS NOT NULL
+            AND (rating IS NULL OR overview IS NULL OR director IS NULL)
+            GROUP BY tmdbId
+        """).fetchall()
 
         total = len(rows)
         if total == 0:
-            return jsonify({"status": "warning", "message": "등급 정보를 채울 항목이 없습니다."})
+            emit_ui_log("보수할 항목이 없습니다.", "info")
+            return
 
-        log("PATCH", f"🔍 등급 정보가 없는 {total}개의 항목 보수 시작...")
-        emit_ui_log(f"🛠 등급 정보 업데이트 시작 (대상: {total}개)", "info")
+        log("PATCH", f"🔍 누락된 메타데이터 총 {total}개 작품 보수 시작...")
+        emit_ui_log(f"🛠 전체 메타데이터 보수 시작 (대상: {total}개 작품)", "info")
 
         count = 0
         for idx, row in enumerate(rows):
-            name = row['name']
-            tmdb_id = row['tmdbId'].split(':')[-1]
-            cat = row['category']
-
-            # 진행 상황 로그 (10개 단위)
-            if (idx + 1) % 10 == 0 or idx == 0:
-                progress = int(((idx + 1) / total) * 100)
-                emit_ui_log(f"⏳ 진행 중... ({idx + 1}/{total} | {progress}%) - 작업 중: {name}", "info")
+            tmdb_id, name, cat = row['tmdbId'], row['name'], row['category']
+            with UPDATE_LOCK:
+                UPDATE_STATE["current"] = idx + 1
+                UPDATE_STATE["total"] = total
+                UPDATE_STATE["current_item"] = name
 
             try:
-                # API 호출 사이 안전 대기 (Rate Limit 방지)
-                time.sleep(0.25)
+                time.sleep(0.3)
+                # 🔴 [핵심] 이미 ID를 알고 있으므로 hint_id 형식을 사용하여 검색 생략하고 즉시 ID 상세조회
+                hint_name = f"{{tmdb-{tmdb_id.split(':')[1]}}} {name}"
+                info = get_tmdb_info_server(hint_name, category=cat, ignore_cache=True, path=None)
 
-                new_rating = get_tmdb_rating(tmdb_id, cat)
-
-                if new_rating:
-                    conn.execute("UPDATE series SET rating = ? WHERE id = ?", (new_rating, row['id']))
+                if info and not info.get('failed'):
+                    # 🔴 [무결성] 이미 ID가 확보된 보수 작업이므로 타입 체크를 무조건 통과시킴
+                    log("PATCH_DEBUG", f"UPDATE 실행: {name} (ID: {tmdb_id})")
+                    conn.execute("""
+                        UPDATE series SET
+                            rating = COALESCE(NULLIF(?, ''), rating),
+                            overview = COALESCE(NULLIF(?, ''), overview),
+                            director = COALESCE(NULLIF(?, ''), director),
+                            actors = COALESCE(NULLIF(?, '[]'), actors),
+                            genreNames = COALESCE(NULLIF(?, '[]'), genreNames),
+                            metadata_json = COALESCE(NULLIF(?, '{}'), metadata_json)
+                        WHERE tmdbId = ?
+                    """, (
+                        info.get('rating'), info.get('overview'), info.get('director'),
+                        json.dumps(info.get('actors', []), ensure_ascii=False),
+                        json.dumps(info.get('genreNames', []), ensure_ascii=False),
+                        info.get('metadata_json'), tmdb_id
+                    ))
+                    conn.commit()
                     count += 1
-                    log("PATCH", f"✅ [성공] '{name}' -> {new_rating}")
+                    emit_ui_log(f"✅ [성공] '{name}' 보수 완료", "success")
                 else:
-                    log("PATCH", f"⚠️ [정보없음] '{name}' (ID: {tmdb_id})")
+                    log("PATCH", f"⚠️ [정보없음] '{name}' (ID: {tmdb_id}) 조회 실패")
 
             except Exception as e:
                 log("PATCH_ERROR", f"❌ [에러] '{name}': {str(e)}")
-                # 429 에러(Too many requests)일 경우 좀 더 길게 대기
-                if "429" in str(e):
-                    time.sleep(5)
                 continue
 
+        build_all_caches()
+        final_msg = f"🎉 총 {count}/{total}개의 작품 메타데이터 보수 완료."
+        log("PATCH", final_msg)
+        emit_ui_log(final_msg, "success")
+    except Exception as e:
+        log("PATCH_ERROR", f"치명적 오류 발생: {str(e)}")
+        emit_ui_log(f"❌ 작업 중 치명적 오류 발생: {str(e)}", "error")
+
+
+@app.route('/api/admin/mass_match_recovery')
+def mass_match_recovery():
+    """실패했거나 매칭되지 않은 대규모 데이터를 카테고리별로 복구합니다."""
+    cat = request.args.get('category', 'all')
+
+    def run_task():
+        # 1. 상태 업데이트
+        set_update_state(is_running=True, task_name=f"대규모 복구: {cat}", clear_logs=True)
+        emit_ui_log(f"🚀 [{cat}] 카테고리 실패 데이터 리셋 및 매칭 시작...", "info")
+
+        conn = get_db()
+        # 2. failed=1로 잠들어 있는 녀석들을 다시 0으로 깨움
+        if cat == 'all':
+            conn.execute("UPDATE series SET failed = 0 WHERE tmdbId IS NULL OR tmdbId = ''")
+        else:
+            conn.execute("UPDATE series SET failed = 0 WHERE category = ? AND (tmdbId IS NULL OR tmdbId = '')", (cat,))
         conn.commit()
         conn.close()
 
-        build_all_caches()
-        final_msg = f"🎉 총 {count}/{total}개의 항목에 연령 정보를 추가했습니다."
-        log("PATCH", final_msg)
-        emit_ui_log(final_msg, "success")
-        return jsonify({"status": "success", "message": final_msg})
+        # 3. 기존의 병렬 매칭 엔진 가동 (force_all=True)
+        # 위에서 수정한 80점 기준 rank_results가 적용되어 안전하게 돌아감
+        if cat == 'all':
+            fetch_metadata_async(force_all=True)
+        else:
+            fetch_metadata_async(force_all=True, target_category=cat)
 
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    threading.Thread(target=run_task, daemon=True).start()
+    return jsonify({"status": "success", "message": f"{cat} 카테고리 복구 작업이 시작되었습니다. /updater 를 확인하세요."})
 
-def get_tmdb_rating(tmdb_id, category):
-    # 보안을 위해 토큰은 서버 설정 파일(config.py 등)에서 불러오도록 하세요!
-    BEARER_TOKEN = "YOUR_NEW_TOKEN_HERE"
-    BASE_URL = "https://api.themoviedb.org/3"
-    headers = {"accept": "application/json", "Authorization": f"Bearer {BEARER_TOKEN}"}
+
+@app.route('/api/admin/simulate_match_strict')
+def simulate_match_strict():
+    """DB/캐시를 절대 건드리지 않는 순수 단위 테스트용 매칭 시뮬레이터"""
+    query = request.args.get('q')
+    category = request.args.get('cat', '전체')
+
+    if not query:
+        return jsonify({"error": "검색어(?q=...)를 입력하세요."})
+
+    # 1. 시뮬레이션용 검색 타입 및 타겟 타입 설정
+    cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
+    internal_cat = cat_map.get(category, category)
+    search_type = 'movie' if (internal_cat == 'movies' or '극장판' in query) else 'tv'
+    pref_mtype = 'movie' if (internal_cat == 'movies' or '극장판' in query) else 'tv' if internal_cat in ['koreantv',
+                                                                                                       'foreigntv',
+                                                                                                       'air',
+                                                                                                       'animations_all'] else None
+
+    # 2. TMDB API 직접 호출 (검색 단계)
+    headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
+    params = {"include_adult": "false", "region": "KR", "language": "ko-KR", "query": query}
 
     try:
-        # 영화인 경우
-        if category == 'movies':
-            url = f"{BASE_URL}/movie/{tmdb_id}/release_dates"
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 429: raise Exception("429 Too Many Requests")
-            data = response.json()
-            for result in data.get('results', []):
-                if result.get('iso_3166_1') == 'KR':
-                    for release in result.get('release_dates', []):
-                        if release.get('certification'): return release['certification']
+        # multi 검색으로 영화/TV 모두 후보군 수집
+        resp = requests.get(f"{TMDB_BASE_URL}/search/multi", params=params, headers=headers, timeout=10)
+        results = resp.json().get('results', []) if resp.status_code == 200 else []
 
-        # TV 시리즈인 경우
-        else:
-            url = f"{BASE_URL}/tv/{tmdb_id}/content_ratings"
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 429: raise Exception("429 Too Many Requests")
-            data = response.json()
-            for result in data.get('results', []):
-                if result.get('iso_3166_1') == 'KR':
-                    return result.get('rating')
-        return None
+        # 3. 랭킹 로직 시뮬레이션 (80점 기준 적용)
+        scored = []
+        for res in results:
+            if res.get('media_type') == 'person': continue
+            m_type = res.get('media_type') or ('movie' if res.get('title') else 'tv')
+            res_title = res.get('title') or res.get('name') or ""
+
+            # 🔴 [핵심 수정] 원문 비교가 아니라 정제된 제목으로 비교
+            c_target, _ = clean_title_complex(query)
+            c_res, _ = clean_title_complex(res_title)
+
+            # 정제된 값으로 유사도 계산
+            sim = simple_similarity(c_target, c_res)
+            score = sim * 60
+
+            # 인기도 및 포스터 가중치
+            score += min(res.get('popularity', 0) / 10, 10)
+            if res.get('poster_path'): score += 5
+
+            # 🔴 [핵심 수정] 타입 가중치 (tv/movie 관계없이 가산점)
+            if pref_mtype:
+                if m_type == pref_mtype or (pref_mtype == 'tv' and m_type == 'movie'):
+                    score += 40
+
+            scored.append({"title": res_title, "score": round(score, 1), "type": m_type, "id": res.get('id')})
+        # 점수순 정렬
+        scored.sort(key=lambda x: x['score'], reverse=True)
+
+        # 4. 최종 판단
+        decision = "거부 (80점 미만)"
+        if scored and scored[0]['score'] >= 80:
+            decision = f"승인 (1위 {scored[0]['title']} 선택)"
+        # 🔴 핵심: get_tmdb_info_server에게 query 전체가 아니라 '정제된 c_target'을 전달합니다.
+        # 기존 정제 로직에서 '귀멸의 칼날'만 뽑아냈다면 그걸 넘겨야 TMDB가 검색을 합니다.
+        actual_result = get_tmdb_info_server(c_target if c_target else query, category=internal_cat, ignore_cache=True)
+        log("SIMULATE_TEST", f"실제 서버 매칭 결과 (검색어: {c_target}): {actual_result}")
+        return jsonify({
+            "unit_test": {
+                "input_query": query,
+                "target_category": internal_cat,
+                "pref_type": pref_mtype,
+                "final_decision": decision,
+                "candidates_found": len(scored),
+                "top_candidates": scored[:5]
+            },
+            "status": "No DB/Cache modified"
+        })
+
+        actual_result = get_tmdb_info_server(query, category=internal_cat, ignore_cache=True)
+
+        # 실제 매칭 결과가 무엇인지 확인하기 위한 로그
+        log("SIMULATE_TEST", f"실제 서버 매칭 결과: {actual_result}")
+
     except Exception as e:
-        # 상위 함수에서 처리하도록 에러를 그대로 전달/로그
-        raise e
+        return jsonify({"error": str(e)})
 
 
+@app.route('/api/admin/pilot_patch')
+def pilot_patch():
+    """딱 5개만 골라서 실제 업데이트를 해보고 로그를 확인합니다."""
+
+    def run_pilot():
+        set_update_state(is_running=True, task_name="5건 파일럿 테스트", clear_logs=True)
+        conn = get_db()
+        # 아직 tmdbId가 없는 놈들 중 딱 5개만 선정
+        targets = conn.execute(
+            "SELECT path, name, category, posterPath FROM series WHERE (tmdbId IS NULL OR tmdbId = '') LIMIT 5").fetchall()
+
+        for row in targets:
+            emit_ui_log(f"🧪 테스트 중: {row['name']}", "info")
+            info = get_tmdb_info_server(row['name'], category=row['category'], ignore_cache=True)
+
+            if info and not info.get('failed'):
+                # 기존 데이터 보존을 확인하기 위한 로그
+                old_poster = row['posterPath'] or "없음"
+                new_poster = info.get('posterPath')
+
+                # SQL: COALESCE(NULLIF(col, ''), ?) 를 사용하여 기존에 값이 있으면 절대 안 건드림
+                conn.execute("""
+                    UPDATE series SET
+                        tmdbId = COALESCE(NULLIF(tmdbId, ''), ?),
+                        tmdbTitle = COALESCE(NULLIF(tmdbTitle, ''), ?),
+                        posterPath = COALESCE(NULLIF(posterPath, ''), ?),
+                        overview = COALESCE(NULLIF(overview, ''), ?),
+                        failed = 0
+                    WHERE path = ?
+                """, (info.get('tmdbId'), info.get('title'), new_poster, info.get('overview'), row['path']))
+                conn.commit()
+                emit_ui_log(f"✅ 결과: {row['name']} -> ID:{info.get('tmdbId')} (포스터 유지여부: {old_poster == new_poster})",
+                            "success")
+
+        conn.close()
+        set_update_state(is_running=False, current_item="파일럿 테스트 완료")
+
+    threading.Thread(target=run_pilot, daemon=True).start()
+    return jsonify({"message": "5건 테스트 시작. /updater 로그를 확인하세요."})
+
+
+@app.route('/api/admin/pilot_patch_single')
+def pilot_patch_single():
+    target_name = request.args.get('name')
+    if not target_name:
+        return jsonify({"error": "name 파라미터를 입력하세요."}), 400
+
+    def run_pilot():
+        set_update_state(is_running=True, task_name=f"[{target_name}] 정밀 테스트", clear_logs=True)
+        emit_ui_log(f"🧪 [시작] 타겟: '{target_name}'", "info")
+
+        try:
+            conn = get_db()
+            # 🔴 수정: cleanedName을 먼저 찾도록 쿼리 최적화
+            row = conn.execute(
+                "SELECT path, name, category, tmdbId, posterPath FROM series WHERE cleanedName = ? LIMIT 1",
+                (target_name,)).fetchone()
+
+            # 만약 정확히 안 찾아지면 부분 일치로 시도
+            if not row:
+                emit_ui_log(f"⚠️ 정확한 cleanedName 없음, LIKE 검색 시도: {target_name}", "warning")
+                row = conn.execute(
+                    "SELECT path, name, category, tmdbId, posterPath FROM series WHERE cleanedName LIKE ? LIMIT 1",
+                    (f'%{target_name}%',)).fetchone()
+
+            if not row:
+                emit_ui_log(f"❌ DB에서 '{target_name}'을 찾을 수 없습니다.", "error")
+                return
+
+            emit_ui_log(f"🔍 DB 발견: name='{row['name']}', cleanedName='{target_name}'", "info")
+
+            # 매칭 엔진 실행
+            info = get_tmdb_info_server(target_name, category=row['category'], ignore_cache=True, path=row['path'])
+
+            if info and not info.get('failed'):
+                emit_ui_log(f"✅ [TMDB 매칭 성공] ID: {info.get('tmdbId')}", "success")
+
+                # 업데이트 수행
+                # conn.execute("""
+                #     UPDATE series SET
+                #         tmdbId = COALESCE(NULLIF(tmdbId, ''), ?),
+                #         tmdbTitle = COALESCE(NULLIF(tmdbTitle, ''), ?),
+                #         posterPath = COALESCE(NULLIF(posterPath, ''), ?),
+                #         overview = COALESCE(NULLIF(overview, ''), ?),
+                #         failed = 0
+                #     WHERE path = ?
+                # """, (info.get('tmdbId'), info.get('title'), info.get('posterPath'), info.get('overview'), row['path']))
+                # 업데이트 수행
+                conn.execute("""
+                    UPDATE series SET
+                        tmdbId = COALESCE(NULLIF(tmdbId, ''), ?),
+                        tmdbTitle = COALESCE(NULLIF(tmdbTitle, ''), ?),
+                        posterPath = COALESCE(NULLIF(posterPath, ''), ?),
+                        year = COALESCE(NULLIF(year, ''), ?),
+                        rating = COALESCE(NULLIF(rating, ''), ?),
+                        overview = COALESCE(NULLIF(overview, ''), ?),
+                        director = COALESCE(NULLIF(director, ''), ?),
+                        actors = COALESCE(NULLIF(actors, '[]'), ?),
+                        genreNames = COALESCE(NULLIF(genreNames, '[]'), ?),
+                        metadata_json = COALESCE(NULLIF(metadata_json, '{}'), ?),
+                        failed = 0
+                    WHERE path = ?
+                """, (
+                    info.get('tmdbId'),
+                    info.get('title'),
+                    info.get('posterPath'),
+                    info.get('year'),
+                    info.get('rating'),
+                    info.get('overview'),
+                    info.get('director'),
+                    json.dumps(info.get('actors', []), ensure_ascii=False),
+                    json.dumps(info.get('genreNames', []), ensure_ascii=False),
+                    info.get('metadata_json'),
+                    row['path']  # 해당 경로의 시리즈만 정확히 타겟팅
+                ))
+                conn.commit()
+                build_all_caches()
+                emit_ui_log(f"💾 [완료] DB 업데이트 및 캐시 갱신", "success")
+            else:
+                emit_ui_log(f"❌ [TMDB 매칭 실패]", "error")
+
+        except Exception as e:
+            emit_ui_log(f"💥 [에러] {str(e)}", "error")
+        finally:
+            conn.close()
+            set_update_state(is_running=False)
+
+    threading.Thread(target=run_pilot, daemon=True).start()
+    return jsonify({"message": "테스트 시작. /updater 로그 확인하세요."})
 
 # --- [추가] 수동 포스터 변경 라우트 ---
 @app.route('/custom_poster/<filename>')
