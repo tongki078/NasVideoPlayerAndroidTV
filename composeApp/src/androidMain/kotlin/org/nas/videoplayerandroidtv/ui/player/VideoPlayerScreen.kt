@@ -422,7 +422,7 @@ fun VideoPlayerScreen(
                         Spacer(modifier = Modifier.height(20.dp))
                     }
                     Row(modifier = Modifier.fillMaxWidth().padding(bottom = 48.dp, start = 48.dp, end = 60.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (userPaused) Icons.Default.PlayArrow else MyPauseIcon, null, tint = Color.White, modifier = Modifier.size(56.dp))
+                        Icon(if (userPaused) Icons.Default.PlayArrow else MyPauseIcon, null, tint = Color.White, modifier = Modifier.size(40.dp))
                         Spacer(Modifier.width(14.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             val progress = if (totalDuration > 0) (if(isSeeking) seekTime else currentPosition).toFloat() / totalDuration else 0f
@@ -504,18 +504,18 @@ fun VideoPlayerScreen(
 
 @Composable
 fun NetflixIconButton(icon: ImageVector, isFocused: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(onClick = onClick, modifier = modifier.size(56.dp).focusable(), shape = CircleShape, color = if (isFocused) Color.White else Color.Black.copy(alpha = 0.5f), border = if (isFocused) null else BorderStroke(2.dp, Color.White.copy(alpha = 0.8f))) {
-        Box(contentAlignment = Alignment.Center) { Icon(icon, null, tint = if (isFocused) Color.Black else Color.White, modifier = Modifier.size(32.dp)) }
+    Surface(onClick = onClick, modifier = modifier.size(40.dp).focusable(), shape = CircleShape, color = if (isFocused) Color.White else Color.Black.copy(alpha = 0.5f), border = if (isFocused) null else BorderStroke(2.dp, Color.White.copy(alpha = 0.8f))) {
+        Box(contentAlignment = Alignment.Center) { Icon(icon, null, tint = if (isFocused) Color.Black else Color.White, modifier = Modifier.size(22.dp)) }
     }
 }
 
 @Composable
 fun NetflixPlayerButton(text: String, icon: ImageVector, isFocused: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, compact: Boolean = false) {
-    Surface(onClick = onClick, modifier = modifier.height(if (compact) 48.dp else 56.dp).widthIn(min = 160.dp).focusable(), shape = RoundedCornerShape(8.dp), color = if (isFocused) Color.White else Color.Black.copy(alpha = 0.5f), border = if (isFocused) null else BorderStroke(2.dp, Color.White.copy(alpha = 0.8f))) {
-        Row(modifier = Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-            Icon(icon, null, tint = if (isFocused) Color.Black else Color.White, modifier = Modifier.size(24.dp))
-            Spacer(Modifier.width(12.dp))
-            Text(text, color = if (isFocused) Color.Black else Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+    Surface(onClick = onClick, modifier = modifier.height(if (compact) 34.dp else 40.dp).widthIn(min = 120.dp).focusable(), shape = RoundedCornerShape(8.dp), color = if (isFocused) Color.White else Color.Black.copy(alpha = 0.5f), border = if (isFocused) null else BorderStroke(2.dp, Color.White.copy(alpha = 0.8f))) {
+        Row(modifier = Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+            Icon(icon, null, tint = if (isFocused) Color.Black else Color.White, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(text, color = if (isFocused) Color.Black else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
