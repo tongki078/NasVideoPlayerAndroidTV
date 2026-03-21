@@ -6414,6 +6414,8 @@ def admin_db_pro():
                 <input type="text" id="searchInput" style="flex:1;" placeholder="키워드 검색..." onkeyup="if(event.key==='Enter') triggerSearch()">
                 <button class="btn btn-primary" onclick="triggerSearch()"><i class="fas fa-search"></i> 검색</button>
                 <span id="rowCount" style="color: var(--text-dim); font-size: 13px; white-space:nowrap;">0 items</span>
+
+                <button class="btn btn-danger" onclick="deleteSelected()" style="background: #ef4444; color: white;"><i class="fas fa-trash"></i> 선택 삭제</button>
             </div>
             <div class="grid-container" id="gridArea"></div>
             <div class="pagination">
@@ -6490,9 +6492,14 @@ def admin_db_pro():
                     document.getElementById('rowCount').innerText = `${res.total.toLocaleString()} items found`;
                     document.getElementById('pageDisplay').innerText = `Page ${currentPage + 1} / ${Math.ceil(res.total / pageSize) || 1}`;
 
-                    let html = '<table><thead><tr>' + res.columns.map(c => `<th onclick="handleSort('${c}')">${c} ${sortCol===c?(sortDir==='ASC'?'▲':'▼'):''}</th>`).join('') + '</tr></thead><tbody>';
+                    //let html = '<table><thead><tr>' + res.columns.map(c => `<th onclick="handleSort('${c}')">${c} ${sortCol===c?(sortDir==='ASC'?'▲':'▼'):''}</th>`).join('') + '</tr></thead><tbody>';
+                    let html = '<table><thead><tr><th><input type="checkbox" id="selectAll" onclick="toggleAll(this)"></th>' +
+           res.columns.map(c => `<th onclick="handleSort('${c}')">${c} ${sortCol===c?(sortDir==='ASC'?'▲':'▼'):''}</th>`).join('') +
+           '</tr></thead><tbody>';
+
                     res.data.forEach(row => {
-                        html += '<tr>' + res.columns.map(c => {
+                        const pk = row[currentTable === 'series' ? 'path' : 'id'];
+                        html += '<tr><td><input type="checkbox" class="row-checkbox" value="${pk}"></td>' + res.columns.map(c => {
                             let val = row[c], display = val === null ? '<span style="color:#475569">null</span>' : val;
                             if (c === 'posterPath' && val) display = `<img src="${val.startsWith('http') ? val : 'https://image.tmdb.org/t/p/w200' + val}" class="poster-thumb">`;
 
@@ -6506,6 +6513,25 @@ def admin_db_pro():
                     });
                     grid.innerHTML = html + '</tbody></table>';
                 } catch (e) { grid.innerHTML = `<div style="color:#ef4444; padding:50px;">Error: ${e}</div>`; }
+            }
+
+            async function deleteSelected() {
+                const checked = Array.from(document.querySelectorAll('.row-checkbox:checked')).map(cb => cb.value);
+                if(checked.length === 0) return alert('삭제할 항목을 선택하세요.');
+                if(!confirm(`${checked.length}개의 항목을 삭제할까요?`)) return;
+
+                for (const id of checked) {
+                    // 시리즈면 path 삭제, 에피소드면 id 삭제
+                    const body = currentTable === 'series' ? { path: id } : { id: id };
+                    const endpoint = currentTable === 'series' ? '/api/admin/delete_series' : '/api/admin/delete_episode'; // 에피소드 삭제 API는 별도 필요할 수 있음
+                    await fetch(endpoint, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(body)
+                    });
+                }
+                alert('삭제 완료');
+                loadData();
             }
             function changePage(delta) { currentPage += delta; loadData(); document.getElementById('gridArea').scrollTop = 0; }
             function changeSize(size) { pageSize = parseInt(size); triggerSearch(); }
