@@ -6499,7 +6499,7 @@ def admin_db_pro():
 
                     res.data.forEach(row => {
                         const pk = row[currentTable === 'series' ? 'path' : 'id'];
-                        html += '<tr><td><input type="checkbox" class="row-checkbox" value="${pk}"></td>' + res.columns.map(c => {
+                        html += `<tr><td><input type="checkbox" class="row-checkbox" value="${pk}"></td>` + res.columns.map(c => {
                             let val = row[c], display = val === null ? '<span style="color:#475569">null</span>' : val;
                             if (c === 'posterPath' && val) display = `<img src="${val.startsWith('http') ? val : 'https://image.tmdb.org/t/p/w200' + val}" class="poster-thumb">`;
 
@@ -6515,24 +6515,47 @@ def admin_db_pro():
                 } catch (e) { grid.innerHTML = `<div style="color:#ef4444; padding:50px;">Error: ${e}</div>`; }
             }
 
+           function toggleAll(source) {
+                // 모든 .row-checkbox 클래스를 가진 체크박스를 찾아서 source.checked 상태로 만듭니다.
+                const checkboxes = document.querySelectorAll('.row-checkbox');
+                checkboxes.forEach(cb => {
+                    cb.checked = source.checked;
+                });
+            }
+
             async function deleteSelected() {
                 const checked = Array.from(document.querySelectorAll('.row-checkbox:checked')).map(cb => cb.value);
                 if(checked.length === 0) return alert('삭제할 항목을 선택하세요.');
                 if(!confirm(`${checked.length}개의 항목을 삭제할까요?`)) return;
 
                 for (const id of checked) {
-                    // 시리즈면 path 삭제, 에피소드면 id 삭제
-                    const body = currentTable === 'series' ? { path: id } : { id: id };
-                    const endpoint = currentTable === 'series' ? '/api/admin/delete_series' : '/api/admin/delete_episode'; // 에피소드 삭제 API는 별도 필요할 수 있음
-                    await fetch(endpoint, {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify(body)
-                    });
+                    const body = currentTable === 'series' ? { path: id.trim() } : { id: id.trim() };
+                    const endpoint = currentTable === 'series' ? '/api/admin/dbpro_delete_series' : '/api/admin/delete_episode';
+
+                    try {
+                        const response = await fetch(endpoint, {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(body)
+                        });
+
+                        // 서버 응답을 텍스트로 가져와 확인
+                        const text = await response.text();
+                        console.log(`[${id}] 서버 응답:`, text);
+
+                        const data = JSON.parse(text);
+                        if (data.status !== 'success') {
+                            console.error(`삭제 실패 [${id}]:`, data.message);
+                        }
+                    } catch (e) {
+                        console.error(`JSON 파싱/통신 에러 [${id}]:`, e);
+                    }
                 }
-                alert('삭제 완료');
+
+                alert('삭제 작업이 완료되었습니다.');
                 loadData();
             }
+
             function changePage(delta) { currentPage += delta; loadData(); document.getElementById('gridArea').scrollTop = 0; }
             function changeSize(size) { pageSize = parseInt(size); triggerSearch(); }
             function handleSort(col) { if (sortCol === col) sortDir = sortDir === 'ASC' ? 'DESC' : 'ASC'; else { sortCol = col; sortDir = 'ASC'; } loadData(); }
@@ -6541,6 +6564,63 @@ def admin_db_pro():
     </body>
     </html>
     """
+# @app.route('/api/admin/dbpro_delete_series', methods=['POST'])
+# def api_dbprodelete_series():
+#     data = request.json
+#     path = data.get('path')
+#     if not path: return jsonify({"status": "error", "message": "Path is required"})
+#     try:
+#         conn = get_db()
+#         # 시리즈 삭제 시 연관된 에피소드도 삭제(ON DELETE CASCADE 설정되어 있다면 자동 삭제됨)
+#         conn.execute("DELETE FROM series WHERE path = ?", (path,))
+#         conn.commit()
+#         conn.close()
+#         build_all_caches()
+#         return jsonify({"status": "success"})
+#     except Exception as e:
+#         return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/admin/dbpro_delete_series', methods=['POST'])
+def api_dbprodelete_series():
+    data = request.json
+    path = data.get('path')
+    if not path: return jsonify({"status": "error", "message": "Path is required"})
+
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+
+        # 1. 삭제 전 존재 여부 확인 (경로 정확도 테스트)
+        check = cursor.execute("SELECT name FROM series WHERE path = ?", (path,)).fetchone()
+        if not check:
+            conn.close()
+            return jsonify({"status": "error", "message": f"DB에서 찾을 수 없는 경로입니다: {path}"})
+
+        # 2. 삭제 실행
+        cursor.execute("DELETE FROM series WHERE path = ?", (path,))
+        rowcount = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        build_all_caches()
+        return jsonify({"status": "success", "deleted_rows": rowcount})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/admin/delete_episode', methods=['POST'])
+def api_delete_episode():
+    data = request.json
+    ep_id = data.get('id')
+    if not ep_id: return jsonify({"status": "error", "message": "Episode ID is required"})
+    try:
+        conn = get_db()
+        conn.execute("DELETE FROM episodes WHERE id = ?", (ep_id,))
+        conn.commit()
+        conn.close()
+        build_all_caches()
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
 @app.route('/api/admin/db_pro_data')
 def api_db_pro_data():
