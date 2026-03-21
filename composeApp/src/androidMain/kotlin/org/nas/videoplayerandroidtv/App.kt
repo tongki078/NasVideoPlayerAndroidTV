@@ -1,8 +1,6 @@
 package org.nas.videoplayerandroidtv
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.*
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
@@ -19,13 +17,20 @@ import androidx.compose.ui.unit.dp
 import coil3.ImageLoader
 import coil3.compose.setSingletonImageLoaderFactory
 import coil3.disk.DiskCache
+import coil3.network.ktor2.KtorNetworkFetcherFactory
 import coil3.request.crossfade
+import io.ktor.client.engine.okhttp.*
 import kotlinx.coroutines.Dispatchers
-import okio.Path.Companion.toPath
-import org.nas.videoplayerandroidtv.data.*
-import org.nas.videoplayerandroidtv.data.network.NasApiClient
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.nas.videoplayerandroidtv.db.AppDatabase
+import org.nas.videoplayerandroidtv.data.SearchHistoryDataSource
+import org.nas.videoplayerandroidtv.data.TmdbCacheDataSource
+import org.nas.videoplayerandroidtv.data.WatchHistoryDataSource
 import org.nas.videoplayerandroidtv.data.repository.VideoRepositoryImpl
-import org.nas.videoplayerandroidtv.domain.model.*
+import org.nas.videoplayerandroidtv.domain.model.HomeSection
+import org.nas.videoplayerandroidtv.domain.model.Movie
+import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.common.NetflixTopBar
 import org.nas.videoplayerandroidtv.ui.common.SophisticatedTabChip
@@ -33,17 +38,20 @@ import org.nas.videoplayerandroidtv.ui.detail.SeriesDetailScreen
 import org.nas.videoplayerandroidtv.ui.home.HomeScreen
 import org.nas.videoplayerandroidtv.ui.player.VideoPlayerScreen
 import org.nas.videoplayerandroidtv.ui.search.SearchScreen
-import org.nas.videoplayerandroidtv.db.AppDatabase
 import app.cash.sqldelight.db.SqlDriver
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import okio.Path.Companion.toPath
 
 @Composable
 fun App(driver: SqlDriver) {
     val repository: VideoRepository = remember { VideoRepositoryImpl() }
     
     setSingletonImageLoaderFactory { ctx -> 
-        ImageLoader.Builder(ctx).diskCache { DiskCache.Builder().directory(getImageCacheDirectory(ctx).toPath().resolve("coil_cache")).maxSizeBytes(100 * 1024 * 1024).build() }.crossfade(true).build() 
+        ImageLoader.Builder(ctx).diskCache { 
+            DiskCache.Builder()
+                .directory(getImageCacheDirectory(ctx).toPath().resolve("coil_cache"))
+                .maxSizeBytes(100 * 1024 * 1024)
+                .build() 
+        }.crossfade(true).build() 
     }
     
     val db = remember { AppDatabase(driver) }
@@ -286,8 +294,11 @@ fun App(driver: SqlDriver) {
                                     lastSelectedSeriesPath = it.fullPath
                                     selectedSeries = it 
                                 }, 
-                                onPlayClick = { m: Movie -> 
-                                    selectedMovie = m; moviePlaylist = listOf(m); lastPlaybackPosition = 0L 
+                                onPlayClick = { m: Movie, p: List<Movie>, s: Series?, pos: Long -> 
+                                    selectedMovie = m
+                                    moviePlaylist = p
+                                    selectedSeries = s
+                                    lastPlaybackPosition = pos
                                 },
                                 onHistoryClick = { h: org.nas.videoplayerandroidtv.data.WatchHistory -> 
                                     val movie = Movie(h.id, h.title, h.videoUrl, h.thumbnailUrl)

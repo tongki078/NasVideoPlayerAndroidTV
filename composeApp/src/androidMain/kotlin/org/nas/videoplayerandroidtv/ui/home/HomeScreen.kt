@@ -35,7 +35,7 @@ fun HomeScreen(
     lastFocusedPath: String? = null,
     onFocusRestored: () -> Unit = {},
     onSeriesClick: (Series) -> Unit,
-    onPlayClick: (Movie) -> Unit,
+    onPlayClick: (Movie, List<Movie>, Series?, Long) -> Unit,
     onHistoryClick: (WatchHistory) -> Unit = {}
 ) {
     val repository: VideoRepository = remember { VideoRepositoryImpl() }
@@ -138,8 +138,13 @@ fun HomeScreen(
                             label = "HeroTransition"
                         ) { targetItem: Category ->
                             val heroSeries = targetItem.toSeries()
-                            val heroHistory = watchHistory.find { 
-                                it.seriesPath == targetItem.path || it.title == targetItem.name 
+                            val heroHistory = remember(targetItem, watchHistory) {
+                                watchHistory.find { 
+                                    (it.seriesPath != null && it.seriesPath == targetItem.path) || 
+                                    it.id == targetItem.path ||
+                                    it.title == targetItem.name ||
+                                    it.seriesTitle == targetItem.name
+                                }
                             }
 
                             HeroSection(
@@ -147,24 +152,52 @@ fun HomeScreen(
                                 watchHistory = heroHistory,
                                 onPlayClick = { 
                                     coroutineScope.launch {
-                                        if (heroHistory != null && heroHistory.lastPosition > 0) {
-                                            val seriesForDetail = Series(
-                                                title = heroHistory.seriesTitle ?: heroHistory.title,
-                                                episodes = emptyList(),
-                                                fullPath = heroHistory.seriesPath,
-                                                posterPath = heroHistory.posterPath
-                                            )
-                                            onSeriesClick(seriesForDetail)
-                                        } else {
-                                            val seriesDetail = if (heroSeries.episodes.isEmpty()) {
-                                                heroSeries.fullPath?.let { repository.getSeriesDetail(it) }
-                                            } else heroSeries
+                                        val seriesDetail = if (heroSeries.episodes.isEmpty()) {
+                                            heroSeries.fullPath?.let { repository.getSeriesDetail(it) }
+                                        } else heroSeries
+                                        val fullSeries = seriesDetail ?: heroSeries
+                                        val episodes = fullSeries.episodes
 
-                                            val firstEpisode = seriesDetail?.episodes?.firstOrNull()
-                                            if (firstEpisode != null) onPlayClick(firstEpisode)
+                                        if (heroHistory != null) {
+                                            val currentIndex = episodes.indexOfFirst { 
+                                                it.videoUrl?.substringAfterLast("/") == heroHistory.videoUrl.substringAfterLast("/") 
+                                            }
+                                            val isFinished = heroHistory.duration > 0 && heroHistory.lastPosition > heroHistory.duration * 0.95
+                                            
+                                            if (isFinished && currentIndex != -1 && currentIndex < episodes.size - 1) {
+                                                onPlayClick(episodes[currentIndex + 1], episodes, fullSeries, 0L)
+                                            } else if (currentIndex != -1) {
+                                                onPlayClick(episodes[currentIndex], episodes, fullSeries, heroHistory.lastPosition)
+                                            } else {
+                                                val fallbackMovie = Movie(heroHistory.id, heroHistory.title, heroHistory.videoUrl, heroHistory.thumbnailUrl)
+                                                onPlayClick(fallbackMovie, episodes.ifEmpty { listOf(fallbackMovie) }, fullSeries, heroHistory.lastPosition)
+                                            }
+                                        } else {
+                                            val firstEpisode = episodes.firstOrNull()
+                                            if (firstEpisode != null) onPlayClick(firstEpisode, episodes, fullSeries, 0L)
                                         }
                                     }
                                 },
+                                onNextEpisodeClick = if (heroHistory != null && heroSeries.category != "movies") {
+                                    {
+                                        coroutineScope.launch {
+                                            val seriesDetail = if (heroSeries.episodes.isEmpty()) {
+                                                heroSeries.fullPath?.let { repository.getSeriesDetail(it) }
+                                            } else heroSeries
+                                            val fullSeries = seriesDetail ?: heroSeries
+                                            val episodes = fullSeries.episodes
+                                            
+                                            val currentUrl = heroHistory.videoUrl
+                                            val currentIndex = episodes.indexOfFirst { 
+                                                it.videoUrl?.substringAfterLast("/") == currentUrl.substringAfterLast("/") 
+                                            }
+                                            
+                                            if (currentIndex != -1 && currentIndex < episodes.size - 1) {
+                                                onPlayClick(episodes[currentIndex + 1], episodes, fullSeries, 0L)
+                                            }
+                                        }
+                                    }
+                                } else null,
                                 onDetailClick = { onSeriesClick(heroSeries) },
                                 horizontalPadding = standardMargin,
                                 isFirstLoad = false

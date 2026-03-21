@@ -110,7 +110,7 @@ PATH_MAP = {
     "방송중": (os.path.join(PARENT_VIDEO_DIR, "방송중"), "air")
 }
 
-EXCLUDE_FOLDERS = ["성인", "19금", "Adult", "@eaDir", "#recycle"]
+EXCLUDE_FOLDERS = ["성인", "19금", "Adult", "@eaDir", "#recycle", "Featurettes", "Special Effects"]
 VIDEO_EXTS = ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
 # [추가] 검색 결과에서 제외할 DB 경로(시작 부분) 목록
 SEARCH_EXCLUDE_PATHS = [
@@ -7583,19 +7583,25 @@ def run_patch_task_by_cat(target_cat):
         try:
             conn = get_db()
             # 해당 카테고리의 모든 시리즈 조회
-            rows = conn.execute("SELECT path, name, cleanedName FROM series WHERE category = ?",
-                                (target_cat,)).fetchall()
-
+            # rows = conn.execute("SELECT path, name, cleanedName FROM series WHERE category = ?",
+            #                     (target_cat,)).fetchall()
+            rows = conn.execute("""
+                SELECT path, name, cleanedName
+                FROM series
+                WHERE category = ?
+                AND (tmdbId IS NULL OR tmdbId = '' OR failed != 0)
+            """, (target_cat,)).fetchall()
             total = len(rows)
             set_update_state(total=total)
             success_count = 0
 
             for idx, row in enumerate(rows):
                 name, path, cleaned = row['name'], row['path'], row['cleanedName']
-
-                with UPDATE_LOCK:
-                    UPDATE_STATE["current"] = idx + 1
-                    UPDATE_STATE["current_item"] = cleaned
+                percent = int(((idx + 1) / total) * 100)
+                current_prefix = f"[{idx + 1}/{total}] {percent}%"
+                # with UPDATE_LOCK:
+                #     UPDATE_STATE["current"] = idx + 1
+                #     UPDATE_STATE["current_item"] = cleaned
 
                 # 1. 매칭 엔진 실행 (이미 정제된 cleanedName 사용)
                 try:
@@ -7606,6 +7612,8 @@ def run_patch_task_by_cat(target_cat):
                     continue
 
                 if info and not info.get('failed'):
+                    # 2. 메타데이터 요약 문자열 생성
+                    meta_summary = f"({info.get('year', '?')} | {info.get('rating', 'NR')} | {', '.join(info.get('genreNames', [])[:2])})"
                     # 2. 업데이트 수행
                     conn.execute("""
                         UPDATE series SET
@@ -7630,8 +7638,11 @@ def run_patch_task_by_cat(target_cat):
                     ))
                     conn.commit()
                     success_count += 1
-                    emit_ui_log(f"✅ [{idx + 1}/{total}] '{cleaned}' 매칭 성공", "success")
+                    emit_ui_log(f"✅ {current_prefix} '{cleaned}' 매칭 성공 {meta_summary}", "success")
                 else:
+                    # 실패 시 failed 필드를 1로 설정하여 다음 작업에서 다시 시도할지 여부 결정
+                    conn.execute("UPDATE series SET failed = 1 WHERE path = ?", (path,))
+                    conn.commit()
                     emit_ui_log(f"❌ [{idx + 1}/{total}] '{cleaned}' 매칭 실패", "error")
 
                 sleep_time = random.uniform(0.5, 1.2)

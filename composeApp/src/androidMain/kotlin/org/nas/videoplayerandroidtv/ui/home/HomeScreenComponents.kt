@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
@@ -51,6 +52,7 @@ fun HeroSection(
     watchHistory: WatchHistory? = null, 
     onPlayClick: () -> Unit,
     onDetailClick: () -> Unit,
+    onNextEpisodeClick: (() -> Unit)? = null,
     horizontalPadding: androidx.compose.ui.unit.Dp,
     isFirstLoad: Boolean = false
 ) {
@@ -161,12 +163,22 @@ fun HeroSection(
 
                 HeroButton(
                     modifier = Modifier.focusRequester(playButtonFocusRequester),
-                    text = "재생",
+                    text = if (isContinuing) "계속 시청" else "재생",
                     icon = Icons.Default.PlayArrow,
                     isPrimary = true,
                     progress = progress,
                     onClick = onPlayClick
                 )
+
+                if (onNextEpisodeClick != null) {
+                    Spacer(Modifier.width(16.dp))
+                    HeroButton(
+                        text = "다음화 보기",
+                        icon = Icons.AutoMirrored.Filled.ArrowForward,
+                        isPrimary = false,
+                        onClick = onNextEpisodeClick
+                    )
+                }
 
                 Spacer(Modifier.width(16.dp))
 
