@@ -8,10 +8,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -47,8 +48,8 @@ fun NetflixTopBar(
             .padding(horizontal = 48.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 좌측: 로고 (고정 너비 영역을 주어 중앙 배치를 도움)
-        Box(modifier = Modifier.width(100.dp)) {
+        // 좌측: 로고
+        Box(modifier = Modifier.width(80.dp)) {
             Text(
                 text = "N",
                 color = Color.Red,
@@ -87,14 +88,62 @@ fun NetflixTopBar(
             }
         }
 
-        // 우측: 내가 본 영상 (시청 기록) - 좌측 로고와 대칭을 이루는 너비 설정
-        Box(modifier = Modifier.width(100.dp), contentAlignment = Alignment.CenterEnd) {
-            TopBarItem(
-                label = "시청기록",
-                icon = Icons.Default.Refresh, // History 대신 사용 가능한 아이콘
-                screen = Screen.WATCH_HISTORY,
-                currentScreen = currentScreen,
-                onClick = onScreenSelected
+        // 우측: 나의 메뉴 (시청 기록) - 프로필 아이콘 스타일
+        Box(modifier = Modifier.width(80.dp), contentAlignment = Alignment.CenterEnd) {
+            MyMenuButton(
+                isSelected = currentScreen == Screen.WATCH_HISTORY,
+                onClick = { onScreenSelected(Screen.WATCH_HISTORY) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun MyMenuButton(
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    
+    val backgroundColor by animateColorAsState(
+        when {
+            isFocused -> Color.White.copy(alpha = 0.2f)
+            isSelected -> Color.Red.copy(alpha = 0.1f)
+            else -> Color.Transparent
+        },
+        label = "MyMenuBg"
+    )
+    
+    val iconColor by animateColorAsState(
+        if (isFocused || isSelected) Color.White else Color.White.copy(alpha = 0.6f),
+        label = "MyMenuIcon"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(backgroundColor)
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable()
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.Person,
+            contentDescription = "나의 메뉴",
+            tint = iconColor,
+            modifier = Modifier.size(28.dp)
+        )
+        
+        if (isSelected && !isFocused) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 2.dp)
+                    .size(4.dp)
+                    .clip(CircleShape)
+                    .background(Color.Red)
             )
         }
     }
