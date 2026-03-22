@@ -284,7 +284,7 @@ fun App(driver: SqlDriver) {
                         else -> {
                             HomeScreen(
                                 currentScreen = currentScreen, 
-                                watchHistory = if (currentScreen == Screen.HOME) watchHistory else emptyList(), 
+                                watchHistory = if (currentScreen == Screen.HOME || currentScreen == Screen.WATCH_HISTORY) watchHistory else emptyList(),
                                 homeSections = allCategorySections[currentCacheKey] ?: emptyList(),
                                 isLoading = categoryLoadingStates[currentCacheKey] ?: false,
                                 lazyListState = lazyListStates.getOrPut(currentCacheKey) { LazyListState() },

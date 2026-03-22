@@ -10,5 +10,6 @@ enum class Screen {
     ANIMATIONS,
     MOVIES,
     FOREIGN_TV,
-    KOREAN_TV
+    KOREAN_TV,
+    WATCH_HISTORY
 }

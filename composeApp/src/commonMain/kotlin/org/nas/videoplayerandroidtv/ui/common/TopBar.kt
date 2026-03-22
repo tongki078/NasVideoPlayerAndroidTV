@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -44,41 +45,57 @@ fun NetflixTopBar(
             .height(64.dp)
             .onFocusChanged { onFocusChanged(it.hasFocus) }
             .padding(horizontal = 48.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        // 좌측: 로고 (고정 너비 영역을 주어 중앙 배치를 도움)
+        Box(modifier = Modifier.width(100.dp)) {
             Text(
                 text = "N",
                 color = Color.Red,
                 fontSize = 32.sp,
-                fontWeight = FontWeight.Black,
-                modifier = Modifier.padding(end = 8.dp)
+                fontWeight = FontWeight.Black
             )
-            
+        }
+
+        // 중앙: 메인 메뉴 (가운데 정렬)
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            val menuItems = listOf(
+                Triple("홈", Icons.Default.Home, Screen.HOME),
+                Triple("검색", Icons.Default.Search, Screen.SEARCH),
+                Triple("방송중", null, Screen.ON_AIR),
+                Triple("애니", null, Screen.ANIMATIONS),
+                Triple("영화", null, Screen.MOVIES),
+                Triple("외국 TV", null, Screen.FOREIGN_TV),
+                Triple("국내 TV", null, Screen.KOREAN_TV)
+            )
+
+            menuItems.forEach { (label, icon, screen) ->
+                TopBarItem(
+                    label = label,
+                    icon = icon,
+                    screen = screen,
+                    currentScreen = currentScreen,
+                    modifier = if (screen == Screen.HOME && homeFocusRequester != null) 
+                        Modifier.focusRequester(homeFocusRequester) else Modifier,
+                    onClick = onScreenSelected
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+        }
+
+        // 우측: 내가 본 영상 (시청 기록) - 좌측 로고와 대칭을 이루는 너비 설정
+        Box(modifier = Modifier.width(100.dp), contentAlignment = Alignment.CenterEnd) {
             TopBarItem(
-                label = "홈", 
-                icon = Icons.Default.Home, 
-                screen = Screen.HOME, 
-                currentScreen = currentScreen, 
-                modifier = if (homeFocusRequester != null) Modifier.focusRequester(homeFocusRequester) else Modifier,
+                label = "시청기록",
+                icon = Icons.Default.Refresh, // History 대신 사용 가능한 아이콘
+                screen = Screen.WATCH_HISTORY,
+                currentScreen = currentScreen,
                 onClick = onScreenSelected
             )
-            TopBarItem(label = "검색", icon = Icons.Default.Search, screen = Screen.SEARCH, currentScreen = currentScreen, onClick = onScreenSelected)
-        }
-        
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val menuItems = listOf(
-                "방송중" to Screen.ON_AIR,
-                "애니" to Screen.ANIMATIONS,
-                "영화" to Screen.MOVIES,
-                "외국 TV" to Screen.FOREIGN_TV,
-                "국내 TV" to Screen.KOREAN_TV
-            )
-            
-            menuItems.forEach { (label, screen) ->
-                TopBarItem(label = label, screen = screen, currentScreen = currentScreen, onClick = onScreenSelected)
-            }
         }
     }
 }
@@ -100,7 +117,8 @@ private fun TopBarItem(
             isFocused -> Color.White
             isSelected -> Color.White
             else -> Color.White.copy(alpha = 0.5f)
-        }
+        },
+        label = "ContentColor"
     )
 
     Box(
@@ -110,7 +128,7 @@ private fun TopBarItem(
             .onFocusChanged { isFocused = it.isFocused }
             .focusable()
             .clickable { onClick(screen) }
-            .padding(horizontal = if (icon != null) 10.dp else 14.dp, vertical = 6.dp),
+            .padding(horizontal = if (icon != null) 10.dp else 12.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {

@@ -5,12 +5,16 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.SnapshotStateMap
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.nas.videoplayerandroidtv.Screen
@@ -71,153 +75,128 @@ fun HomeScreen(
 
     val heroItem = heroPool.getOrNull(currentHeroIndex)
 
-    // [포커스 복구 로직]
-    LaunchedEffect(lastFocusedPath, combinedSections, isLoading) {
-        if (lastFocusedPath != null && combinedSections.isNotEmpty() && !isLoading) {
-            var foundRowIndex = -1
-            var foundItemIndex = -1
-            var foundRowKey = ""
-
-            if (currentScreen == Screen.HOME && watchHistory.isNotEmpty()) {
-                val idx = watchHistory.indexOfFirst { it.seriesPath == lastFocusedPath }
-                if (idx != -1) {
-                    foundRowIndex = 1 
-                    foundItemIndex = idx
-                    foundRowKey = "watch_history"
-                }
-            }
-
-            if (foundRowIndex == -1) {
-                combinedSections.forEachIndexed { sIdx, section ->
-                    val iIdx = section.items.indexOfFirst { it.path == lastFocusedPath }
-                    if (iIdx != -1) {
-                        foundRowIndex = sIdx + (if (currentScreen == Screen.HOME && watchHistory.isNotEmpty()) 2 else 1)
-                        foundItemIndex = iIdx
-                        foundRowKey = "row_${section.title}"
-                    }
-                }
-            }
-
-            if (foundRowIndex != -1) {
-                delay(100) 
-                try {
-                    val isVisible = lazyListState.layoutInfo.visibleItemsInfo.any { it.index == foundRowIndex }
-                    if (!isVisible) {
-                        lazyListState.scrollToItem(foundRowIndex)
-                    }
-                    rowFocusIndices[foundRowKey] = foundItemIndex
-                } catch (_: Exception) {}
-            }
-        }
-    }
-
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = lazyListState,
             contentPadding = PaddingValues(bottom = 60.dp)
         ) {
-            item(key = "hero_section") {
-                Box(modifier = Modifier.onFocusChanged { 
-                    if (it.isFocused) { 
-                        coroutineScope.launch {
-                            // 지연을 주어 시스템 포커스 스크롤과 충돌 방지 및 부드러운 위치 확보
-                            delay(50)
-                            if (lazyListState.firstVisibleItemIndex != 0 || lazyListState.firstVisibleItemScrollOffset != 0) {
-                                lazyListState.animateScrollToItem(0)
+            // 시청 기록 화면이 아닐 때만 히어로 섹션 표시
+            if (currentScreen != Screen.WATCH_HISTORY) {
+                item(key = "hero_section") {
+                    Box(modifier = Modifier.onFocusChanged { 
+                        if (it.isFocused) { 
+                            coroutineScope.launch {
+                                delay(50)
+                                if (lazyListState.firstVisibleItemIndex != 0 || lazyListState.firstVisibleItemScrollOffset != 0) {
+                                    lazyListState.animateScrollToItem(0)
+                                }
                             }
                         }
-                    }
-                }) {
-                    if (heroItem != null) {
-                        AnimatedContent(
-                            targetState = heroItem,
-                            transitionSpec = {
-                                fadeIn(animationSpec = tween(1000)) togetherWith fadeOut(animationSpec = tween(1000))
-                            },
-                            label = "HeroTransition"
-                        ) { targetItem: Category ->
-                            val heroSeries = targetItem.toSeries()
-                            val heroHistory = remember(targetItem, watchHistory) {
-                                watchHistory.find { 
+                    }) {
+                        if (heroItem != null) {
+                            AnimatedContent(
+                                targetState = heroItem,
+                                transitionSpec = {
+                                    fadeIn(animationSpec = tween(1000)) togetherWith fadeOut(animationSpec = tween(1000))
+                                },
+                                label = "HeroTransition"
+                            ) { targetItem: Category ->
+                                val heroSeries = targetItem.toSeries()
+                                val heroHistory = watchHistory.find { 
                                     (it.seriesPath != null && it.seriesPath == targetItem.path) || 
                                     it.id == targetItem.path ||
                                     it.title == targetItem.name ||
                                     it.seriesTitle == targetItem.name
                                 }
-                            }
 
-                            HeroSection(
-                                series = heroSeries,
-                                watchHistory = heroHistory,
-                                onPlayClick = { 
-                                    coroutineScope.launch {
-                                        val seriesDetail = if (heroSeries.episodes.isEmpty()) {
-                                            heroSeries.fullPath?.let { repository.getSeriesDetail(it) }
-                                        } else heroSeries
-                                        val fullSeries = seriesDetail ?: heroSeries
-                                        val episodes = fullSeries.episodes
-
-                                        if (heroHistory != null) {
-                                            val currentIndex = episodes.indexOfFirst { 
-                                                it.videoUrl?.substringAfterLast("/") == heroHistory.videoUrl.substringAfterLast("/") 
-                                            }
-                                            val isFinished = heroHistory.duration > 0 && heroHistory.lastPosition > heroHistory.duration * 0.95
-                                            
-                                            if (isFinished && currentIndex != -1 && currentIndex < episodes.size - 1) {
-                                                onPlayClick(episodes[currentIndex + 1], episodes, fullSeries, 0L)
-                                            } else if (currentIndex != -1) {
-                                                onPlayClick(episodes[currentIndex], episodes, fullSeries, heroHistory.lastPosition)
-                                            } else {
-                                                val fallbackMovie = Movie(heroHistory.id, heroHistory.title, heroHistory.videoUrl, heroHistory.thumbnailUrl)
-                                                onPlayClick(fallbackMovie, episodes.ifEmpty { listOf(fallbackMovie) }, fullSeries, heroHistory.lastPosition)
-                                            }
-                                        } else {
-                                            val firstEpisode = episodes.firstOrNull()
-                                            if (firstEpisode != null) onPlayClick(firstEpisode, episodes, fullSeries, 0L)
-                                        }
-                                    }
-                                },
-                                onNextEpisodeClick = if (heroHistory != null && heroSeries.category != "movies") {
-                                    {
+                                HeroSection(
+                                    series = heroSeries,
+                                    watchHistory = heroHistory,
+                                    onPlayClick = { 
                                         coroutineScope.launch {
                                             val seriesDetail = if (heroSeries.episodes.isEmpty()) {
                                                 heroSeries.fullPath?.let { repository.getSeriesDetail(it) }
                                             } else heroSeries
                                             val fullSeries = seriesDetail ?: heroSeries
                                             val episodes = fullSeries.episodes
-                                            
-                                            val currentUrl = heroHistory.videoUrl
-                                            val currentIndex = episodes.indexOfFirst { 
-                                                it.videoUrl?.substringAfterLast("/") == currentUrl.substringAfterLast("/") 
-                                            }
-                                            
-                                            if (currentIndex != -1 && currentIndex < episodes.size - 1) {
-                                                onPlayClick(episodes[currentIndex + 1], episodes, fullSeries, 0L)
+
+                                            if (heroHistory != null) {
+                                                val currentIndex = episodes.indexOfFirst { 
+                                                    it.videoUrl?.substringAfterLast("/") == heroHistory.videoUrl.substringAfterLast("/") 
+                                                }
+                                                val isFinished = heroHistory.duration > 0 && heroHistory.lastPosition > heroHistory.duration * 0.95
+                                                
+                                                if (isFinished && currentIndex != -1 && currentIndex < episodes.size - 1) {
+                                                    onPlayClick(episodes[currentIndex + 1], episodes, fullSeries, 0L)
+                                                } else if (currentIndex != -1) {
+                                                    onPlayClick(episodes[currentIndex], episodes, fullSeries, heroHistory.lastPosition)
+                                                } else {
+                                                    val fallbackMovie = Movie(heroHistory.id, heroHistory.title, heroHistory.videoUrl, heroHistory.thumbnailUrl)
+                                                    onPlayClick(fallbackMovie, episodes.ifEmpty { listOf(fallbackMovie) }, fullSeries, heroHistory.lastPosition)
+                                                }
+                                            } else {
+                                                val firstEpisode = episodes.firstOrNull()
+                                                if (firstEpisode != null) onPlayClick(firstEpisode, episodes, fullSeries, 0L)
                                             }
                                         }
-                                    }
-                                } else null,
-                                onDetailClick = { onSeriesClick(heroSeries) },
-                                horizontalPadding = standardMargin,
-                                isFirstLoad = false
-                            )
+                                    },
+                                    onNextEpisodeClick = if (heroHistory != null && heroSeries.category != "movies") {
+                                        {
+                                            coroutineScope.launch {
+                                                val seriesDetail = if (heroSeries.episodes.isEmpty()) {
+                                                    heroSeries.fullPath?.let { repository.getSeriesDetail(it) }
+                                                } else heroSeries
+                                                val fullSeries = seriesDetail ?: heroSeries
+                                                val episodes = fullSeries.episodes
+                                                
+                                                val currentUrl = heroHistory.videoUrl
+                                                val currentIndex = episodes.indexOfFirst { 
+                                                    it.videoUrl?.substringAfterLast("/") == currentUrl.substringAfterLast("/") 
+                                                }
+                                                
+                                                if (currentIndex != -1 && currentIndex < episodes.size - 1) {
+                                                    onPlayClick(episodes[currentIndex + 1], episodes, fullSeries, 0L)
+                                                }
+                                            }
+                                        }
+                                    } else null,
+                                    onDetailClick = { onSeriesClick(heroSeries) },
+                                    horizontalPadding = standardMargin,
+                                    isFirstLoad = false
+                                )
+                            }
+                        } else if (isLoading) {
+                            SkeletonHero()
                         }
-                    } else if (isLoading) {
-                        SkeletonHero()
+                    }
+                }
+            } else {
+                // 시청 기록 전용 타이틀
+                item {
+                    Column(modifier = Modifier.padding(horizontal = 48.dp, vertical = 24.dp)) {
+                        Text(
+                            text = "내가 본 영상",
+                            color = Color.White,
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }
 
-            if (isLoading && combinedSections.isEmpty()) {
+            if (isLoading && combinedSections.isEmpty() && currentScreen != Screen.WATCH_HISTORY) {
                 items(3) { SkeletonRow(standardMargin) }
             } else {
-                if (currentScreen == Screen.HOME && watchHistory.isNotEmpty()) {
+                // 시청 기록 표시 (홈 화면 상단 혹은 시청기록 전용 화면)
+                if ((currentScreen == Screen.HOME || currentScreen == Screen.WATCH_HISTORY) && watchHistory.isNotEmpty()) {
                     item(key = "watch_history_row") {
                         val rowKey = "watch_history"
                         val historyRowState = rowStates.getOrPut(rowKey) { LazyListState() }
                         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) { 
-                            SectionTitle("시청 중인 콘텐츠", standardMargin)
+                            if (currentScreen == Screen.HOME) {
+                                SectionTitle("시청 중인 콘텐츠", standardMargin)
+                            }
                             NetflixTvPivotRow(
                                 state = historyRowState,
                                 items = watchHistory, 
@@ -258,49 +237,52 @@ fun HomeScreen(
                     }
                 }
 
-                itemsIndexed(combinedSections, key = { _: Int, s: HomeSection -> "row_${s.title}_${s.items.size}" }) { _: Int, section: HomeSection ->
-                    val rowKey = "row_${section.title}"
-                    val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
-                    Column(modifier = Modifier.fillMaxWidth()) { 
-                        SectionTitle(
-                            title = section.title, 
-                            horizontalPadding = standardMargin,
-                            items = section.items,
-                            isFullList = section.is_full_list, 
-                            onIndexClick = { targetIndex ->
-                                coroutineScope.launch {
-                                    sectionRowState.animateScrollToItem(targetIndex)
-                                    rowFocusIndices[rowKey] = targetIndex
+                // 일반 카테고리 (시청 기록 화면이 아닐 때만 표시)
+                if (currentScreen != Screen.WATCH_HISTORY) {
+                    itemsIndexed(combinedSections, key = { _: Int, s: HomeSection -> "row_${s.title}_${s.items.size}" }) { _: Int, section: HomeSection ->
+                        val rowKey = "row_${section.title}"
+                        val sectionRowState = rowStates.getOrPut(rowKey) { LazyListState() }
+                        Column(modifier = Modifier.fillMaxWidth()) { 
+                            SectionTitle(
+                                title = section.title, 
+                                horizontalPadding = standardMargin,
+                                items = section.items,
+                                isFullList = section.is_full_list, 
+                                onIndexClick = { targetIndex ->
+                                    coroutineScope.launch {
+                                        sectionRowState.animateScrollToItem(targetIndex)
+                                        rowFocusIndices[rowKey] = targetIndex
+                                    }
                                 }
-                            }
-                        )
-
-                        NetflixTvPivotRow(
-                            state = sectionRowState,
-                            items = section.items, 
-                            marginValue = standardMargin,
-                            rowKey = rowKey,
-                            rowFocusIndices = rowFocusIndices,
-                            keySelector = { item: Category -> "item_${item.path ?: item.name ?: item.hashCode()}" }
-                        ) { item: Category, index: Int, rowState: LazyListState, focusRequester: androidx.compose.ui.focus.FocusRequester, marginPx: Int, focusedIndex: Int ->
-                            NetflixPivotItem(
-                                title = item.name ?: "", 
-                                posterPath = item.posterPath,
-                                initialVideoUrl = item.movies?.find { !it.videoUrl.isNullOrEmpty() }?.videoUrl,
-                                categoryPath = item.path,
-                                repository = repository,
-                                index = index,
-                                focusedIndex = focusedIndex,
-                                state = rowState,
-                                marginPx = marginPx,
-                                focusRequester = focusRequester,
-                                overview = item.overview,
-                                year = item.year,
-                                rating = item.rating,
-                                shouldRequestFocus = lastFocusedPath != null && item.path != null && item.path == lastFocusedPath,
-                                onFocusRestored = onFocusRestored,
-                                onClick = { onSeriesClick(item.toSeries()) }
                             )
+
+                            NetflixTvPivotRow(
+                                state = sectionRowState,
+                                items = section.items, 
+                                marginValue = standardMargin,
+                                rowKey = rowKey,
+                                rowFocusIndices = rowFocusIndices,
+                                keySelector = { item: Category -> "item_${item.path ?: item.name ?: item.hashCode()}" }
+                            ) { item: Category, index: Int, rowState: LazyListState, focusRequester: androidx.compose.ui.focus.FocusRequester, marginPx: Int, focusedIndex: Int ->
+                                NetflixPivotItem(
+                                    title = item.name ?: "", 
+                                    posterPath = item.posterPath,
+                                    initialVideoUrl = item.movies?.find { !it.videoUrl.isNullOrEmpty() }?.videoUrl,
+                                    categoryPath = item.path,
+                                    repository = repository,
+                                    index = index,
+                                    focusedIndex = focusedIndex,
+                                    state = rowState,
+                                    marginPx = marginPx,
+                                    focusRequester = focusRequester,
+                                    overview = item.overview,
+                                    year = item.year,
+                                    rating = item.rating,
+                                    shouldRequestFocus = lastFocusedPath != null && item.path != null && item.path == lastFocusedPath,
+                                    onFocusRestored = onFocusRestored,
+                                    onClick = { onSeriesClick(item.toSeries()) }
+                                )
+                            }
                         }
                     }
                 }
