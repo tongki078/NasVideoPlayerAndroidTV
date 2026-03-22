@@ -7688,9 +7688,6 @@ def run_patch_task_by_cat(target_cat):
 
         try:
             conn = get_db()
-            # 해당 카테고리의 모든 시리즈 조회
-            # rows = conn.execute("SELECT path, name, cleanedName FROM series WHERE category = ?",
-            #                     (target_cat,)).fetchall()
             rows = conn.execute("""
                 SELECT path, name, cleanedName
                 FROM series
