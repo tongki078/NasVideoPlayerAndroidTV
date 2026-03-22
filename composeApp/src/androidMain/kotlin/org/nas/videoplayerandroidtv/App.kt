@@ -61,7 +61,17 @@ fun App(driver: SqlDriver) {
     LaunchedEffect(Unit) { persistentCache = tmdbCacheDataSource }
     
     val recentQueries by searchHistoryDataSource.getRecentQueries().collectAsState(initial = emptyList())
-    val watchHistory by watchHistoryDataSource.getWatchHistory().collectAsState(initial = emptyList())
+    
+    // [중복 제거 강화] 시리즈 경로 또는 타이틀을 정규화하여 중복 필터링
+    val watchHistoryRaw by watchHistoryDataSource.getWatchHistory().collectAsState(initial = emptyList())
+    val watchHistory = remember(watchHistoryRaw) {
+        watchHistoryRaw.distinctBy { 
+            val normalizedPath = it.seriesPath?.trim()?.removeSuffix("/")
+            val normalizedTitle = (it.seriesTitle ?: it.title).trim()
+            normalizedPath ?: normalizedTitle
+        }
+    }
+    
     val scope = rememberCoroutineScope()
 
     var currentScreen by rememberSaveable { mutableStateOf(Screen.HOME) }
@@ -73,10 +83,8 @@ fun App(driver: SqlDriver) {
     var moviePlaylist by remember { mutableStateOf<List<Movie>>(emptyList()) }
     var lastPlaybackPosition by rememberSaveable { mutableLongStateOf(0L) }
     
-    // 마지막으로 선택했던 시리즈의 경로를 저장하여 포커스 복구에 사용
     var lastSelectedSeriesPath by rememberSaveable { mutableStateOf<String?>(null) }
 
-    // 상단바 포커스 제어용
     val topBarHomeFocusRequester = remember { FocusRequester() }
     var isTopBarFocused by remember { mutableStateOf(false) }
 
@@ -143,7 +151,6 @@ fun App(driver: SqlDriver) {
     val allRowStates = remember { mutableStateMapOf<String, MutableMap<String, LazyListState>>() }
     val allRowFocusIndices = remember { mutableStateMapOf<String, SnapshotStateMap<String, Int>>() }
 
-    // [UX 개선] 뒤로가기 동작 정의
     BackHandler(enabled = selectedMovie != null || selectedSeries != null || currentScreen != Screen.HOME || !isTopBarFocused) {
         when {
             selectedMovie != null -> { selectedMovie = null }
@@ -160,15 +167,15 @@ fun App(driver: SqlDriver) {
 
     val saveWatchHistory: (Movie, String?, Long, Long, String?, String?) -> Unit = { movie, posterPath, pos, dur, sTitle, sPath ->
         scope.launch(Dispatchers.Default) {
-            // 🔴 수정: 저장할 제목으로 sTitle(시리즈 정제 제목)을 우선 사용
             val recordTitle = if (!sTitle.isNullOrBlank()) sTitle else (movie.title ?: "")
-
-            // 시리즈물인 경우 시리즈 경로를 고유 ID로 사용하여 중복 방지
-            val recordId = sPath ?: movie.id ?: ""
+            
+            // [저장 로직 강화] 경로가 있으면 경로를 ID로 사용하여 같은 시리즈는 항상 덮어쓰기 되도록 함
+            val normalizedPath = sPath?.trim()?.removeSuffix("/")
+            val recordId = normalizedPath ?: movie.id ?: ""
 
             watchHistoryDataSource.insertWatchHistory(
                 recordId,
-                recordTitle, // 🔴 수정된 변수 사용
+                recordTitle.trim(), 
                 movie.videoUrl ?: "",
                 movie.thumbnailUrl ?: "",
                 currentTimeMillis(),
@@ -177,8 +184,8 @@ fun App(driver: SqlDriver) {
                 posterPath,
                 pos,
                 dur,
-                sTitle,
-                sPath
+                sTitle?.trim(),
+                normalizedPath
             )
         }
     }
@@ -284,7 +291,7 @@ fun App(driver: SqlDriver) {
                         else -> {
                             HomeScreen(
                                 currentScreen = currentScreen, 
-                                watchHistory = if (currentScreen == Screen.HOME || currentScreen == Screen.WATCH_HISTORY) watchHistory else emptyList(),
+                                watchHistory = if (currentScreen == Screen.HOME || currentScreen == Screen.WATCH_HISTORY) watchHistory else emptyList(), 
                                 homeSections = allCategorySections[currentCacheKey] ?: emptyList(),
                                 isLoading = categoryLoadingStates[currentCacheKey] ?: false,
                                 lazyListState = lazyListStates.getOrPut(currentCacheKey) { LazyListState() },
@@ -305,6 +312,14 @@ fun App(driver: SqlDriver) {
                                     selectedMovie = movie
                                     moviePlaylist = listOf(movie)
                                     lastPlaybackPosition = h.lastPosition
+                                    if (h.seriesPath != null) {
+                                        selectedSeries = Series(
+                                            title = h.seriesTitle ?: h.title,
+                                            fullPath = h.seriesPath,
+                                            posterPath = h.posterPath,
+                                            episodes = emptyList()
+                                        )
+                                    }
                                 },
                                 lastFocusedPath = if (selectedSeries == null) lastSelectedSeriesPath else null,
                                 onFocusRestored = { lastSelectedSeriesPath = null }
