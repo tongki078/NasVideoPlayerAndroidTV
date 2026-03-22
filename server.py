@@ -7705,9 +7705,6 @@ def run_patch_task_by_cat(target_cat):
                 name, path, cleaned = row['name'], row['path'], row['cleanedName']
                 percent = int(((idx + 1) / total) * 100)
                 current_prefix = f"[{idx + 1}/{total}] {percent}%"
-                # with UPDATE_LOCK:
-                #     UPDATE_STATE["current"] = idx + 1
-                #     UPDATE_STATE["current_item"] = cleaned
 
                 # 1. 매칭 엔진 실행 (이미 정제된 cleanedName 사용)
                 try:
