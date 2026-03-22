@@ -5,16 +5,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.SnapshotStateMap
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.nas.videoplayerandroidtv.Screen
@@ -81,7 +77,7 @@ fun HomeScreen(
             state = lazyListState,
             contentPadding = PaddingValues(bottom = 60.dp)
         ) {
-            // 시청 기록 화면이 아닐 때만 히어로 섹션 표시
+            // 시청 기록 전용 화면이 아닐 때만 히어로 섹션 표시
             if (currentScreen != Screen.WATCH_HISTORY) {
                 item(key = "hero_section") {
                     Box(modifier = Modifier.onFocusChanged { 
@@ -171,32 +167,23 @@ fun HomeScreen(
                         }
                     }
                 }
-            } else {
-                // 시청 기록 전용 타이틀
-                item {
-                    Column(modifier = Modifier.padding(horizontal = 48.dp, vertical = 24.dp)) {
-                        Text(
-                            text = "내가 본 영상",
-                            color = Color.White,
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
             }
 
             if (isLoading && combinedSections.isEmpty() && currentScreen != Screen.WATCH_HISTORY) {
                 items(3) { SkeletonRow(standardMargin) }
             } else {
-                // 시청 기록 표시 (홈 화면 상단 혹은 시청기록 전용 화면)
+                // 시청 기록 표시
                 if ((currentScreen == Screen.HOME || currentScreen == Screen.WATCH_HISTORY) && watchHistory.isNotEmpty()) {
                     item(key = "watch_history_row") {
                         val rowKey = "watch_history"
                         val historyRowState = rowStates.getOrPut(rowKey) { LazyListState() }
-                        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) { 
-                            if (currentScreen == Screen.HOME) {
-                                SectionTitle("시청 중인 콘텐츠", standardMargin)
-                            }
+                        Column(modifier = Modifier.fillMaxWidth()) { 
+                            // 제목 일관성 유지: SectionTitle 사용
+                            SectionTitle(
+                                title = if (currentScreen == Screen.WATCH_HISTORY) "내가 본 영상" else "시청 중인 콘텐츠",
+                                horizontalPadding = standardMargin
+                            )
+
                             NetflixTvPivotRow(
                                 state = historyRowState,
                                 items = watchHistory, 
