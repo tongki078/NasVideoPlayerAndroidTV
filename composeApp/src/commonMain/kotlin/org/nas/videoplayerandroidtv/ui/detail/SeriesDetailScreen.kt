@@ -175,7 +175,7 @@ fun SeriesDetailScreen(
                 }
                 
                 Spacer(modifier = Modifier.height(20.dp))
-                Text(text = currentSeries.overview ?: "정보가 없습니다.", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp, lineHeight = 20.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth(0.9f))
+                Text(text = (currentSeries.overview ?: "정보가 없습니다.").replace("\n\n", "\n"), color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp, lineHeight = 20.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth(0.9f))
                 Spacer(modifier = Modifier.height(14.dp))
                 if (!state.isLoading && currentSeries.actors.isNotEmpty()) {
                     Text(text = "출연: " + currentSeries.actors.take(4).joinToString { it.name }, color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) 

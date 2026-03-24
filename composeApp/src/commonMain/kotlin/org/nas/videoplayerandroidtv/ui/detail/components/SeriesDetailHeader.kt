@@ -135,7 +135,7 @@ fun SeriesDetailHeader(
                     text = metadata?.overview ?: "상세 정보를 불러오는 중입니다...", 
                     color = Color.LightGray, 
                     fontSize = 15.sp, 
-                    lineHeight = 18.sp,
+                    lineHeight = 22.sp,
                     maxLines = 4, 
                     overflow = TextOverflow.Ellipsis
                 )
