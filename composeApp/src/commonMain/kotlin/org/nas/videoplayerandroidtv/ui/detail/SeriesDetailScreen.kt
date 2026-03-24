@@ -470,7 +470,10 @@ private fun loadSeasons(series: Series): List<Season> {
             }.sortedBy { it.episode_number ?: it.title?.let { t -> t.extractEpisode()?.filter { c -> c.isDigit() }?.toIntOrNull() } ?: 0 }
             
             Season(number = seasonNum, name = seasonName, episodes = processedEpisodes)
-        }.sortedBy { it.number }
+        }.sortedWith(compareBy(
+                { when { "스페셜" in it.name -> 3; "고화질" in it.name -> 2; else -> 1 } },
+                { it.number }
+            ))
     }
 
     if (series.episodes.isNotEmpty()) {
