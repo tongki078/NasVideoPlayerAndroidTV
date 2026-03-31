@@ -22,6 +22,7 @@ import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import coil3.request.CachePolicy
 import coil3.size.Size
 import org.nas.videoplayerandroidtv.*
 import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
@@ -40,21 +41,17 @@ fun TmdbAsyncImage(
     val cacheKey = remember(title, isAnimation) { if (isAnimation) "ani_$title" else title }
     val metadata = tmdbCache[cacheKey]
     
-    // [수정] 서버에서 이미 posterPath를 줬다면 굳이 앱에서 TMDB 검색(fetch)을 시도하지 않음
     val isFetchingMetadata = remember(metadata, posterPath) { 
         (posterPath == null || posterPath == "null" || posterPath.isEmpty()) && metadata == null 
     }
 
     val finalImageUrl = remember(metadata, posterPath, isLarge) {
-        // 1. 서버에서 받은 posterPath가 이미 전체 URL인 경우 처리
         if (posterPath?.startsWith("http") == true) return@remember posterPath
 
-        // 2. 이미 완성된 로컬 캐시 posterUrl이 있다면 그대로 사용
         if (metadata?.posterUrl != null && metadata.posterUrl.startsWith("http")) {
             return@remember metadata.posterUrl
         }
         
-        // 3. posterPath(경로만)가 있는 경우 안전하게 조합 (서버 데이터 우선)
         val path = if (posterPath != null && posterPath != "null" && posterPath.isNotEmpty()) {
             posterPath
         } else {
@@ -62,8 +59,8 @@ fun TmdbAsyncImage(
         }
 
         if (path != null && path != "null" && path.isNotEmpty()) {
-            val size = if (isLarge) TMDB_POSTER_SIZE_LARGE else TMDB_POSTER_SIZE_MEDIUM
-            // TMDB_IMAGE_BASE에 슬래시가 포함되어 있으므로 경로 앞의 슬래시 제거 후 조합
+            // [최적화] 히어로 섹션은 고해상도(w1280), 일반 목록은 중간 해상도(w500)
+            val size = if (isLarge) "w1280" else "w500"
             val cleanPath = path.removePrefix("/")
             "$TMDB_IMAGE_BASE$size/$cleanPath"
         } else null
@@ -75,15 +72,17 @@ fun TmdbAsyncImage(
         }
     }
 
-    // [최적화] 대형 TV(75인치)를 위해 이미지 요청 사이즈 상향 조정
     val context = LocalPlatformContext.current
     val painter = rememberAsyncImagePainter(
         model = remember(finalImageUrl, isLarge) {
             ImageRequest.Builder(context)
                 .data(finalImageUrl)
                 .crossfade(true)
-                // 기존 대비 2배 이상의 해상도 확보
-                .size(if (isLarge) Size(1000, 1500) else Size(780, 1170))
+                // 🔴 캐시 설정만 명확히 하여 로딩 속도 개선 (Priority 제거하여 에러 해결)
+                .diskCachePolicy(CachePolicy.ENABLED)
+                .memoryCachePolicy(CachePolicy.ENABLED)
+                // TV 환경에 최적화된 다운샘플링 사이즈
+                .size(if (isLarge) Size(1280, 720) else Size(500, 750))
                 .build()
         }
     )
