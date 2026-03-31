@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -19,6 +20,8 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.tv.material3.Text
 import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
@@ -341,9 +345,75 @@ private fun HeroButton(
     }
 }
 
+//@Composable
+//fun SectionTitle(
+//    title: String,
+//    horizontalPadding: androidx.compose.ui.unit.Dp,
+//    items: List<org.nas.videoplayerandroidtv.domain.model.Category> = emptyList(),
+//    isFullList: Boolean = false,
+//    onIndexClick: (Int) -> Unit = {}
+//) {
+//    Row(
+//        modifier = Modifier
+//            .fillMaxWidth()
+//            .padding(start = horizontalPadding, top = 28.dp, bottom = 14.dp, end = horizontalPadding),
+//        verticalAlignment = Alignment.CenterVertically) {
+//        Text(
+//            text = title,
+//            color = Color.White,
+//            fontWeight = FontWeight.Bold,
+//            fontSize = 20.sp,
+//            letterSpacing = (-0.5).sp,
+//            modifier = Modifier.padding(end = 16.dp)
+//        )
+//
+//        if ((isFullList || title.contains("전체목록") || title.contains("전체 목록")) && items.isNotEmpty()) {
+//            val standardOrder = listOf(
+//                "ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ", "ㅂ", "ㅅ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ", "A-Z"
+//            )
+//
+//            val itemInitialSounds = remember(items) {
+//                items.mapIndexedNotNull { index, item ->
+//                    val sound = item.chosung ?: getInitialSound(item.name)
+//                    if (sound != "#") sound to index else null
+//                }.distinctBy { it.first }.toMap()
+//            }
+//
+//            LazyRow(
+//                horizontalArrangement = Arrangement.spacedBy(8.dp),
+//                verticalAlignment = Alignment.CenterVertically
+//            ) {
+//                itemsIndexed(standardOrder) { _, sound ->
+//                    val targetIndex = itemInitialSounds[sound] ?: 0
+//                    val hasItems = itemInitialSounds.containsKey(sound)
+//
+//                    var isFocused by remember { mutableStateOf(false) }
+//                    Surface(
+//                        onClick = { if(hasItems) onIndexClick(targetIndex) },
+//                        color = if(isFocused) Color.White else Color.White.copy(alpha = 0.1f),
+//                        shape = RoundedCornerShape(4.dp),
+//                        modifier = Modifier
+//                            .size(32.dp)
+//                            .onFocusChanged { isFocused = it.isFocused }
+//                            .focusable()
+//                    ) {
+//                        Box(contentAlignment = Alignment.Center) {
+//                            Text(
+//                                text = sound,
+//                                color = if(isFocused) Color.Black else if(hasItems) Color.White else Color.White.copy(alpha = 0.2f),
+//                                fontSize = 12.sp,
+//                                fontWeight = FontWeight.Bold
+//                            )
+//                        }
+//                    }
+//                }
+//            }
+//        }
+//    }
+//}
 @Composable
 fun SectionTitle(
-    title: String, 
+    title: String,
     horizontalPadding: androidx.compose.ui.unit.Dp,
     items: List<org.nas.videoplayerandroidtv.domain.model.Category> = emptyList(),
     isFullList: Boolean = false,
@@ -355,23 +425,114 @@ fun SectionTitle(
             .padding(start = horizontalPadding, top = 28.dp, bottom = 14.dp, end = horizontalPadding),
         verticalAlignment = Alignment.CenterVertically) {
         Text(
-            text = title, 
-            color = Color.White, 
-            fontWeight = FontWeight.Bold, 
-            fontSize = 20.sp, 
+            text = title,
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 20.sp,
             letterSpacing = (-0.5).sp,
             modifier = Modifier.padding(end = 16.dp)
         )
 
+//        if ((isFullList || title.contains("전체목록") || title.contains("전체 목록")) && items.isNotEmpty()) {
+//            // 🔴 수정: A-Z를 하나의 그룹으로 묶음
+//            val standardOrder = listOf(
+//                "ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ", "ㅂ", "ㅅ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ",
+//                "A-Z", "0-9", "기타"
+//            )
+//
+//            val itemInitialSounds = remember(items) {
+//                derivedStateOf {
+//                    items.mapIndexedNotNull { index, item ->
+//                        // 🔴 서버가 보내준 chosung 값을 기반으로 분류 재정의
+//                        val rawChosung = item.chosung ?: "기타"
+//
+//                        val sound = when {
+//                            rawChosung.length == 1 && rawChosung[0] in 'A'..'Z' -> "A-Z"
+//                            rawChosung == "0-9" -> "0-9"
+//                            rawChosung == "기타" -> "기타"
+//                            else -> rawChosung // 한글 초성은 그대로 유지
+//                        }
+//
+//                        if (sound != "기타") sound to index else null
+//                    }.distinctBy { it.first }.toMap()
+//                }
+//            }
+//            LazyRow(
+//                horizontalArrangement = Arrangement.spacedBy(8.dp),
+//                verticalAlignment = Alignment.CenterVertically
+//            ) {
+////                itemsIndexed(standardOrder) { _, sound ->
+////                    val targetIndex = itemInitialSounds[sound] ?: 0
+////                    val hasItems = itemInitialSounds.containsKey(sound)
+////
+////                    var isFocused by remember { mutableStateOf(false) }
+////                    Surface(
+////                        onClick = { if(hasItems) onIndexClick(targetIndex) },
+////                        color = if(isFocused) Color.White else Color.White.copy(alpha = 0.1f),
+////                        shape = RoundedCornerShape(4.dp),
+////                        modifier = Modifier
+////                            .size(32.dp)
+////                            .onFocusChanged { isFocused = it.isFocused }
+////                            .focusable()
+////                    ) {
+////                        Box(contentAlignment = Alignment.Center) {
+////                            Text(
+////                                text = sound,
+////                                color = if(isFocused) Color.Black else if(hasItems) Color.White else Color.White.copy(alpha = 0.2f),
+////                                fontSize = 10.sp, // 폰트 크기를 조금 줄여서 A-Z 버튼들이 다 보이게 조정
+////                                fontWeight = FontWeight.Bold
+////                            )
+////                        }
+////                    }
+////                }
+//
+//                itemsIndexed(standardOrder) { _, sound ->
+//                    val targetIndex = itemInitialSounds[sound] ?: 0
+//                    val hasItems = itemInitialSounds.containsKey(sound)
+//
+//                    // 🔴 1. InteractionSource 사용 (가장 가벼운 포커스 감지 방법)
+//                    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+//                    val isFocused by interactionSource.collectIsFocusedAsState()
+//
+//                    Surface(
+//                        onClick = { if(hasItems) onIndexClick(targetIndex) },
+//                        // 🔴 2. 애니메이션 없이 즉각적인 색상 적용 (CPU 부하 감소)
+//                        color = if(isFocused) Color.White else Color.White.copy(alpha = 0.1f),
+//                        shape = RoundedCornerShape(4.dp),
+//                        modifier = Modifier
+//                            .size(32.dp)
+//                            .focusable(interactionSource = interactionSource), // 🔴 여기에 interactionSource 연결
+//                    ) {
+//                        Box(contentAlignment = Alignment.Center) {
+//                            Text(
+//                                text = sound,
+//                                color = if(isFocused) Color.Black else if(hasItems) Color.White else Color.White.copy(alpha = 0.2f),
+//                                fontSize = 12.sp,
+//                                fontWeight = FontWeight.Bold
+//                            )
+//                        }
+//                    }
+//                }
+//            }
+//        }
+
         if ((isFullList || title.contains("전체목록") || title.contains("전체 목록")) && items.isNotEmpty()) {
             val standardOrder = listOf(
-                "ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ", "ㅂ", "ㅅ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ", "A-Z"
+                "ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ", "ㅂ", "ㅅ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ",
+                "A-Z", "0-9", "기타"
             )
 
+            // 🔴 remember 내에서 Map을 바로 생성하여 타입 문제 방지
             val itemInitialSounds = remember(items) {
                 items.mapIndexedNotNull { index, item ->
-                    val sound = item.chosung ?: getInitialSound(item.name)
-                    if (sound != "#") sound to index else null
+                    val rawChosung = item.chosung ?: "기타"
+                    val sound = when {
+                        rawChosung.length == 1 && rawChosung[0] in 'A'..'Z' -> "A-Z"
+                        rawChosung == "0-9" -> "0-9"
+                        rawChosung == "기타" -> "기타"
+                        else -> rawChosung
+                    }
+                    if (sound != "기타") sound to index else null
                 }.distinctBy { it.first }.toMap()
             }
 
@@ -379,22 +540,25 @@ fun SectionTitle(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                itemsIndexed(standardOrder) { _, sound ->
-                    val targetIndex = itemInitialSounds[sound] ?: 0 
+                items(standardOrder.size) { index -> // 🔴 인덱스로 안전하게 접근
+                    val sound = standardOrder[index]
+                    val targetIndex = itemInitialSounds[sound] ?: 0
                     val hasItems = itemInitialSounds.containsKey(sound)
- 
-                    var isFocused by remember { mutableStateOf(false) }
+
+                    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                    val isFocused by interactionSource.collectIsFocusedAsState()
+
                     Surface(
                         onClick = { if(hasItems) onIndexClick(targetIndex) },
                         color = if(isFocused) Color.White else Color.White.copy(alpha = 0.1f),
                         shape = RoundedCornerShape(4.dp),
                         modifier = Modifier
                             .size(32.dp)
-                            .onFocusChanged { isFocused = it.isFocused }
-                            .focusable()
+                            .focusable(interactionSource = interactionSource),
                     ) {
                         Box(contentAlignment = Alignment.Center) {
-                            Text(
+                            // 🔴 androidx.tv.material3.Text 명시
+                            androidx.tv.material3.Text(
                                 text = sound,
                                 color = if(isFocused) Color.Black else if(hasItems) Color.White else Color.White.copy(alpha = 0.2f),
                                 fontSize = 12.sp,

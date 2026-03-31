@@ -1161,33 +1161,54 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):
                 'movie' if best_match.get('title') else 'tv'), best_match.get('id')
             log("TMDB", f"✅ 매칭 성공: '{ct}' -> {m_type}:{t_id}")
             log_matching_success(title, ct, best_match.get('title') or best_match.get('name'), f"{m_type}:{t_id}")
+            # d_resp = requests.get(
+            #     f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings,credits",
+            #     headers=headers, timeout=10).json()
+            # 영화/TV 공용 호출부
             d_resp = requests.get(
-                f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings,credits",
+                f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=content_ratings,credits,release_dates",
                 headers=headers, timeout=10).json()
-
             yv = (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0]
             rating = None
             # 기존
             # if 'content_ratings' in d_resp:
             #     res_r = d_resp['content_ratings'].get('results', [])
-            #     kr = next((r['rating'] for r in res_r if r.get('iso_3166_1') == 'KR'), None)
-            #     if kr: rating = f"{kr}+" if kr.isdigit() else kr
-            if 'content_ratings' in d_resp:
+            #
+            #     # 1. 우선순위대로 등급 찾기
+            #     # KR(한국) -> US(미국) -> 기본(기타)
+            #     kr_rating = next((r['rating'] for r in res_r if r.get('iso_3166_1') == 'KR'), None)
+            #     us_rating = next((r['rating'] for r in res_r if r.get('iso_3166_1') == 'US'), None)
+            #
+            #     # 한국 등급이 없으면 미국 등급을 사용하고, 그래도 없으면 첫 번째 등급을 시도
+            #     final_rating = kr_rating or us_rating or (res_r[0]['rating'] if res_r else None)
+            #
+            #     if final_rating:
+            #         # 등급에 숫자나 문자가 섞여있을 때 깔끔하게 포맷팅
+            #         rating = f"{final_rating}+" if final_rating.isdigit() else final_rating
+            #     else:
+            #         rating = "등급없음"  # None 대신 명시적인 문구 사용
+            # 🔴 수정된 등급 파싱 로직 (TV/Movie 분기 처리)
+            rating = "등급없음"
+
+            # 1. TV 시리즈인 경우 (content_ratings 확인)
+            if m_type == 'tv' and 'content_ratings' in d_resp:
                 res_r = d_resp['content_ratings'].get('results', [])
+                kr_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'KR'), None)
+                us_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'US'), None)
 
-                # 1. 우선순위대로 등급 찾기
-                # KR(한국) -> US(미국) -> 기본(기타)
-                kr_rating = next((r['rating'] for r in res_r if r.get('iso_3166_1') == 'KR'), None)
-                us_rating = next((r['rating'] for r in res_r if r.get('iso_3166_1') == 'US'), None)
+                final = kr_rating or us_rating or (res_r[0].get('rating') if res_r else None)
+                if final:
+                    rating = f"{final}+" if str(final).isdigit() else final
 
-                # 한국 등급이 없으면 미국 등급을 사용하고, 그래도 없으면 첫 번째 등급을 시도
-                final_rating = kr_rating or us_rating or (res_r[0]['rating'] if res_r else None)
-
-                if final_rating:
-                    # 등급에 숫자나 문자가 섞여있을 때 깔끔하게 포맷팅
-                    rating = f"{final_rating}+" if final_rating.isdigit() else final_rating
-                else:
-                    rating = "등급없음"  # None 대신 명시적인 문구 사용
+            # 2. 영화(movie)인 경우 (release_dates 확인)
+            elif m_type == 'movie' and 'release_dates' in d_resp:
+                res_r = d_resp['release_dates'].get('results', [])
+                # 한국 개봉 정보 찾기
+                kr_data = next((r.get('release_dates', []) for r in res_r if r.get('iso_3166_1') == 'KR'), [])
+                # 인증 정보(certification)가 있는 경우 선택
+                final = next((r.get('certification') for r in kr_data if r.get('certification')), None)
+                if final:
+                    rating = final
             genre_names = [g['name'] for g in d_resp.get('genres', [])] if d_resp.get('genres') else []
             cast_data = d_resp.get('credits', {}).get('cast', [])
             actors = [{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in cast_data[:10]]
@@ -1195,19 +1216,31 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):
             director = next((c['name'] for c in crew_data if c.get('job') == 'Director'), "")
 
             # 여기서 d_resp를 그대로 JSON으로 저장 준비
-            # 필요한 핵심 정보만 따로 뽑고, 나머지는 metadata_json에 통째로 담습니다.
-            extra_meta = {
-                "tagline": d_resp.get("tagline"),
-                "homepage": d_resp.get("homepage"),
-                "original_language": d_resp.get("original_language"),
-                "status": d_resp.get("status"),
-                "networks": d_resp.get("networks"),
-                "vote_average": d_resp.get("vote_average"),
-                "popularity": d_resp.get("popularity"),
-                "backdrop_path": d_resp.get("backdrop_path"),
-                "created_by": d_resp.get("created_by")
-            }
+            # info = {
+            #     "tmdbId": f"{m_type}:{t_id}",
+            #     "title": d_resp.get('title') or d_resp.get('name'),
+            #     "genreIds": [g['id'] for g in d_resp.get('genres', [])],
+            #     "genreNames": [g['name'] for g in d_resp.get('genres', [])],
+            #     "director": director,
+            #     "actors": actors,
+            #     "posterPath": d_resp.get('poster_path'),
+            #     "year": yv,
+            #     "overview": d_resp.get('overview'),
+            #     "rating": rating,
+            #     "seasonCount": d_resp.get('number_of_seasons'),
+            #     "runtime": d_resp.get('runtime'),
+            #     "metadata_json": json.dumps({
+            #         "tagline": d_resp.get("tagline"),
+            #         "backdrop_path": d_resp.get("backdrop_path"),
+            #         "homepage": d_resp.get("homepage"),
+            #         "status": d_resp.get("status"),
+            #         "vote_average": d_resp.get("vote_average"),
+            #         "popularity": d_resp.get("popularity")
+            #     }, ensure_ascii=False),
+            #     "failed": False
+            # }
 
+            # 🔴 extra_meta에 정의된 정보들을 info에 병합 (또는 필요한 값만 개별 추가)
             info = {
                 "tmdbId": f"{m_type}:{t_id}",
                 "title": d_resp.get('title') or d_resp.get('name'),
@@ -1221,13 +1254,17 @@ def get_tmdb_info_server(title, category=None, ignore_cache=False, path=None):
                 "rating": rating,
                 "seasonCount": d_resp.get('number_of_seasons'),
                 "runtime": d_resp.get('runtime'),
+                # 🔴 아래의 metadata_json이 실제 DB 저장용 텍스트입니다.
                 "metadata_json": json.dumps({
                     "tagline": d_resp.get("tagline"),
                     "backdrop_path": d_resp.get("backdrop_path"),
                     "homepage": d_resp.get("homepage"),
                     "status": d_resp.get("status"),
                     "vote_average": d_resp.get("vote_average"),
-                    "popularity": d_resp.get("popularity")
+                    "popularity": d_resp.get("popularity"),
+                    "original_language": d_resp.get("original_language"),  # 추가
+                    "networks": d_resp.get("networks"),  # 추가
+                    "created_by": d_resp.get("created_by")  # 추가
                 }, ensure_ascii=False),
                 "failed": False
             }
@@ -2210,13 +2247,34 @@ def fetch_metadata_targeted(target_name=None, target_category=None, target_path=
 #
 #     emit_ui_log("🏁 [테스트] 모든 시뮬레이션 완료. DB 변경 없음.", "success")
 
+# def get_chosung(text):
+#     CHOSUNG_LIST = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
+#     if not text: return ""
+#     char_code = ord(text[0])
+#     if 0xAC00 <= char_code <= 0xD7A3:  # 한글인 경우
+#         return CHOSUNG_LIST[(char_code - 0xAC00) // 588]
+#     return text[0].upper()  # 영문/숫자는 대문자 첫글자
+
+# 서버사이드: 데이터 응답 생성부
 def get_chosung(text):
-    CHOSUNG_LIST = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
-    if not text: return ""
+    if not text: return "기타"
+    text = text.strip()
+
+    # 1. 영문(A-Z)인 경우
+    if 'A' <= text[0].upper() <= 'Z':
+        return text[0].upper()  # 'A', 'B' ... 'Z' 반환
+
+    # 2. 숫자(0-9)인 경우
+    if text[0].isdigit():
+        return "0-9"  # '0-9' 그룹으로 묶음
+
+    # 3. 한글인 경우 (기존)
     char_code = ord(text[0])
-    if 0xAC00 <= char_code <= 0xD7A3:  # 한글인 경우
+    if 0xAC00 <= char_code <= 0xD7A3:
+        CHOSUNG_LIST = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
         return CHOSUNG_LIST[(char_code - 0xAC00) // 588]
-    return text[0].upper()  # 영문/숫자는 대문자 첫글자
+
+    return "기타"
 
 def get_sections_for_category(cat, kw=None):
     GENRE_MAP = {
@@ -2332,11 +2390,33 @@ def get_sections_for_category(cat, kw=None):
             })
 
     # [테마 3] 전체 목록 복원 + 초성 인덱싱
+    # display_limit = 3000
+    # full_list = target_list[:display_limit]
+    # for item in full_list:
+    #     item['chosung'] = get_chosung(item.get('name', ''))
     display_limit = 3000
     full_list = target_list[:display_limit]
-    for item in full_list:
-        item['chosung'] = get_chosung(item.get('name', ''))
 
+    for item in full_list:
+        target_name = item.get('cleanedName') or item.get('name')
+        # [정제] 괄호 및 특수문자 제거
+        clean_target = re.sub(r'\[.*?\]|\(.*?\)|[^가-힣a-zA-Z0-9]', '', target_name).strip()
+
+        if clean_target:
+            first = clean_target[0]
+            # [규칙 1] 한글 초성 분류
+            if '가' <= first <= '힣':
+                item['chosung'] = get_chosung(clean_target)
+            # [규칙 2] 영어는 첫 글자 대문자 고정
+            elif first.isalpha():
+                item['chosung'] = first.upper()
+                # [규칙 3] 숫자는 '0-9'라는 하나의 그룹으로 묶음
+            elif first.isdigit():
+                item['chosung'] = '0-9'
+            else:
+                item['chosung'] = '기타'
+        else:
+            item['chosung'] = '기타'
     sections.append({
         "title": "전체목록",
         "items": full_list,
@@ -3202,104 +3282,123 @@ def fast_korean_titles():
 @app.route('/admin')
 def admin_page():
     return """
-    <html>
+    <!DOCTYPE html>
+    <html lang="ko">
     <head>
-        <title>NAS Player Admin - Metadata Failures</title>
+        <meta charset="UTF-8">
+        <title>NAS Player Admin - Diagnostics</title>
+        <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
         <style>
-            body { font-family: sans-serif; background: #141414; color: white; padding: 20px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th, td { padding: 12px; text-align: left; border-bottom: 1px solid #333; }
-            th { background: #222; }
-            .candidate { font-size: 0.85em; color: #aaa; margin-bottom: 5px; }
-            .score { color: #46D369; font-weight: bold; }
-            input { padding: 5px; border-radius: 4px; border: 1px solid #444; background: #222; color: white; }
-            button { padding: 5px 10px; background: #E50914; color: white; border: none; border-radius: 4px; cursor: pointer; }
-            button:hover { background: #b20710; }
-            .pagination { margin-top: 20px; text-align: center; }
-            .pagination button { margin: 0 5px; }
+            :root { --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc; --text-dim: #94a3b8; --primary: #3b82f6; --border: #334155; }
+            body { font-family: 'Inter', sans-serif; background: var(--bg-color); color: var(--text-main); margin: 0; padding: 40px 20px; }
+            .container { max-width: 1200px; margin: 0 auto; }
+
+            /* 네비게이션 탭 통일 */
+            .nav-tabs { display: flex; gap: 10px; margin-bottom: 30px; border-bottom: 1px solid var(--border); padding-bottom: 15px; }
+            .nav-tab { padding: 10px 20px; background: var(--card-bg); color: var(--text-dim); text-decoration: none; border-radius: 8px; font-size: 14px; font-weight: 600; border: 1px solid var(--border); transition: 0.2s; }
+            .nav-tab.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+            h1 { font-size: 24px; margin-bottom: 25px; display: flex; align-items: center; gap: 12px; }
+            .control-box { background: var(--card-bg); padding: 20px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 20px; display: flex; gap: 10px; }
+
+            table { width: 100%; border-collapse: collapse; background: var(--card-bg); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
+            th { background: #334155; color: var(--text-dim); padding: 15px; text-align: left; font-size: 13px; }
+            td { padding: 12px 15px; border-bottom: 1px solid var(--border); font-size: 13px; }
+
+            input { background: #0f172a; border: 1px solid var(--border); padding: 10px; border-radius: 8px; color: white; flex: 1; }
+            button { padding: 10px 20px; border-radius: 8px; border: none; background: var(--primary); color: white; font-weight: 600; cursor: pointer; }
         </style>
     </head>
     <body>
-        <h1>메타데이터 매칭 실패 진단 및 수동 수정</h1>
-        <!-- [삽입 시작] 검색창 삽입 -->
-        <div style="margin-bottom: 20px;">
-            <input type="text" id="searchInput" placeholder="제목 검색 (예: 다)">
-            <button onclick="loadFailures(0)">검색</button>
+        <div class="container">
+            <h1><i class="fas fa-search"></i> 메타데이터 매칭 실패 진단</h1>
+
+            <div class="nav-tabs">
+                <a href="/updater" class="nav-tab">대시보드</a>
+                <a href="/admin/ghost" class="nav-tab">유령 데이터 관리</a>
+                <a href="/admin" class="nav-tab active">매칭 진단</a>
+                <a href="/admin/db_pro" class="nav-tab">DB Pro</a>
+            </div>
+
+            <div class="control-box">
+                <input type="text" id="searchInput" placeholder="제목 검색 (예: 다)">
+                <button onclick="loadFailures(0)"><i class="fas fa-search"></i> 검색</button>
+            </div>
+
+            <div id="content">로딩 중...</div>
+            <div class="pagination" style="text-align: center; margin-top: 20px;">
+                <button onclick="prevPage()"><i class="fas fa-chevron-left"></i> 이전</button>
+                <span id="pageInfo" style="margin: 0 15px;"></span>
+                <button onclick="nextPage()">다음 <i class="fas fa-chevron-right"></i></button>
+            </div>
         </div>
-        <!-- [삽입 끝] -->
-        <div id="content">로딩 중...</div>
-        <div class="pagination">
-            <button onclick="prevPage()">이전</button>
-            <span id="pageInfo" style="margin: 0 10px;"></span>
-            <button onclick="nextPage()">다음</button>
-        </div>
-<script>
-    let currentOffset = 0;
-    const LIMIT = 50;
-    let totalCount = 0;
+        <script>
+            let currentOffset = 0;
+            const LIMIT = 50;
+            let totalCount = 0;
 
-    // 한글 ID 문제를 피하기 위해 인덱스를 활용하여 안전한 ID 생성
-    function getSafeId(orig) {
-        return "id_" + btoa(unescape(encodeURIComponent(orig))).replace(/=/g, '');
-    }
-
-    async function loadFailures(offset = 0) {
-        currentOffset = offset;
-        const q = document.getElementById('searchInput').value;
-        const resp = await fetch(`/api/admin/diagnostics?offset=${currentOffset}&limit=${LIMIT}&q=${encodeURIComponent(q)}`);
-        const data = await resp.json();
-        totalCount = data.total;
-
-        let html = '<table><tr><th>원본 파일명</th><th>정제된 제목</th><th>TMDB 제목</th><th>ID/경로</th><th>수동 매칭</th></tr>';
-
-        if (data.items) {
-            for (const [orig, info] of Object.entries(data.items)) {
-                const safeId = getSafeId(orig);
-                html += `<tr>
-                    <td>${orig}</td>
-                    <td>${info.cleaned}</td>
-                    <td>${info.tmdbTitle}</td>
-                    <td style="font-size: 11px;">${info.tmdbId}<br>${info.path}</td>
-                    <td>
-                        <input type="text" id="${safeId}" placeholder="tv:123">
-                        <button onclick="manualMatch('${orig.replace(/'/g, "\\'")}')">적용</button>
-                    </td>
-                </tr>`;
+            // 한글 ID 문제를 피하기 위해 인덱스를 활용하여 안전한 ID 생성
+            function getSafeId(orig) {
+                return "id_" + btoa(unescape(encodeURIComponent(orig))).replace(/=/g, '');
             }
-        }
-        html += '</table>';
 
-        document.getElementById('content').innerHTML = html;
-        document.getElementById('pageInfo').innerText = `${currentOffset + 1} ~ ${Math.min(currentOffset + LIMIT, totalCount)} / 총 ${totalCount}건`;
-    }
+            async function loadFailures(offset = 0) {
+                currentOffset = offset;
+                const q = document.getElementById('searchInput').value;
+                const resp = await fetch(`/api/admin/diagnostics?offset=${currentOffset}&limit=${LIMIT}&q=${encodeURIComponent(q)}`);
+                const data = await resp.json();
+                totalCount = data.total;
 
-    async function manualMatch(orig) {
-        const safeId = getSafeId(orig);
-        const val = document.getElementById(safeId).value;
+                let html = '<table><tr><th>원본 파일명</th><th>정제된 제목</th><th>TMDB 제목</th><th>ID/경로</th><th>수동 매칭</th></tr>';
 
-        if (!val.includes(':')) { alert('형식 오류! 예: tv:12345'); return; }
-        const [type, id] = val.split(':');
+                if (data.items) {
+                    for (const [orig, info] of Object.entries(data.items)) {
+                        const safeId = getSafeId(orig);
+                        html += `<tr>
+                            <td>${orig}</td>
+                            <td>${info.cleaned}</td>
+                            <td>${info.tmdbTitle}</td>
+                            <td style="font-size: 11px;">${info.tmdbId}<br>${info.path}</td>
+                            <td>
+                                <input type="text" id="${safeId}" placeholder="tv:123">
+                                <button onclick="manualMatch('${orig.replace(/'/g, "\\'")}')">적용</button>
+                            </td>
+                        </tr>`;
+                    }
+                }
+                html += '</table>';
 
-        const resp = await fetch('/api/admin/manual_match', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({orig_name: orig, type: type, tmdb_id: id})
-        });
-        const res = await resp.json();
-        if (res.status === 'success') {
-            alert('수정 완료!');
-            loadFailures(currentOffset);
-        } else {
-            alert('에러: ' + res.message);
-        }
-    }
+                document.getElementById('content').innerHTML = html;
+                document.getElementById('pageInfo').innerText = `${currentOffset + 1} ~ ${Math.min(currentOffset + LIMIT, totalCount)} / 총 ${totalCount}건`;
+            }
 
-    // 이전/다음 페이지 버튼도 로드 함수를 올바르게 호출
-    function prevPage() { if (currentOffset - LIMIT >= 0) loadFailures(currentOffset - LIMIT); }
-    function nextPage() { if (currentOffset + LIMIT < totalCount) loadFailures(currentOffset + LIMIT); }
+            async function manualMatch(orig) {
+                const safeId = getSafeId(orig);
+                const val = document.getElementById(safeId).value;
 
-    loadFailures();
-</script>
+                if (!val.includes(':')) { alert('형식 오류! 예: tv:12345'); return; }
+                const [type, id] = val.split(':');
+
+                const resp = await fetch('/api/admin/manual_match', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({orig_name: orig, type: type, tmdb_id: id})
+                });
+                const res = await resp.json();
+                if (res.status === 'success') {
+                    alert('수정 완료!');
+                    loadFailures(currentOffset);
+                } else {
+                    alert('에러: ' + res.message);
+                }
+            }
+
+            // 이전/다음 페이지 버튼도 로드 함수를 올바르게 호출
+            function prevPage() { if (currentOffset - LIMIT >= 0) loadFailures(currentOffset - LIMIT); }
+            function nextPage() { if (currentOffset + LIMIT < totalCount) loadFailures(currentOffset + LIMIT); }
+
+            loadFailures();
+        </script>
     </body>
     </html>
     """
@@ -4269,7 +4368,6 @@ def updater_ui():
                 <a href="/updater" class="nav-tab active"><i class="fas fa-sync-alt"></i> 대시보드</a>
                 <a href="/admin/ghost" class="nav-tab"><i class="fas fa-ghost"></i> 유령 데이터 관리</a>
                 <a href="/admin" class="nav-tab"><i class="fas fa-search"></i> 매칭 진단</a>
-                <a href="/admin_stills" class="nav-tab"><i class="fas fa-image"></i> 스틸컷 현황</a>
                 <a href="/admin/db_pro" class="nav-tab active" style="background: var(--accent); color: white;"><i class="fas fa-database"></i> DB Pro (데이터 관리)</a>
             </div>
 
@@ -5717,7 +5815,7 @@ def manual_match():
 
 @app.route('/api/manual_match_simple')
 def manual_match_simple():
-    """TMDB 정보를 연결하되, 원래 제목은 유지하고 에피소드 상세 정보까지 갱신"""
+    """TMDB 정보를 연결하되, 원래 제목은 유지하고 에피소드 상세 정보 및 등급까지 갱신"""
     target_name = request.args.get('name')
     full_id = request.args.get('id')
 
@@ -5729,13 +5827,34 @@ def manual_match_simple():
     try:
         m_type, t_id = full_id.split(':')
         headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
-        d_resp = requests.get(
-            f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=credits",
-            headers=headers, timeout=10).json()
+
+        # 🔴 수정 1: 호출 파라미터에 content_ratings, release_dates 추가
+        response = requests.get(
+            f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=credits,content_ratings,release_dates",
+            headers=headers, timeout=10)
+
+        if response.status_code != 200:
+            return jsonify({"status": "error", "message": f"TMDB 응답 오류: {response.status_code}"}), 500
+
+        d_resp = response.json()
 
         if 'id' not in d_resp:
             emit_ui_log(f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", "error")
             return f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", 404
+
+        # 🔴 수정 2: 등급 파싱 로직 추가 (TV/Movie 분기)
+        rating = "등급없음"
+        if m_type == 'tv' and 'content_ratings' in d_resp:
+            res_r = d_resp['content_ratings'].get('results', [])
+            kr_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'KR'), None)
+            us_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'US'), None)
+            final = kr_rating or us_rating or (res_r[0].get('rating') if res_r else None)
+            if final: rating = f"{final}+" if str(final).isdigit() else final
+        elif m_type == 'movie' and 'release_dates' in d_resp:
+            res_r = d_resp['release_dates'].get('results', [])
+            kr_data = next((r.get('release_dates', []) for r in res_r if r.get('iso_3166_1') == 'KR'), [])
+            final = next((r.get('certification') for r in kr_data if r.get('certification')), None)
+            if final: rating = final
 
         metadata_json = json.dumps({
             "tagline": d_resp.get("tagline"),
@@ -5750,12 +5869,12 @@ def manual_match_simple():
         cursor = conn.cursor()
         search_pattern = f'%{target_name}%'
 
-        # 1. 시리즈 정보 업데이트
+        # 1. 시리즈 정보 업데이트 (rating 추가)
         cursor.execute("""
             UPDATE series SET
                 posterPath=?, year=?, overview=?, seasonCount=?,
                 genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
-                tmdbTitle=?, runtime=?, metadata_json=?
+                tmdbTitle=?, runtime=?, metadata_json=?, rating=?
             WHERE name LIKE ? OR cleanedName LIKE ?
         """, (
             d_resp.get('poster_path'),
@@ -5766,12 +5885,12 @@ def manual_match_simple():
             next((c['name'] for c in d_resp.get('credits', {}).get('crew', []) if c.get('job') == 'Director'), ""),
             json.dumps([{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in
                         d_resp.get('credits', {}).get('cast', [])[:10]], ensure_ascii=False),
-            full_id, d_resp.get('title') or d_resp.get('name'), d_resp.get('runtime'), metadata_json,
+            full_id, d_resp.get('title') or d_resp.get('name'), d_resp.get('runtime'), metadata_json, rating,
             search_pattern, search_pattern
         ))
         series_updated = cursor.rowcount
 
-        # 2. 에피소드 상세 정보 업데이트 (수정된 파싱 매칭 로직)
+        # 2. 에피소드 상세 정보 업데이트
         ep_updated = 0
         if m_type == 'tv':
             cursor.execute("""
@@ -5787,7 +5906,8 @@ def manual_match_simple():
 
             s_count = d_resp.get('number_of_seasons', 1)
             for s_num in range(1, s_count + 1):
-                s_resp = requests.get(f"{TMDB_BASE_URL}/tv/{t_id}/season/{s_num}?language=ko-KR", headers=headers, timeout=10).json()
+                s_resp = requests.get(f"{TMDB_BASE_URL}/tv/{t_id}/season/{s_num}?language=ko-KR", headers=headers,
+                                      timeout=10).json()
                 for ep_data in s_resp.get('episodes', []):
                     tmdb_s, tmdb_e = ep_data.get('season_number'), ep_data.get('episode_number')
                     target_ep_id = db_ep_map.get((tmdb_s, tmdb_e))
@@ -5805,7 +5925,8 @@ def manual_match_simple():
                         """, (
                             ep_data.get('overview'),
                             ep_data.get('air_date'),
-                            f"https://image.tmdb.org/t/p/w500{ep_data.get('still_path')}" if ep_data.get('still_path') else None,
+                            f"https://image.tmdb.org/t/p/w500{ep_data.get('still_path')}" if ep_data.get(
+                                'still_path') else None,
                             ep_data.get('runtime'),
                             tmdb_s, tmdb_e, target_ep_id
                         ))
@@ -5817,7 +5938,6 @@ def manual_match_simple():
 
         result_msg = f"성공! 시리즈 {series_updated}건, 에피소드 {ep_updated}건 갱신 완료."
         emit_ui_log(f"✅ {result_msg}", "success")
-        # 🔴 JSON 강제 변환 (한글 유지)
         response_data = {"status": "success", "message": result_msg}
         response = make_response(json.dumps(response_data, ensure_ascii=False))
         response.headers['Content-Type'] = 'application/json; charset=utf-8'
@@ -5840,14 +5960,35 @@ def manual_match_v2():
     try:
         m_type, t_id = full_id.split(':')
         headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
-        response = requests.get(f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=credits",
-                                headers=headers, timeout=10)
+
+        # 🔴 수정: response를 먼저 받고, .json()은 한 번만 호출합니다.
+        response = requests.get(
+            f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=credits,content_ratings,release_dates",
+            headers=headers, timeout=10)
+
         if response.status_code != 200:
             return jsonify({"status": "error", "message": f"TMDB 응답 오류: {response.status_code}"}), 500
 
+        # 여기서 .json()을 호출하여 d_resp에 담습니다.
         d_resp = response.json()
 
-        if 'id' not in d_resp: return f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", 404
+        if 'id' not in d_resp:
+            return f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", 404
+
+
+        # 🔴 수정 2: 등급 파싱 로직 추가 (TV/Movie 분기)
+        rating = "등급없음"
+        if m_type == 'tv' and 'content_ratings' in d_resp:
+            res_r = d_resp['content_ratings'].get('results', [])
+            kr_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'KR'), None)
+            us_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'US'), None)
+            final = kr_rating or us_rating or (res_r[0].get('rating') if res_r else None)
+            if final: rating = f"{final}+" if str(final).isdigit() else final
+        elif m_type == 'movie' and 'release_dates' in d_resp:
+            res_r = d_resp['release_dates'].get('results', [])
+            kr_data = next((r.get('release_dates', []) for r in res_r if r.get('iso_3166_1') == 'KR'), [])
+            final = next((r.get('certification') for r in kr_data if r.get('certification')), None)
+            if final: rating = final
 
         tmdb_title = d_resp.get('title') or d_resp.get('name')
 
@@ -5879,6 +6020,7 @@ def manual_match_v2():
             tmdb_title,
             d_resp.get('runtime'),
             metadata_json,  # 🔴 추가
+            rating,
             tmdb_title,  # cleanedName
             f'%{target_name}%', f'%{target_name}%'
         )
@@ -5887,7 +6029,7 @@ def manual_match_v2():
             UPDATE series
             SET posterPath=?, year=?, overview=?, seasonCount=?,
                 genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
-                tmdbTitle=?, runtime=?, metadata_json=?, cleanedName=?
+                tmdbTitle=?, runtime=?, metadata_json=?, rating=?, cleanedName=?
             WHERE name LIKE ? OR cleanedName LIKE ?
         """, up)
 
@@ -6542,7 +6684,6 @@ def admin_ghost_page():
                 <a href="/updater" class="nav-tab"><i class="fas fa-sync-alt"></i> 대시보드</a>
                 <a href="/admin/ghost" class="nav-tab active"><i class="fas fa-ghost"></i> 유령 데이터 관리</a>
                 <a href="/admin" class="nav-tab"><i class="fas fa-search"></i> 매칭 진단</a>
-                <a href="/admin_stills" class="nav-tab"><i class="fas fa-image"></i> 스틸컷 현황</a>
                 <a href="/admin/filter" class="nav-tab active"><i class="fas fa-folder-tree"></i> 경로 기반 정밀 관리</a>
                 <a href="/admin/filter_v2" class="nav-tab active">경로 관리 (V2)</a>
             </div>
@@ -7406,62 +7547,66 @@ def admin_db_pro():
             }
        */
             async function loadData() {
-    const q = document.getElementById('searchInput').value;
-    const cat = document.getElementById('categorySelect').value;
-    const grid = document.getElementById('gridArea');
-
-    grid.innerHTML = '<div style="text-align:center; padding:100px;"><i class="fas fa-spinner fa-spin fa-3x"></i></div>';
-
-    try {
-        const response = await fetch(`/api/admin/db_pro_data?table=${currentTable}&q=${encodeURIComponent(q)}&cat=${cat}&limit=${pageSize}&offset=${currentPage*pageSize}&sort=${sortCol}&dir=${sortDir}`);
-        const res = await response.json();
-
-        if (res.error) throw new Error(res.error);
-        if (!res.data || !res.columns) {
-            grid.innerHTML = '<div style="text-align:center; padding:50px;">데이터가 없습니다.</div>';
-            return;
-        }
-
-        const totalItems = res.total || 0;
-        document.getElementById('rowCount').innerText = `${totalItems.toLocaleString()} items found`;
-        document.getElementById('pageDisplay').innerText = `Page ${currentPage + 1} / ${Math.ceil(totalItems / pageSize) || 1}`;
-
-        // 테이블 헤더 생성
-        let html = '<table><thead><tr><th><input type="checkbox" id="selectAll" onclick="toggleAll(this)"></th>' +
-                   res.columns.map(c => `<th onclick="handleSort('${c}')">${c} ${sortCol===c?(sortDir==='ASC'?'▲':'▼'):''}</th>`).join('') +
-                   '</tr></thead><tbody>';
-
-        // 테이블 데이터 생성
-        res.data.forEach(row => {
-            // 🔴 수정: 테이블별로 고유 식별자(PK)를 안전하게 가져옴
-            const pk = (currentTable === 'series') ? row.path : row.id;
-
-            html += `<tr><td><input type="checkbox" class="row-checkbox" value="${pk}"></td>` + res.columns.map(c => {
-                let val = row[c];
-                let display = val === null ? '<span style="color:#475569">null</span>' : val;
-
-                // 이미지 처리
-                if (c === 'posterPath' && val) {
-                    display = `<img src="${val.startsWith('http') ? val : 'https://image.tmdb.org/t/p/w200' + val}" class="poster-thumb">`;
+                const q = document.getElementById('searchInput').value;
+                const cat = document.getElementById('categorySelect').value;
+                const grid = document.getElementById('gridArea');
+                // 🔴 [핵심 수정] 첫 로딩 시 기본 정렬값 설정
+                if (!sortCol) {
+                    sortCol = 'updated_at'; // 기본 정렬 기준
+                    sortDir = 'DESC';       // 기본 정렬 방향
                 }
+                grid.innerHTML = '<div style="text-align:center; padding:100px;"><i class="fas fa-spinner fa-spin fa-3x"></i></div>';
 
-                // 🔴 수정: series 테이블이면서 편집 가능한 컬럼일 때만 path 접근 및 편집창 호출
-                if (currentTable === 'series' && (c === 'cleanedName' || c === 'tmdbTitle')) {
-                    // row.path가 아닌 위에서 구한 pk(series인 경우 path와 동일)를 JSON 인코딩하여 전달
-                    const safePk = JSON.stringify(pk).replace(/"/g, '&quot;');
-                    return `<td class="editable" onclick="makeEditable(this, ${safePk}, '${c}')">${display}</td>`;
+                try {
+                    const response = await fetch(`/api/admin/db_pro_data?table=${currentTable}&q=${encodeURIComponent(q)}&cat=${cat}&limit=${pageSize}&offset=${currentPage*pageSize}&sort=${sortCol}&dir=${sortDir}`);
+                    const res = await response.json();
+
+                    if (res.error) throw new Error(res.error);
+                    if (!res.data || !res.columns) {
+                        grid.innerHTML = '<div style="text-align:center; padding:50px;">데이터가 없습니다.</div>';
+                        return;
+                    }
+
+                    const totalItems = res.total || 0;
+                    document.getElementById('rowCount').innerText = `${totalItems.toLocaleString()} items found`;
+                    document.getElementById('pageDisplay').innerText = `Page ${currentPage + 1} / ${Math.ceil(totalItems / pageSize) || 1}`;
+
+                    // 테이블 헤더 생성
+                    let html = '<table><thead><tr><th><input type="checkbox" id="selectAll" onclick="toggleAll(this)"></th>' +
+                               res.columns.map(c => `<th onclick="handleSort('${c}')">${c} ${sortCol===c?(sortDir==='ASC'?'▲':'▼'):''}</th>`).join('') +
+                               '</tr></thead><tbody>';
+
+                    // 테이블 데이터 생성
+                    res.data.forEach(row => {
+                        // 🔴 수정: 테이블별로 고유 식별자(PK)를 안전하게 가져옴
+                        const pk = (currentTable === 'series') ? row.path : row.id;
+
+                        html += `<tr><td><input type="checkbox" class="row-checkbox" value="${pk}"></td>` + res.columns.map(c => {
+                            let val = row[c];
+                            let display = val === null ? '<span style="color:#475569">null</span>' : val;
+
+                            // 이미지 처리
+                            if (c === 'posterPath' && val) {
+                                display = `<img src="${val.startsWith('http') ? val : 'https://image.tmdb.org/t/p/w200' + val}" class="poster-thumb">`;
+                            }
+
+                            // 🔴 수정: series 테이블이면서 편집 가능한 컬럼일 때만 path 접근 및 편집창 호출
+                            if (currentTable === 'series' && (c === 'cleanedName' || c === 'tmdbTitle')) {
+                                // row.path가 아닌 위에서 구한 pk(series인 경우 path와 동일)를 JSON 인코딩하여 전달
+                                const safePk = JSON.stringify(pk).replace(/"/g, '&quot;');
+                                return `<td class="editable" onclick="makeEditable(this, ${safePk}, '${c}')">${display}</td>`;
+                            }
+
+                            return `<td title="${String(val).replace(/"/g, '&quot;')}">${display}</td>`;
+                        }).join('') + '</tr>';
+                    });
+                    grid.innerHTML = html + '</tbody></table>';
+
+                } catch (e) {
+                    console.error("loadData 에러:", e);
+                    grid.innerHTML = `<div style="color:#ef4444; padding:50px;">Error: ${e.message}</div>`;
                 }
-
-                return `<td title="${String(val).replace(/"/g, '&quot;')}">${display}</td>`;
-            }).join('') + '</tr>';
-        });
-        grid.innerHTML = html + '</tbody></table>';
-
-    } catch (e) {
-        console.error("loadData 에러:", e);
-        grid.innerHTML = `<div style="color:#ef4444; padding:50px;">Error: ${e.message}</div>`;
-    }
-}
+            }
 
            function toggleAll(source) {
                 // 모든 .row-checkbox 클래스를 가진 체크박스를 찾아서 source.checked 상태로 만듭니다.
@@ -7631,14 +7776,35 @@ def api_db_pro_data():
         total_count = conn.execute(f"SELECT COUNT(*) FROM {table} {where_stmt}", params).fetchone()[0]
 
         # 정렬 설정
-        order_by = f" ORDER BY {sort} {direction}" if sort else ""
+        # order_by = f" ORDER BY {sort} {direction}" if sort else ""
+        # 🔴 정렬 설정: sort 파라미터가 없으면 updated_at DESC로 기본 정렬
+        if not sort:
+            if 'updated_at' in [d[0] for d in conn.execute(f"PRAGMA table_info({table})").fetchall()]:
+                # 핵심: 시간도 DESC, 물리적 생성순서(rowid)도 DESC로 잡아줘야 최신순이 위로 옵니다.
+                order_by = " ORDER BY updated_at DESC, rowid DESC"
+            else:
+                order_by = " ORDER BY rowid DESC"
+        else:
+            order_by = f" ORDER BY {sort} {direction}"
 
         # 쿼리 실행 (LIMIT과 OFFSET 적용)
         # query = f"SELECT * FROM {table} {where_stmt} {order_by} LIMIT ? OFFSET ?"
         # 🔴 수정: 컬럼을 직접 지정하여 불러올 양을 최소화
-        target_columns = "path, name, cleanedName, tmdbTitle, rating, posterPath, category" if table == 'series' else "*"
+        # target_columns = "path, name, cleanedName, tmdbTitle, rating, posterPath, category, updated_at" if table == 'series' else "*"
+        # query = f"SELECT {target_columns} FROM {table} {where_stmt} {order_by} LIMIT ? OFFSET ?"
+        # cursor = conn.execute(query, params + [limit, offset])
+
+        # 🔴 수정: 테이블에 따라 target_columns를 확실하게 지정
+        if table == 'series':
+            target_columns = "path, name, cleanedName, tmdbTitle, rating, posterPath, category, updated_at"
+        else:
+            target_columns = "*"
+
         query = f"SELECT {target_columns} FROM {table} {where_stmt} {order_by} LIMIT ? OFFSET ?"
         cursor = conn.execute(query, params + [limit, offset])
+
+        # query = f"SELECT * FROM {table} {where_stmt} {order_by} LIMIT ? OFFSET ?"
+        # cursor = conn.execute(query, params + [limit, offset])
 
         # 🔴 [수정] 컬럼 순서를 posterPath가 맨 앞에 오도록 강제 정렬
         raw_columns = [d[0] for d in cursor.description]
@@ -9129,7 +9295,7 @@ def patch_by_category():
                         # 🔴 추가: 성공 시 즉시 상태 갱신
                         with UPDATE_LOCK:
                             UPDATE_STATE["success"] = success_count
-                        emit_ui_log(f"✅ [{idx + 1}/{total}] '{cleaned}' 매칭 성공", "success")
+                        emit_ui_log(f"✅ [{idx + 1}/{total}] '{info.get('rating')}{cleaned}' 매칭 성공", "success")
 
                         # 에피소드 정보 업데이트
                         if info.get('seasons_data'):
@@ -9162,7 +9328,7 @@ def patch_by_category():
                                         f"📺 업데이트 완료됨: {target_ep_id} (제목: {ep_data.get('title') or ep_data.get('name')})")
 
                                     processed_episodes.add(target_ep_id)
-                                    emit_ui_log(f"📺 [에피소드 매칭 성공] '{cleaned}' {s_num}시즌 {ep_num}화 {ep_data.get('rating')} 업데이트 완료", "success")
+                                    emit_ui_log(f"📺 [에피소드 매칭 성공] '{cleaned}' {s_num}시즌 {ep_num}화 업데이트 완료", "success")
                                     ep_success_count += 1
                                 elif not target_ep_id:
                                     emit_ui_log(
