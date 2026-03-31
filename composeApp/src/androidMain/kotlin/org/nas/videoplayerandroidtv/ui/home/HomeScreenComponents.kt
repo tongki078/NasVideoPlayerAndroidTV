@@ -20,6 +20,8 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -355,7 +357,7 @@ fun SectionTitle(
             .padding(start = horizontalPadding, top = 28.dp, bottom = 14.dp, end = horizontalPadding),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
+        androidx.tv.material3.Text(
             text = title,
             color = Color.White,
             fontWeight = FontWeight.Bold,
@@ -365,60 +367,67 @@ fun SectionTitle(
         )
 
         if ((isFullList || title.contains("전체목록") || title.contains("전체 목록")) && items.isNotEmpty()) {
-            val standardOrder = remember {
-                listOf(
-                    "ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ", "ㅂ", "ㅅ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ",
-                    "A-Z", "0-9", "기타"
-                )
-            }
+            // 🔴 초성 필터 로직을 별도 컴포저블로 분리하여 성능 격리
+            ChosungFilterRow(items = items, onIndexClick = onIndexClick)
+        }
+    }
+}
 
-            // [최적화] 리모컨 이동 시 연산을 0으로 만들기 위해 인덱스 맵 미리 생성
-            val soundToIndexMap = remember(items) {
-                val map = mutableMapOf<String, Int>()
-                items.forEachIndexed { index, item ->
-                    val raw = item.chosung ?: "기타"
-                    val mapped = when {
-                        raw.length == 1 && raw[0] in 'A'..'Z' -> "A-Z"
-                        raw == "0-9" -> "0-9"
-                        raw == "기타" -> "기타"
-                        else -> raw
-                    }
-                    if (!map.containsKey(mapped)) {
-                        map[mapped] = index
-                    }
+@Composable
+private fun ChosungFilterRow(
+    items: List<org.nas.videoplayerandroidtv.domain.model.Category>,
+    onIndexClick: (Int) -> Unit
+) {
+    val standardOrder = remember {
+        listOf("ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ", "ㅂ", "ㅅ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ", "A-Z", "0-9", "기타")
+    }
+
+    // 🔴 최적화: items 리스트가 바뀌어도 실제 맵 내용이 같으면 재계산을 방지
+    val soundToIndexMap by remember(items) {
+        derivedStateOf {
+            val map = mutableMapOf<String, Int>()
+            items.forEachIndexed { index, item ->
+                val raw = item.chosung ?: "기타"
+                val mapped = when {
+                    raw.length == 1 && raw[0] in 'A'..'Z' -> "A-Z"
+                    raw == "0-9" -> "0-9"
+                    raw == "기타" -> "기타"
+                    else -> raw
                 }
-                map
+                if (!map.containsKey(mapped)) map[mapped] = index
             }
+            map
+        }
+    }
 
-            LazyRow(
-                modifier = Modifier.padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(horizontal = 4.dp)
+    LazyRow(
+        modifier = Modifier.padding(top = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(horizontal = 4.dp)
+    ) {
+        items(items = standardOrder, key = { it }) { sound ->
+            val targetIndex = soundToIndexMap[sound] ?: -1
+            val hasItems = targetIndex != -1
+
+            // 🔴 InteractionSource를 사용하여 포커스 이벤트 최적화 (Modifier.onFocusChanged 보다 가벼움)
+            val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+            val isFocused by interactionSource.collectIsFocusedAsState()
+
+            Surface(
+                onClick = { if (hasItems) onIndexClick(targetIndex) },
+                color = if (isFocused) Color.White else Color.White.copy(alpha = 0.1f),
+                shape = RoundedCornerShape(4.dp),
+                modifier = Modifier
+                    .size(width = 42.dp, height = 32.dp)
+                    .focusable(interactionSource = interactionSource),
             ) {
-                items(items = standardOrder, key = { it }) { sound ->
-                    val targetIndex = soundToIndexMap[sound] ?: -1
-                    val hasItems = targetIndex != -1
-
-                    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                    val isFocused by interactionSource.collectIsFocusedAsState()
-
-                    Surface(
-                        onClick = { if (hasItems) onIndexClick(targetIndex) },
-                        color = if (isFocused) Color.White else Color.White.copy(alpha = 0.1f),
-                        shape = RoundedCornerShape(4.dp),
-                        modifier = Modifier
-                            .size(width = 42.dp, height = 32.dp)
-                            .focusable(interactionSource = interactionSource),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = sound,
-                                color = if (isFocused) Color.Black else if (hasItems) Color.White else Color.White.copy(alpha = 0.2f),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
+                Box(contentAlignment = Alignment.Center) {
+                    androidx.tv.material3.Text(
+                        text = sound,
+                        color = if (isFocused) Color.Black else if (hasItems) Color.White else Color.White.copy(alpha = 0.2f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
         }
