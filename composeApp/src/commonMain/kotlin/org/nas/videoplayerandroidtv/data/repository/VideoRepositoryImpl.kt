@@ -25,13 +25,28 @@ class VideoRepositoryImpl : VideoRepository {
         return isGenericTitle(n) || n.contains("Search Results", ignoreCase = true)
     }
 
+//    private fun Movie.fixUrls(): Movie {
+//        val updatedVideoUrl = if (videoUrl != null && !videoUrl.startsWith("http") && videoUrl.isNotEmpty()) {
+//            "$baseUrl${if (videoUrl.startsWith("/")) "" else "/"}$videoUrl"
+//        } else videoUrl
+//        val updatedThumbUrl = if (thumbnailUrl != null && !thumbnailUrl.startsWith("http") && thumbnailUrl.isNotEmpty()) {
+//            "$baseUrl${if (thumbnailUrl.startsWith("/")) "" else "/"}$thumbnailUrl"
+//        } else thumbnailUrl
+//        return this.copy(videoUrl = updatedVideoUrl, thumbnailUrl = updatedThumbUrl)
+//    }
+
     private fun Movie.fixUrls(): Movie {
         val updatedVideoUrl = if (videoUrl != null && !videoUrl.startsWith("http") && videoUrl.isNotEmpty()) {
             "$baseUrl${if (videoUrl.startsWith("/")) "" else "/"}$videoUrl"
         } else videoUrl
-        val updatedThumbUrl = if (thumbnailUrl != null && !thumbnailUrl.startsWith("http") && thumbnailUrl.isNotEmpty()) {
-            "$baseUrl${if (thumbnailUrl.startsWith("/")) "" else "/"}$thumbnailUrl"
-        } else thumbnailUrl
+
+        // 🔴 중요: thumbnailUrl이 이미 http로 시작한다면 아무것도 하지 말고 그대로 둡니다!
+        val updatedThumbUrl = when {
+            thumbnailUrl.isNullOrEmpty() -> null
+            thumbnailUrl.startsWith("http") -> thumbnailUrl // 🔴 TMDB 전체 주소는 그대로 사용!
+            else -> "$baseUrl${if (thumbnailUrl.startsWith("/")) "" else "/"}$thumbnailUrl" // 로컬 주소만 baseUrl 붙임
+        }
+
         return this.copy(videoUrl = updatedVideoUrl, thumbnailUrl = updatedThumbUrl)
     }
 

@@ -1,11 +1,12 @@
 import os, subprocess, hashlib, urllib.parse, unicodedata, threading, time, json, re, sys, traceback, shutil, requests, \
     random, mimetypes, sqlite3, gzip
-from flask import Flask, jsonify, send_from_directory, request, Response, redirect, send_file, make_response,copy_current_request_context
+from flask import Flask, jsonify, send_from_directory, request, Response, redirect, send_file, make_response,copy_current_request_context,render_template
 from flask_cors import CORS
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from collections import deque
 from io import BytesIO
+from difflib import SequenceMatcher
 
 app = Flask(__name__)
 CORS(app)
@@ -582,6 +583,7 @@ def clean_title_complex(title, full_path=None, base_path=None):
     title = re.sub(r'(?i)[\(\[\{【『「（](자막|더빙|한글|영어)[\)\]\}】』」）]', '', title)
     title = re.sub(r'\(자막\)|\[자막\]|\(더빙\)|\[더빙\]', '', title, flags=re.IGNORECASE)
 
+    title = re.sub(r'[,()\[\]~.!?"\']', ' ', title)
     # 3. 추가: 이제 남은 특수문자나 불필요한 공백 제거
     title = title.strip()
 
@@ -2062,13 +2064,11 @@ def fetch_metadata_targeted(target_name=None, target_category=None, target_path=
 
         emit_ui_log(f"🧪 총 {len(group_rows)}개의 작품 매칭 시작.", "info")
 
-
         def process_one(task):
             time.sleep(random.uniform(0.3, 0.8))
             info = get_tmdb_info_server(task['sample_name'], category=task['category'], ignore_cache=True,
                                         path=task['sample_path'])
             return (task, info)
-
 
         tasks = [{'clean_title': gr['cleanedName'], 'sample_name': gr['sample_name'],
                   'sample_path': gr['sample_path'], 'category': gr['category'],
@@ -2081,6 +2081,14 @@ def fetch_metadata_targeted(target_name=None, target_category=None, target_path=
         for task, info in results:
             if info.get('failed'):
                 emit_ui_log(f"❌ 매칭 실패: '{task['clean_title']}'", "error")
+                continue
+
+            is_reliable, sim = is_matching_reliable(task['clean_title'], info, task['sample_path'])
+            if not is_reliable:
+                emit_ui_log(f"⚠️ [매칭 신뢰도 낮음] '{task['clean_title']}' vs '{info.get('title')}' (유사도: {sim:.2f})",
+                            "warning")
+                # 신뢰도 낮으면 failed=1 처리하고 건너뜀
+                cursor.execute("UPDATE series SET failed = 1 WHERE name = ?", (task['clean_title'],))
                 continue
 
             # 시리즈 정보 업데이트
@@ -3318,6 +3326,7 @@ def admin_page():
                 <a href="/admin/ghost" class="nav-tab">유령 데이터 관리</a>
                 <a href="/admin" class="nav-tab active">매칭 진단</a>
                 <a href="/admin/db_pro" class="nav-tab">DB Pro</a>
+
             </div>
 
             <div class="control-box">
@@ -4760,20 +4769,45 @@ async function regroupByKeyword() {
             async function manualMatchSimple() {
                 const name = document.getElementById('fixNameInput').value.trim();
                 const id = document.getElementById('tmdbIdInput').value.trim();
+
+                const catEl = document.getElementById('fixCategorySelect');
+                const cat = catEl ? catEl.value : '전체';
+
                 if (!name || !id) { alert('제목과 ID를 모두 입력하세요.'); return; }
-                if (confirm('수동 매칭을 실행할까요?')) {
-                    const resp = await fetch(`/api/manual_match_simple?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}`);
-                    alert(await resp.text());
+                if (confirm(`'${name}' 작품을 카테고리 [${cat}] 범위 내에서 갱신할까요?`)) {
+                    try {
+                        // 서버로 전달 (인코딩 필수)
+                        const resp = await fetch(`/api/manual_match_simple?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}&cat=${encodeURIComponent(cat)}`);
+                        alert(await resp.text());
+                    } catch (e) {
+                        alert('매칭 중 오류 발생: ' + e.message);
+                    }
                 }
             }
 
             async function manualMatchV2() {
                 const name = document.getElementById('fixNameInput').value.trim();
                 const id = document.getElementById('tmdbIdInput').value.trim();
-                if (!name || !id) { alert('제목과 ID를 모두 입력하세요.'); return; }
-                if (confirm('제목까지 TMDB 공식 명칭으로 갱신할까요?')) {
-                    const resp = await fetch(`/api/manual_match_v2?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}`);
-                    alert(await resp.text());
+
+                const catEl = document.getElementById('fixCategorySelect');
+                const cat = catEl ? catEl.value : '전체';
+
+                if (!name || !id) {
+                    alert('제목과 ID를 모두 입력하세요.');
+                    return;
+                }
+
+                // 2. 카테고리가 '전체'일 때는 서버로 전달할 때 빈 값이나 '전체'로 통일
+                if (confirm(`'${name}' 작품을 카테고리 [${cat}] 범위 내에서 갱신할까요?`)) {
+                    try {
+                        // 서버로 전달 (인코딩 필수)
+                        const url = `/api/manual_match_v2?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}&cat=${encodeURIComponent(cat)}`;
+                        const resp = await fetch(url);
+                        const result = await resp.text();
+                        alert(result);
+                    } catch (e) {
+                        alert('매칭 중 오류 발생: ' + e.message);
+                    }
                 }
             }
 
@@ -5818,6 +5852,20 @@ def manual_match_simple():
     """TMDB 정보를 연결하되, 원래 제목은 유지하고 에피소드 상세 정보 및 등급까지 갱신"""
     target_name = request.args.get('name')
     full_id = request.args.get('id')
+    cat = request.args.get('cat')  # 🔴 카테고리 추가
+
+    # 1. 카테고리 매핑 및 조건 구성
+    cat_map = {"영화": "movies", "국내TV": "koreantv", "외국TV": "foreigntv", "애니메이션": "animations_all", "방송중": "air"}
+    db_cat = cat_map.get(cat, cat)
+
+    query_condition = ""
+    params = [f'%{target_name}%', f'%{target_name}%']
+    if cat and cat != '전체':
+        query_condition = "AND path LIKE ?"
+        params.append(f'{db_cat}%')
+        emit_ui_log(f"🔍 카테고리 필터 적용: '{cat}' 대상", "info")
+    else:
+        emit_ui_log(f"🌐 카테고리 제한 없음 (전체)", "info")
 
     if not target_name or not full_id or ':' not in full_id:
         return "오류: 작품 키워드와 TMDB ID가 필요합니다.", 400
@@ -5867,16 +5915,10 @@ def manual_match_simple():
 
         conn = get_db()
         cursor = conn.cursor()
-        search_pattern = f'%{target_name}%'
 
         # 1. 시리즈 정보 업데이트 (rating 추가)
-        cursor.execute("""
-            UPDATE series SET
-                posterPath=?, year=?, overview=?, seasonCount=?,
-                genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
-                tmdbTitle=?, runtime=?, metadata_json=?, rating=?
-            WHERE name LIKE ? OR cleanedName LIKE ?
-        """, (
+        # 1. 시리즈 정보 업데이트 (f-string 쿼리 + 기존 up 튜플 + 카테고리 파라미터)
+        up = (
             d_resp.get('poster_path'),
             (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0],
             d_resp.get('overview'), d_resp.get('number_of_seasons'),
@@ -5885,18 +5927,23 @@ def manual_match_simple():
             next((c['name'] for c in d_resp.get('credits', {}).get('crew', []) if c.get('job') == 'Director'), ""),
             json.dumps([{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in
                         d_resp.get('credits', {}).get('cast', [])[:10]], ensure_ascii=False),
-            full_id, d_resp.get('title') or d_resp.get('name'), d_resp.get('runtime'), metadata_json, rating,
-            search_pattern, search_pattern
-        ))
+            full_id, d_resp.get('title') or d_resp.get('name'), d_resp.get('runtime'), metadata_json, rating
+        )
+
+        # SQL 구성 및 실행
+        sql_up = f"""UPDATE series SET posterPath=?, year=?, overview=?, seasonCount=?, genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0, tmdbTitle=?, runtime=?, metadata_json=?, rating=?
+                     WHERE (name LIKE ? OR cleanedName LIKE ?) {query_condition}"""
+
+        cursor.execute(sql_up, up + tuple(params))
         series_updated = cursor.rowcount
 
         # 2. 에피소드 상세 정보 업데이트
         ep_updated = 0
         if m_type == 'tv':
-            cursor.execute("""
-                   SELECT id, title, series_path FROM episodes
-                   WHERE series_path IN (SELECT path FROM series WHERE name LIKE ? OR cleanedName LIKE ?)
-            """, (search_pattern, search_pattern))
+            # SQL 구성 및 실행
+            sql_ep = f"""SELECT id, title, series_path FROM episodes
+                         WHERE series_path IN (SELECT path FROM series WHERE (name LIKE ? OR cleanedName LIKE ?) {query_condition})"""
+            cursor.execute(sql_ep, tuple(params))
             db_eps = cursor.fetchall()
 
             db_ep_map = {}
@@ -5950,12 +5997,40 @@ def manual_match_simple():
 def manual_match_v2():
     target_name = request.args.get('name')
     full_id = request.args.get('id')
+    cat = request.args.get('cat')  # 🔴 전달받은 카테고리 값
+    # 🔴 카테고리 매핑 (DB의 실제 path 키워드로 변환)
+    cat_map = {
+        "영화": "movies",
+        "국내TV": "koreantv",
+        "외국TV": "foreigntv",
+        "애니메이션": "animations_all",
+        "방송중": "air"
+    }
+
+    # 변환된 카테고리 값 사용
+    db_cat = cat_map.get(cat, cat)
 
     if not target_name or not full_id or ':' not in full_id:
         return "오류: 작품 키워드와 TMDB ID가 필요합니다.", 400
 
     emit_ui_log(f"수동 연결 v2 시작: '{target_name}' -> {full_id}", "info")
+    # 🔴 2. 동적 SQL 조건 구성
+    query_condition = ""
+    # 처음 두 파라미터는 name과 cleanedName LIKE 조건용
+    params = [f'%{target_name}%', f'%{target_name}%']
 
+    # if cat and cat != '전체':
+    #     query_condition = "AND path LIKE ?"
+    #     params.append(f'%{cat}%')
+
+    if cat and cat != '전체':
+        query_condition = "AND path LIKE ?"
+        params.append(f'{db_cat}%')
+        # 🔴 [추가] 작업 중인 카테고리 로그 기록
+        emit_ui_log(f"🔍 카테고리 필터 적용: '{cat}' 폴더 대상", "info")
+    else:
+        # 🔴 [추가] 전체 작업 로그 기록
+        emit_ui_log(f"🌐 카테고리 제한 없음 (전체)", "info")
 
     try:
         m_type, t_id = full_id.split(':')
@@ -6025,14 +6100,29 @@ def manual_match_v2():
             f'%{target_name}%', f'%{target_name}%'
         )
 
-        cursor.execute("""
+        # cursor.execute("""
+        #     UPDATE series
+        #     SET posterPath=?, year=?, overview=?, seasonCount=?,
+        #         genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
+        #         tmdbTitle=?, runtime=?, metadata_json=?, rating=?, cleanedName=?
+        #     WHERE name LIKE ? OR cleanedName LIKE ?
+        # """, up)
+
+        # 🔴 쿼리문 변수 정의
+        sql_query = f"""
             UPDATE series
             SET posterPath=?, year=?, overview=?, seasonCount=?,
                 genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
                 tmdbTitle=?, runtime=?, metadata_json=?, rating=?, cleanedName=?
-            WHERE name LIKE ? OR cleanedName LIKE ?
-        """, up)
+            WHERE (name LIKE ? OR cleanedName LIKE ?) {query_condition}
+        """
+        debug_params = up + tuple(params[2:])
 
+        # 🔴 로그 기록
+        # emit_ui_log(f"SQL UPDATE: {sql_query}", "info")
+        # emit_ui_log(f"SQL Params 개수: {len(debug_params)}", "info")
+        # emit_ui_log(f"SQL Params 값: {debug_params}", "info")
+        cursor.execute(sql_query, debug_params)
         series_updated = cursor.rowcount
 
         # 수정
@@ -6040,10 +6130,18 @@ def manual_match_v2():
         ep_updated = 0
         if m_type == 'tv':
             # 1. 해당 시리즈의 모든 에피소드를 한 번만 조회
-            cursor.execute("""
+            # cursor.execute("""
+            #           SELECT id, title, series_path FROM episodes
+            #           WHERE series_path IN (SELECT path FROM series WHERE name LIKE ? OR cleanedName LIKE ?)
+            #       """, (f'%{target_name}%', f'%{target_name}%'))
+            cursor.execute(f"""
                       SELECT id, title, series_path FROM episodes
-                      WHERE series_path IN (SELECT path FROM series WHERE name LIKE ? OR cleanedName LIKE ?)
-                  """, (f'%{target_name}%', f'%{target_name}%'))
+                      WHERE series_path IN (
+                          SELECT path FROM series
+                          WHERE (name LIKE ? OR cleanedName LIKE ?) {query_condition}
+                      )
+                  """, tuple(params))  # 🔴 카테고리 파라미터 포함 전달
+
             db_eps = cursor.fetchall()
 
             # 2. 캐싱: 파일명 파싱 결과를 미리 다 뽑아두어 루프 속도를 높임
@@ -7379,284 +7477,326 @@ def fix_bleach_episodes():
     build_all_caches()
     return f"성공! {len(updates)}개의 에피소드 번호를 파일명에서 추출하여 고정했습니다."
 
-@app.route('/admin/db_pro')
-def admin_db_pro():
-    return """
-    <!DOCTYPE html>
-    <html lang="ko">
-    <head>
-        <meta charset="UTF-8">
-        <title>NAS PRO ADMIN - DB Management</title>
-        <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-        <style>
-            :root { --bg-dark: #0f172a; --bg-card: #1e293b; --accent: #3b82f6; --accent-hover: #2563eb; --text-main: #f8fafc; --text-dim: #94a3b8; --border: #334155; }
-            body { font-family: 'Inter', sans-serif; background: var(--bg-dark); color: var(--text-main); margin: 0; display: flex; height: 100vh; }
-            .sidebar { width: 240px; background: var(--bg-card); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
-            .sidebar-header { padding: 25px 20px; font-size: 18px; font-weight: 800; color: var(--accent); border-bottom: 1px solid var(--border); }
-            .nav-menu { padding: 15px; flex: 1; }
-            .nav-item { padding: 12px 15px; border-radius: 8px; cursor: pointer; color: var(--text-dim); display: flex; align-items: center; gap: 12px; margin-bottom: 5px; transition: 0.2s; }
-            .nav-item:hover { background: #334155; color: white; }
-            .nav-item.active { background: var(--accent); color: white; }
-            .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-            .top-bar { padding: 15px 30px; background: var(--bg-card); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 15px; }
-            select, input { background: var(--bg-dark); color: white; border: 1px solid var(--border); padding: 10px; border-radius: 8px; outline: none; font-size: 14px; }
-            .btn { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
-            .btn-primary { background: var(--accent); color: white; }
-            .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+# @app.route('/admin/db_pro')
+# def admin_db_pro():
+#     return """
+#     <!DOCTYPE html>
+#     <html lang="ko">
+#     <head>
+#         <meta charset="UTF-8">
+#         <title>NAS PRO ADMIN - DB Management</title>
+#         <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+#         <style>
+#
+#             :root { --bg-dark: #0f172a; --bg-card: #1e293b; --accent: #3b82f6; --accent-hover: #2563eb; --text-main: #f8fafc; --text-dim: #94a3b8; --border: #334155; }
+#             body { font-family: 'Inter', sans-serif; background: var(--bg-dark); color: var(--text-main); margin: 0; display: flex; height: 100vh; }
+#             .sidebar { width: 240px; background: var(--bg-card); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+#             .sidebar-header { padding: 25px 20px; font-size: 18px; font-weight: 800; color: var(--accent); border-bottom: 1px solid var(--border); }
+#             .nav-menu { padding: 15px; flex: 1; }
+#             .nav-item { padding: 12px 15px; border-radius: 8px; cursor: pointer; color: var(--text-dim); display: flex; align-items: center; gap: 12px; margin-bottom: 5px; transition: 0.2s; }
+#             .nav-item:hover { background: #334155; color: white; }
+#             .nav-item.active { background: var(--accent); color: white; }
+#             .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+#             .top-bar { padding: 15px 30px; background: var(--bg-card); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 15px; }
+#             select, input { background: var(--bg-dark); color: white; border: 1px solid var(--border); padding: 10px; border-radius: 8px; outline: none; font-size: 14px; }
+#             .btn { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
+#             .btn-primary { background: var(--accent); color: white; }
+#             .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+#
+#             .grid-container { flex: 1; overflow: auto; padding: 20px 30px; }
+#             table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border); table-layout: auto; }
+#             th { position: sticky; top: 0; z-index: 10; background: #334155; color: var(--text-dim); padding: 12px 15px; text-align: left; font-size: 12px; border-bottom: 1px solid var(--border); cursor: pointer; white-space: nowrap; }
+#             td { padding: 12px 15px; border-bottom: 1px solid var(--border); font-size: 13px; white-space: nowrap; overflow: visible; text-overflow: clip; max-width: none; }
+#             tr:hover { background: #2d3748; }
+#
+#             /* 수정 가능 필드 스타일 */
+#             .editable { color: var(--accent); cursor: pointer; border-bottom: 1px dashed var(--accent); }
+#             .editable:hover { background: #334155; color: white; }
+#             .edit-input { background: #0f172a; color: white; border: 1px solid var(--accent); padding: 5px; width: 100%; box-sizing: border-box; font-size: 13px; }
+#
+#             .pagination { padding: 15px 30px; background: var(--bg-card); border-top: 1px solid var(--border); display: flex; justify-content: center; align-items: center; gap: 15px; }
+#             .poster-thumb { width: 35px; height: 50px; border-radius: 4px; object-fit: cover; }
+#             .thumb-img { width: 100px; height: 56px; object-fit: cover; border-radius: 4px; }
+#
+#
+#         </style>
+#
+#     </head>
+#     <body>
+#         <!-- 사이드바 및 상단바 생략 (기존 유지) -->
+#         <div class="sidebar">
+#             <div class="sidebar-header"><i class="fas fa-terminal"></i> DB PRO ADMIN</div>
+#             <div class="nav-menu">
+#                 <div class="nav-item active" onclick="switchTable('series', this)"><i class="fas fa-layer-group"></i> 작품 (Series)</div>
+#                 <div class="nav-item" onclick="switchTable('episodes', this)"><i class="fas fa-film"></i> 에피소드 (Episodes)</div>
+#                 <div class="nav-item" onclick="switchTable('playback_progress', this)"><i class="fas fa-history"></i> 시청 기록</div>
+#                 <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border);">
+#                     <a href="/updater" style="text-decoration:none;"><div class="nav-item"><i class="fas fa-arrow-left"></i> 대시보드 복귀</div></a>
+#                 </div>
+#             </div>
+#         </div>
+#         <div class="main-content">
+#             <div class="top-bar">
+#                 <select id="categorySelect" onchange="triggerSearch()">
+#                     <option value="전체">전체 카테고리</option>
+#                     <option value="movies">영화</option>
+#                     <option value="koreantv">국내TV</option>
+#                     <option value="foreigntv">외국TV</option>
+#                     <option value="animations_all">애니메이션</option>
+#                     <option value="air">방송중</option>
+#                 </select>
+#                 <input type="text" id="searchInput" style="flex:1;" placeholder="키워드 검색..." onkeyup="if(event.key==='Enter') triggerSearch()">
+#                 <button class="btn btn-primary" onclick="triggerSearch()"><i class="fas fa-search"></i> 검색</button>
+#                 <span id="rowCount" style="color: var(--text-dim); font-size: 13px; white-space:nowrap;">0 items</span>
+#
+#                 <button class="btn btn-danger" onclick="deleteSelected()" style="background: #ef4444; color: white;"><i class="fas fa-trash"></i> 선택 삭제</button>
+#             </div>
+#             <div class="grid-container" id="gridArea"></div>
+#             <!--
+#             <div class="pagination">
+#                 <button class="btn btn-ghost" id="prevBtn" onclick="changePage(-1)"><i class="fas fa-chevron-left"></i></button>
+#                 <span id="pageDisplay" style="font-weight:bold; color:var(--accent);">Page 1 / 1</span>
+#                 <button class="btn btn-ghost" id="nextBtn" onclick="changePage(1)"><i class="fas fa-chevron-right"></i></button>
+#                 <select id="pageSize" onchange="changeSize(this.value)">
+#                     <option value="50">50개씩</option><option value="100">100개씩</option><option value="200">200개씩</option>
+#                 </select>
+#             </div>
+#             -->
+#             <div class="pagination">
+#     <button class="btn btn-ghost" id="prevBtn" onClick="changePage(-1)"><i class="fas fa-chevron-left"></i>
+#     </button>
+#     <span id="pageDisplay" style="font-weight:bold; color:var(--accent);">Page 1 / 1</span>
+#     <button class="btn btn-ghost" id="nextBtn" onClick="changePage(1)"><i class="fas fa-chevron-right"></i>
+#     </button>
+#
+#     <!-- 🔴 페이지 직접 이동 UI 추가 -->
+#     <input type="number" id="directPageInput"
+#            style="width: 60px; padding: 5px; margin: 0 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-color); color: white;"
+#            placeholder="번호">
+#         <button className="btn btn-ghost" onClick="jumpToPage()" style="padding: 5px 10px;">이동</button>
+#
+#         <select id="pageSize" onChange="changeSize(this.value)" style="margin-left: 10px;">
+#             <option value="50">50개씩</option>
+#             <option value="100">100개씩</option>
+#             <option value="200">200개씩</option>
+#         </select>
+# </div>
+#         </div>
+#
+#         <script>
+#             let currentTable = 'series', currentPage = 0, pageSize = 50, sortCol = '', sortDir = 'ASC';
+#
+# // 1. 기존 이전/다음 페이지 이동 함수
+# function changePage(delta) {
+#     const totalItems = parseInt(document.getElementById('rowCount').innerText.replace(/[^0-9]/g, ''));
+#     const maxPage = Math.ceil(totalItems / pageSize);
+#
+#     let newPage = currentPage + delta;
+#     if (newPage >= 0 && newPage < maxPage) {
+#         currentPage = newPage;
+#         loadData();
+#     }
+# }
+#
+# // 2. 페이지 직접 이동 함수 (페이지 번호 입력 후 이동)
+# function jumpToPage() {
+#     const input = document.getElementById('directPageInput');
+#     const pageNum = parseInt(input.value);
+#
+#     // 현재 총 아이템 수에서 전체 페이지 계산
+#     const totalItems = parseInt(document.getElementById('rowCount').innerText.replace(/[^0-9]/g, ''));
+#     const totalPages = Math.ceil(totalItems / pageSize) || 1;
+#
+#     if (pageNum > 0 && pageNum <= totalPages) {
+#         currentPage = pageNum - 1; // 0부터 시작하는 인덱스로 보정
+#         loadData();
+#     } else {
+#         alert(`1부터 ${totalPages} 사이의 페이지 번호를 입력하세요.`);
+#     }
+# }
+#
+# // 3. 페이지 사이즈 변경 함수
+# function changeSize(size) {
+#     pageSize = parseInt(size);
+#     currentPage = 0; // 사이즈 변경 시 1페이지로 복귀
+#     loadData();
+# }
+#             async function makeEditable(td, pk, field) {
+#                 if (td.querySelector('input')) return;
+#                 const originalVal = td.innerText === 'null' ? '' : td.innerText;
+#                 const input = document.createElement('input');
+#                 input.className = 'edit-input';
+#                 input.value = originalVal;
+#                 td.innerHTML = '';
+#                 td.appendChild(input);
+#                 input.focus();
+#
+#                 input.onblur = () => { if (!input.dataset.saving) td.innerText = originalVal || 'null'; };
+#                 input.onkeydown = async (e) => {
+#                     if (e.key === 'Enter') {
+#                         input.dataset.saving = "true";
+#                         const newVal = input.value;
+#                         if (newVal === originalVal) { td.innerText = originalVal || 'null'; return; }
+#                         const ok = await saveCell(pk, field, newVal);
+#                         if (ok) {
+#                             td.innerText = newVal || 'null';
+#                             td.style.color = '#4ade80';
+#                             setTimeout(() => td.style.color = '', 2000);
+#                         } else { alert('저장 실패'); td.innerText = originalVal || 'null'; }
+#                     } else if (e.key === 'Escape') { td.innerText = originalVal || 'null'; }
+#                 };
+#             }
+#
+#             async function saveCell(pk, field, newVal) {
+#                 try {
+#                     const res = await fetch('/api/admin/update_cell', {
+#                         method: 'POST',
+#                         headers: {'Content-Type': 'application/json'},
+#                         body: JSON.stringify({
+#                             table: currentTable,
+#                             pk_col: currentTable === 'series' ? 'path' : 'id',
+#                             pk_val: pk,
+#                             field: field,
+#                             new_val: newVal
+#                         })
+#                     });
+#                     const data = await res.json();
+#                     return data.status === 'success';
+#                 } catch (e) { return false; }
+#             }
+#
+#             function switchTable(table, el) {
+#                 document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+#                 el.classList.add('active');
+#                 currentTable = table; triggerSearch();
+#             }
+#             function triggerSearch() { currentPage = 0; loadData(); }
+#
+#             async function loadData() {
+#                 const q = document.getElementById('searchInput').value;
+#                 const cat = document.getElementById('categorySelect').value;
+#                 const grid = document.getElementById('gridArea');
+#                 // 🔴 [핵심 수정] 첫 로딩 시 기본 정렬값 설정
+#                 if (!sortCol) {
+#                     sortCol = 'updated_at'; // 기본 정렬 기준
+#                     sortDir = 'DESC';       // 기본 정렬 방향
+#                 }
+#                 let html = `<div class="card"><table><thead><tr>...</tr></thead><tbody></tbody></table></div>`;
+#                 grid.innerHTML = html;
+#                 //grid.innerHTML = '<div style="text-align:center; padding:100px;"><i class="fas fa-spinner fa-spin fa-3x"></i></div>';
+#
+#                 try {
+#                     const response = await fetch(`/api/admin/db_pro_data?table=${currentTable}&q=${encodeURIComponent(q)}&cat=${cat}&limit=${pageSize}&offset=${currentPage*pageSize}&sort=${sortCol}&dir=${sortDir}`);
+#                     const res = await response.json();
+#
+#                     if (res.error) throw new Error(res.error);
+#                     if (!res.data || !res.columns) {
+#                         grid.innerHTML = '<div style="text-align:center; padding:50px;">데이터가 없습니다.</div>';
+#                         return;
+#                     }
+#
+#                     const totalItems = res.total || 0;
+#                     document.getElementById('rowCount').innerText = `${totalItems.toLocaleString()} items found`;
+#                     document.getElementById('pageDisplay').innerText = `Page ${currentPage + 1} / ${Math.ceil(totalItems / pageSize) || 1}`;
+#
+#                     // 테이블 헤더 생성
+#                     let html = '<table><thead><tr><th><input type="checkbox" id="selectAll" onclick="toggleAll(this)"></th>' +
+#                                res.columns.map(c => `<th onclick="handleSort('${c}')">${c} ${sortCol===c?(sortDir==='ASC'?'▲':'▼'):''}</th>`).join('') +
+#                                '</tr></thead><tbody>';
+#
+#                     // 테이블 데이터 생성
+#                     res.data.forEach((row, index) => {
+#                         const pk = (currentTable === 'series') ? row.path : row.id;
+#                         let rowHtml = `<tr><td><input type="checkbox" class="row-checkbox" value="${pk}"></td>`;
+#
+#                         res.columns.forEach(c => {
+#                             let val = row[c];
+#                             let colLower = c.toLowerCase();
+#
+#                             // 🔴 [강제 디버깅] 컬럼명과 값 확인
+#                             if (index === 0) {
+#                                 console.log(`[디버그] 컬럼: ${c}, 값: ${val}, 타입: ${typeof val}`);
+#                             }
+#
+#                             // 이미지 로직
+#                             if ((colLower === 'posterpath' || colLower === 'thumbnailurl') && val && typeof val === 'string') {
+#                                 let imgUrl = val.startsWith('http') ? val : 'https://image.tmdb.org/t/p/w200' + val;
+#                                 rowHtml += `<td><img src="${imgUrl}" style="width: 100px; height: 56px; object-fit: cover; border-radius: 4px;"></td>`;
+#                             }
+#                             // 편집 로직
+#                             else if (currentTable === 'series' && (colLower === 'cleanedname' || colLower === 'tmdbtitle')) {
+#                                 const safePk = JSON.stringify(pk).replace(/"/g, '&quot;');
+#                                 rowHtml += `<td class="editable" onclick="makeEditable(this, ${safePk}, '${c}')">${val === null ? 'null' : val}</td>`;
+#                             }
+#                             // 일반 컬럼
+#                             else {
+#                                 rowHtml += `<td title="${String(val || '').replace(/"/g, '&quot;')}">${val === null ? 'null' : val}</td>`;
+#                             }
+#                         });
+#
+#                         html += rowHtml + '</tr>';
+#                     });
+#                     grid.innerHTML = html + '</tbody></table>';
+#
+#                 } catch (e) {
+#                     console.error("loadData 에러:", e);
+#                     grid.innerHTML = `<div style="color:#ef4444; padding:50px;">Error: ${e.message}</div>`;
+#                 }
+#             }
+#
+#            function toggleAll(source) {
+#                 // 모든 .row-checkbox 클래스를 가진 체크박스를 찾아서 source.checked 상태로 만듭니다.
+#                 const checkboxes = document.querySelectorAll('.row-checkbox');
+#                 checkboxes.forEach(cb => {
+#                     cb.checked = source.checked;
+#                 });
+#             }
+#
+#             async function deleteSelected() {
+#                 const checked = Array.from(document.querySelectorAll('.row-checkbox:checked')).map(cb => cb.value);
+#                 if(checked.length === 0) return alert('삭제할 항목을 선택하세요.');
+#                 if(!confirm(`${checked.length}개의 항목을 삭제할까요?`)) return;
+#
+#                 for (const id of checked) {
+#                     const body = currentTable === 'series' ? { path: id.trim() } : { id: id.trim() };
+#                     const endpoint = currentTable === 'series' ? '/api/admin/dbpro_delete_series' : '/api/admin/delete_episode';
+#
+#                     try {
+#                         const response = await fetch(endpoint, {
+#                             method: 'POST',
+#                             headers: {'Content-Type': 'application/json'},
+#                             body: JSON.stringify(body)
+#                         });
+#
+#                         // 서버 응답을 텍스트로 가져와 확인
+#                         const text = await response.text();
+#                         console.log(`[${id}] 서버 응답:`, text);
+#
+#                         const data = JSON.parse(text);
+#                         if (data.status !== 'success') {
+#                             console.error(`삭제 실패 [${id}]:`, data.message);
+#                         }
+#                     } catch (e) {
+#                         console.error(`JSON 파싱/통신 에러 [${id}]:`, e);
+#                     }
+#                 }
+#
+#                 alert('삭제 작업이 완료되었습니다.');
+#                 loadData();
+#             }
+#
+#             function changePage(delta) { currentPage += delta; loadData(); document.getElementById('gridArea').scrollTop = 0; }
+#             function changeSize(size) { pageSize = parseInt(size); triggerSearch(); }
+#             function handleSort(col) { if (sortCol === col) sortDir = sortDir === 'ASC' ? 'DESC' : 'ASC'; else { sortCol = col; sortDir = 'ASC'; } loadData(); }
+#             window.onload = loadData;
+#         </script>
+#     </body>
+#     </html>
+#     """
 
-            .grid-container { flex: 1; overflow: auto; padding: 20px 30px; }
-            table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border); table-layout: auto; }
-            th { position: sticky; top: 0; z-index: 10; background: #334155; color: var(--text-dim); padding: 12px 15px; text-align: left; font-size: 12px; border-bottom: 1px solid var(--border); cursor: pointer; white-space: nowrap; }
-            td { padding: 12px 15px; border-bottom: 1px solid var(--border); font-size: 13px; white-space: nowrap; overflow: visible; text-overflow: clip; max-width: none; }
-            tr:hover { background: #2d3748; }
 
-            /* 수정 가능 필드 스타일 */
-            .editable { color: var(--accent); cursor: pointer; border-bottom: 1px dashed var(--accent); }
-            .editable:hover { background: #334155; color: white; }
-            .edit-input { background: #0f172a; color: white; border: 1px solid var(--accent); padding: 5px; width: 100%; box-sizing: border-box; font-size: 13px; }
 
-            .pagination { padding: 15px 30px; background: var(--bg-card); border-top: 1px solid var(--border); display: flex; justify-content: center; align-items: center; gap: 15px; }
-            .poster-thumb { width: 35px; height: 50px; border-radius: 4px; object-fit: cover; }
-        </style>
-    </head>
-    <body>
-        <!-- 사이드바 및 상단바 생략 (기존 유지) -->
-        <div class="sidebar">
-            <div class="sidebar-header"><i class="fas fa-terminal"></i> DB PRO ADMIN</div>
-            <div class="nav-menu">
-                <div class="nav-item active" onclick="switchTable('series', this)"><i class="fas fa-layer-group"></i> 작품 (Series)</div>
-                <div class="nav-item" onclick="switchTable('episodes', this)"><i class="fas fa-film"></i> 에피소드 (Episodes)</div>
-                <div class="nav-item" onclick="switchTable('playback_progress', this)"><i class="fas fa-history"></i> 시청 기록</div>
-                <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border);">
-                    <a href="/updater" style="text-decoration:none;"><div class="nav-item"><i class="fas fa-arrow-left"></i> 대시보드 복귀</div></a>
-                </div>
-            </div>
-        </div>
-        <div class="main-content">
-            <div class="top-bar">
-                <select id="categorySelect" onchange="triggerSearch()">
-                    <option value="전체">전체 카테고리</option>
-                    <option value="movies">영화</option>
-                    <option value="koreantv">국내TV</option>
-                    <option value="foreigntv">외국TV</option>
-                    <option value="animations_all">애니메이션</option>
-                    <option value="air">방송중</option>
-                </select>
-                <input type="text" id="searchInput" style="flex:1;" placeholder="키워드 검색..." onkeyup="if(event.key==='Enter') triggerSearch()">
-                <button class="btn btn-primary" onclick="triggerSearch()"><i class="fas fa-search"></i> 검색</button>
-                <span id="rowCount" style="color: var(--text-dim); font-size: 13px; white-space:nowrap;">0 items</span>
 
-                <button class="btn btn-danger" onclick="deleteSelected()" style="background: #ef4444; color: white;"><i class="fas fa-trash"></i> 선택 삭제</button>
-            </div>
-            <div class="grid-container" id="gridArea"></div>
-            <div class="pagination">
-                <button class="btn btn-ghost" id="prevBtn" onclick="changePage(-1)"><i class="fas fa-chevron-left"></i></button>
-                <span id="pageDisplay" style="font-weight:bold; color:var(--accent);">Page 1 / 1</span>
-                <button class="btn btn-ghost" id="nextBtn" onclick="changePage(1)"><i class="fas fa-chevron-right"></i></button>
-                <select id="pageSize" onchange="changeSize(this.value)">
-                    <option value="50">50개씩</option><option value="100">100개씩</option><option value="200">200개씩</option>
-                </select>
-            </div>
-        </div>
-
-        <script>
-            let currentTable = 'series', currentPage = 0, pageSize = 50, sortCol = '', sortDir = 'ASC';
-
-            async function makeEditable(td, pk, field) {
-                if (td.querySelector('input')) return;
-                const originalVal = td.innerText === 'null' ? '' : td.innerText;
-                const input = document.createElement('input');
-                input.className = 'edit-input';
-                input.value = originalVal;
-                td.innerHTML = '';
-                td.appendChild(input);
-                input.focus();
-
-                input.onblur = () => { if (!input.dataset.saving) td.innerText = originalVal || 'null'; };
-                input.onkeydown = async (e) => {
-                    if (e.key === 'Enter') {
-                        input.dataset.saving = "true";
-                        const newVal = input.value;
-                        if (newVal === originalVal) { td.innerText = originalVal || 'null'; return; }
-                        const ok = await saveCell(pk, field, newVal);
-                        if (ok) {
-                            td.innerText = newVal || 'null';
-                            td.style.color = '#4ade80';
-                            setTimeout(() => td.style.color = '', 2000);
-                        } else { alert('저장 실패'); td.innerText = originalVal || 'null'; }
-                    } else if (e.key === 'Escape') { td.innerText = originalVal || 'null'; }
-                };
-            }
-
-            async function saveCell(pk, field, newVal) {
-                try {
-                    const res = await fetch('/api/admin/update_cell', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            table: currentTable,
-                            pk_col: currentTable === 'series' ? 'path' : 'id',
-                            pk_val: pk,
-                            field: field,
-                            new_val: newVal
-                        })
-                    });
-                    const data = await res.json();
-                    return data.status === 'success';
-                } catch (e) { return false; }
-            }
-
-            function switchTable(table, el) {
-                document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-                el.classList.add('active');
-                currentTable = table; triggerSearch();
-            }
-            function triggerSearch() { currentPage = 0; loadData(); }
-/*
-            async function loadData() {
-                const q = document.getElementById('searchInput').value;
-                const cat = document.getElementById('categorySelect').value;
-                const grid = document.getElementById('gridArea');
-                grid.innerHTML = '<div style="text-align:center; padding:100px;"><i class="fas fa-spinner fa-spin fa-3x"></i></div>';
-                try {
-                    const res = await (await fetch(`/api/admin/db_pro_data?table=${currentTable}&q=${encodeURIComponent(q)}&cat=${cat}&limit=${pageSize}&offset=${currentPage*pageSize}&sort=${sortCol}&dir=${sortDir}`)).json();
-                    document.getElementById('rowCount').innerText = `${res.total.toLocaleString()} items found`;
-                    document.getElementById('pageDisplay').innerText = `Page ${currentPage + 1} / ${Math.ceil(res.total / pageSize) || 1}`;
-
-                    //let html = '<table><thead><tr>' + res.columns.map(c => `<th onclick="handleSort('${c}')">${c} ${sortCol===c?(sortDir==='ASC'?'▲':'▼'):''}</th>`).join('') + '</tr></thead><tbody>';
-                    let html = '<table><thead><tr><th><input type="checkbox" id="selectAll" onclick="toggleAll(this)"></th>' +
-           res.columns.map(c => `<th onclick="handleSort('${c}')">${c} ${sortCol===c?(sortDir==='ASC'?'▲':'▼'):''}</th>`).join('') +
-           '</tr></thead><tbody>';
-
-                    res.data.forEach(row => {
-                        const pk = row[currentTable === 'series' ? 'path' : 'id'];
-                        html += `<tr><td><input type="checkbox" class="row-checkbox" value="${pk}"></td>` + res.columns.map(c => {
-                            let val = row[c], display = val === null ? '<span style="color:#475569">null</span>' : val;
-                            if (c === 'posterPath' && val) display = `<img src="${val.startsWith('http') ? val : 'https://image.tmdb.org/t/p/w200' + val}" class="poster-thumb">`;
-
-                            // cleanedName과 tmdbTitle은 편집 가능하게 설정
-                            if ((c === 'cleanedName' || c === 'tmdbTitle') && currentTable === 'series') {
-                                const safePath = JSON.stringify(row.path).replace(/"/g, '&quot;');
-                                return `<td class="editable" onclick="makeEditable(this, ${safePath}, '${c}')">${display}</td>`;
-                            }
-                            return `<td title="${String(val).replace(/"/g, '&quot;')}">${display}</td>`;
-                        }).join('') + '</tr>';
-                    });
-                    grid.innerHTML = html + '</tbody></table>';
-                } catch (e) { grid.innerHTML = `<div style="color:#ef4444; padding:50px;">Error: ${e}</div>`; }
-            }
-       */
-            async function loadData() {
-                const q = document.getElementById('searchInput').value;
-                const cat = document.getElementById('categorySelect').value;
-                const grid = document.getElementById('gridArea');
-                // 🔴 [핵심 수정] 첫 로딩 시 기본 정렬값 설정
-                if (!sortCol) {
-                    sortCol = 'updated_at'; // 기본 정렬 기준
-                    sortDir = 'DESC';       // 기본 정렬 방향
-                }
-                grid.innerHTML = '<div style="text-align:center; padding:100px;"><i class="fas fa-spinner fa-spin fa-3x"></i></div>';
-
-                try {
-                    const response = await fetch(`/api/admin/db_pro_data?table=${currentTable}&q=${encodeURIComponent(q)}&cat=${cat}&limit=${pageSize}&offset=${currentPage*pageSize}&sort=${sortCol}&dir=${sortDir}`);
-                    const res = await response.json();
-
-                    if (res.error) throw new Error(res.error);
-                    if (!res.data || !res.columns) {
-                        grid.innerHTML = '<div style="text-align:center; padding:50px;">데이터가 없습니다.</div>';
-                        return;
-                    }
-
-                    const totalItems = res.total || 0;
-                    document.getElementById('rowCount').innerText = `${totalItems.toLocaleString()} items found`;
-                    document.getElementById('pageDisplay').innerText = `Page ${currentPage + 1} / ${Math.ceil(totalItems / pageSize) || 1}`;
-
-                    // 테이블 헤더 생성
-                    let html = '<table><thead><tr><th><input type="checkbox" id="selectAll" onclick="toggleAll(this)"></th>' +
-                               res.columns.map(c => `<th onclick="handleSort('${c}')">${c} ${sortCol===c?(sortDir==='ASC'?'▲':'▼'):''}</th>`).join('') +
-                               '</tr></thead><tbody>';
-
-                    // 테이블 데이터 생성
-                    res.data.forEach(row => {
-                        // 🔴 수정: 테이블별로 고유 식별자(PK)를 안전하게 가져옴
-                        const pk = (currentTable === 'series') ? row.path : row.id;
-
-                        html += `<tr><td><input type="checkbox" class="row-checkbox" value="${pk}"></td>` + res.columns.map(c => {
-                            let val = row[c];
-                            let display = val === null ? '<span style="color:#475569">null</span>' : val;
-
-                            // 이미지 처리
-                            if (c === 'posterPath' && val) {
-                                display = `<img src="${val.startsWith('http') ? val : 'https://image.tmdb.org/t/p/w200' + val}" class="poster-thumb">`;
-                            }
-
-                            // 🔴 수정: series 테이블이면서 편집 가능한 컬럼일 때만 path 접근 및 편집창 호출
-                            if (currentTable === 'series' && (c === 'cleanedName' || c === 'tmdbTitle')) {
-                                // row.path가 아닌 위에서 구한 pk(series인 경우 path와 동일)를 JSON 인코딩하여 전달
-                                const safePk = JSON.stringify(pk).replace(/"/g, '&quot;');
-                                return `<td class="editable" onclick="makeEditable(this, ${safePk}, '${c}')">${display}</td>`;
-                            }
-
-                            return `<td title="${String(val).replace(/"/g, '&quot;')}">${display}</td>`;
-                        }).join('') + '</tr>';
-                    });
-                    grid.innerHTML = html + '</tbody></table>';
-
-                } catch (e) {
-                    console.error("loadData 에러:", e);
-                    grid.innerHTML = `<div style="color:#ef4444; padding:50px;">Error: ${e.message}</div>`;
-                }
-            }
-
-           function toggleAll(source) {
-                // 모든 .row-checkbox 클래스를 가진 체크박스를 찾아서 source.checked 상태로 만듭니다.
-                const checkboxes = document.querySelectorAll('.row-checkbox');
-                checkboxes.forEach(cb => {
-                    cb.checked = source.checked;
-                });
-            }
-
-            async function deleteSelected() {
-                const checked = Array.from(document.querySelectorAll('.row-checkbox:checked')).map(cb => cb.value);
-                if(checked.length === 0) return alert('삭제할 항목을 선택하세요.');
-                if(!confirm(`${checked.length}개의 항목을 삭제할까요?`)) return;
-
-                for (const id of checked) {
-                    const body = currentTable === 'series' ? { path: id.trim() } : { id: id.trim() };
-                    const endpoint = currentTable === 'series' ? '/api/admin/dbpro_delete_series' : '/api/admin/delete_episode';
-
-                    try {
-                        const response = await fetch(endpoint, {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify(body)
-                        });
-
-                        // 서버 응답을 텍스트로 가져와 확인
-                        const text = await response.text();
-                        console.log(`[${id}] 서버 응답:`, text);
-
-                        const data = JSON.parse(text);
-                        if (data.status !== 'success') {
-                            console.error(`삭제 실패 [${id}]:`, data.message);
-                        }
-                    } catch (e) {
-                        console.error(`JSON 파싱/통신 에러 [${id}]:`, e);
-                    }
-                }
-
-                alert('삭제 작업이 완료되었습니다.');
-                loadData();
-            }
-
-            function changePage(delta) { currentPage += delta; loadData(); document.getElementById('gridArea').scrollTop = 0; }
-            function changeSize(size) { pageSize = parseInt(size); triggerSearch(); }
-            function handleSort(col) { if (sortCol === col) sortDir = sortDir === 'ASC' ? 'DESC' : 'ASC'; else { sortCol = col; sortDir = 'ASC'; } loadData(); }
-            window.onload = loadData;
-        </script>
-    </body>
-    </html>
-    """
 # @app.route('/api/admin/dbpro_delete_series', methods=['POST'])
 # def api_dbprodelete_series():
 #     data = request.json
@@ -7672,6 +7812,21 @@ def admin_db_pro():
 #         return jsonify({"status": "success"})
 #     except Exception as e:
 #         return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/admin/db_pro')
+def admin_db_pro():
+    # 1. NasVideoPlayer.py가 위치한 폴더의 경로를 가져옵니다.
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # 2. 그 폴더 안에 있는 db_pro.html을 절대 경로로 지정합니다.
+    file_path = os.path.join(base_dir, 'db_pro.html')
+
+    # 3. 파일을 안전하게 읽습니다.
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        return f"파일을 찾을 수 없습니다: {file_path}", 404
 
 @app.route('/api/admin/dbpro_delete_series', methods=['POST'])
 def api_dbprodelete_series():
@@ -7809,7 +7964,16 @@ def api_db_pro_data():
         # 🔴 [수정] 컬럼 순서를 posterPath가 맨 앞에 오도록 강제 정렬
         raw_columns = [d[0] for d in cursor.description]
         # 현재 테이블에 있는 컬럼들만 추려서 순서를 만듭니다.
-        priority = ['posterPath', 'cleanedName', 'tmdbTitle', 'name', 'category']
+        # priority = ['posterPath', 'cleanedName', 'tmdbTitle', 'name', 'category']
+
+        # 🔴 컬럼 순서 우선순위 정의 (series와 episodes 모두 대응)
+        # 테이블 종류에 따라 우선순위를 다르게 적용합니다.
+        if table == 'series':
+            priority = ['posterPath', 'cleanedName', 'tmdbTitle', 'name', 'category', 'updated_at']
+        elif table == 'episodes':
+            priority = ['thumbnailUrl', 'season_number', 'episode_number', 'title', 'series_path', 'updated_at']
+        else:
+            priority = []
         columns = []
 
         # 우선순위 컬럼을 먼저 넣음
@@ -9087,137 +9251,29 @@ def pilot_patch_single():
 #
 #     threading.Thread(target=run_patch_task, daemon=True).start()
 #     return jsonify({"message": f"'{target_cat}' 카테고리 일괄 매칭을 시작합니다. /updater 로그를 확인하세요."})
+def is_matching_reliable(cleaned_name, tmdb_info, sample_path):
+    # 이름 유사도 계산
+    similarity = SequenceMatcher(None, cleaned_name.lower(), tmdb_info.get('title', '').lower()).ratio()
+
+    # 연도 추출 및 비교
+    def extract_year(path_str):
+        match = re.search(r'(19|20)\d{2}', path_str)
+        return match.group(0) if match else None
+
+    db_year = extract_year(sample_path)
+    tmdb_year = str(tmdb_info.get('year', ''))
+
+    # 정보가 둘 다 있을 때만 비교
+    year_match = (db_year == tmdb_year) if (db_year and tmdb_year) else True
+
+    # 🔴 검증 로직 (여기서 기준을 0.82로 유지)
+    return (similarity > 0.5 and year_match) or similarity > 0.82, similarity
 
 @app.route('/api/admin/patch_by_category')
 def patch_by_category():
     target_cat = request.args.get('category')
     if not target_cat:
         return jsonify({"error": "category 파라미터를 입력하세요."}), 400
-
-    # def run_patch_task():
-    #     # 🔴 Flask 앱 컨텍스트 추가 (이게 있어야 에러가 안 납니다)
-    #     with app.app_context():
-    #         set_update_state(is_running=True, task_name=f"[{target_cat}] 카테고리 일괄 보수", clear_logs=True)
-    #         emit_ui_log(f"🚀 [{target_cat}] 카테고리 메타데이터 보수 시작...", "info")
-    #
-    #         try:
-    #             conn = get_db()
-    #             cursor = conn.cursor()
-    #
-    #             rows = conn.execute("""
-    #                 SELECT path, name, cleanedName
-    #                 FROM series
-    #                 WHERE category = ?
-    #                 AND (tmdbId IS NULL OR tmdbId = '' OR failed != 0)
-    #                 ORDER BY path ASC
-    #             """, (target_cat,)).fetchall()
-    #             total = len(rows)
-    #             set_update_state(total=total)
-    #             success_count = 0
-    #
-    #             # 🔴 추가: 루프 시작 시점(for idx, row in enumerate(rows)) 바로 앞에 생성
-    #             processed_episodes = set()
-    #             for idx, row in enumerate(rows):
-    #                 name, path, cleaned = row['name'], row['path'], row['cleanedName']
-    #                 percent = int(((idx + 1) / total) * 100)
-    #                 current_prefix = f"[{idx + 1}/{total}] {percent}%"
-    #
-    #                 try:
-    #                     info = get_tmdb_info_server(cleaned, category=target_cat, ignore_cache=True, path=path)
-    #                 except Exception as e:
-    #                     emit_ui_log(f"⚠️ 요청 중 에러 발생: {str(e)}", "warning")
-    #                     time.sleep(2)
-    #                     continue
-    #
-    #                 if info and not info.get('failed'):
-    #                     meta_summary = f"({info.get('year', '?')} | {info.get('rating', 'NR')} | {', '.join(info.get('genreNames', [])[:2])})"
-    #                     conn.execute("""
-    #                         UPDATE series SET
-    #                             tmdbId = COALESCE(NULLIF(tmdbId, ''), ?),
-    #                             tmdbTitle = COALESCE(NULLIF(tmdbTitle, ''), ?),
-    #                             posterPath = COALESCE(NULLIF(posterPath, ''), ?),
-    #                             year = COALESCE(NULLIF(year, ''), ?),
-    #                             rating = COALESCE(NULLIF(rating, ''), ?),
-    #                             overview = COALESCE(NULLIF(overview, ''), ?),
-    #                             director = COALESCE(NULLIF(director, ''), ?),
-    #                             actors = COALESCE(NULLIF(actors, '[]'), ?),
-    #                             genreNames = COALESCE(NULLIF(genreNames, '[]'), ?),
-    #                             metadata_json = COALESCE(NULLIF(metadata_json, '{}'), ?),
-    #                             failed = 0
-    #                         WHERE path = ?
-    #                     """, (
-    #                         info.get('tmdbId'), info.get('title'), info.get('posterPath'), info.get('year'),
-    #                         info.get('rating'), info.get('overview'), info.get('director'),
-    #                         json.dumps(info.get('actors', []), ensure_ascii=False),
-    #                         json.dumps(info.get('genreNames', []), ensure_ascii=False),
-    #                         info.get('metadata_json'), path
-    #                     ))
-    #                     conn.commit()
-    #                     success_count += 1
-    #                     emit_ui_log(f"✅ {current_prefix} '{cleaned}' 매칭 성공 {meta_summary}", "success")
-    #                 else:
-    #                     conn.execute("UPDATE series SET failed = 1 WHERE path = ?", (path,))
-    #                     conn.commit()
-    #                     emit_ui_log(f"❌ [{idx + 1}/{total}] '{cleaned}' 매칭 실패", "error")
-    #                 # 🔴 [해결] 에피소드 루프 시작 전에 카운터 미리 초기화
-    #                 ep_success_count = 0
-    #                 ep_fail_count = 0
-    #
-    #                 if info.get('seasons_data'):
-    #                     # [에피소드 정보 업데이트]
-    #                     # cursor = conn.execute("SELECT id, title FROM episodes WHERE series_path = ?", (path,))
-    #                     # all_eps = cursor.fetchall()
-    #                     # 🔴 수정된 에피소드 조회 쿼리
-    #                     # 해당 작품(cleanedName)과 카테고리에 속한 모든 에피소드를 가져옴
-    #                     cursor.execute(
-    #                         ''' SELECT id, title, series_path FROM episodes WHERE series_path IN ( SELECT path FROM series WHERE cleanedName = ? AND category = ? ) ''',
-    #                         (cleaned, target_cat))
-    #                     all_eps = cursor.fetchall()
-    #                     db_ep_map = {}
-    #                     for ep in all_eps:
-    #                         sn, en = extract_episode_numbers(f"{path}/{ep['title']}")
-    #                         db_ep_map[(sn, en)] = ep['id']
-    #
-    #                     for key, ep_data in info['seasons_data'].items():
-    #                         parts = key.split('_')
-    #                         if len(parts) != 2: continue
-    #                         s_num, ep_num = int(parts[0]), int(parts[1])
-    #
-    #                         target_ep_id = db_ep_map.get((s_num, ep_num))
-    #                         # 🔴 핵심 수정: 이미 처리된 ID라면 건너뜀
-    #                         if target_ep_id and target_ep_id not in processed_episodes:
-    #                             conn.execute("""
-    #                                        UPDATE episodes SET
-    #                                            overview = ?, thumbnailUrl = ?, season_number = ?, episode_number = ?
-    #                                        WHERE id = ?
-    #                                    """, (
-    #                             ep_data.get('overview'), ep_data.get('still_path'), s_num, ep_num, target_ep_id))
-    #
-    #                             processed_episodes.add(target_ep_id)  # 처리한 ID 기록
-    #                             emit_ui_log(f"📺 매칭 성공: {cleaned} {s_num}시즌 {ep_num}화", "success")
-    #                             ep_success_count += 1
-    #                         elif not target_ep_id:
-    #                             emit_ui_log(f"⚠️ 매칭 실패: {cleaned} TMDB({s_num}시즌 {ep_num}화) 찾을 수 없음", "warning")
-    #
-    #                     conn.commit()
-    #                 # 🔴 [해결] 루프가 끝나고 카운터 로그 출력 (if 문 밖으로 이동)
-    #                 if ep_success_count > 0:
-    #                     log_msg = f"📺 '{cleaned}' 에피소드: {ep_success_count}개 갱신"
-    #                     if ep_fail_count > 0:
-    #                         log_msg += f", {ep_fail_count}개 누락"
-    #                     emit_ui_log(log_msg, "info" if ep_fail_count == 0 else "warning")
-    #
-    #                 sleep_time = random.uniform(0.5, 1.2)
-    #                 time.sleep(sleep_time)
-    #
-    #             build_all_caches()
-    #             emit_ui_log(f"🏁 [{target_cat}] 보수 완료 (성공: {success_count}/{total})", "success")
-    #
-    #         except Exception as e:
-    #             emit_ui_log(f"💥 치명적 에러: {str(e)}", "error")
-    #         finally:
-    #             conn.close()
-    #             set_update_state(is_running=False)
     def run_patch_task():
         with app.app_context():
             set_update_state(is_running=True, task_name=f"[{target_cat}] 카테고리 일괄 보수", clear_logs=True)
@@ -9266,75 +9322,86 @@ def patch_by_category():
                         continue
 
                     if info and not info.get('failed'):
-                        # 🔴 시리즈 정보 업데이트 (모든 중복 path에 대해 적용)
-                        up_values = (info.get('tmdbId'), info.get('title'), info.get('posterPath'), info.get('year'),
-                                     info.get('rating'), info.get('overview'), info.get('director'),
-                                     json.dumps(info.get('actors', []), ensure_ascii=False),
-                                     json.dumps(info.get('genreNames', []), ensure_ascii=False),
-                                     info.get('metadata_json', '{}'))
 
-                        # 다중 경로 UPDATE를 위해 IN 절 구성
-                        conn.execute(f"""
-                            UPDATE series SET
-                                tmdbId = COALESCE(NULLIF(tmdbId, ''), ?),
-                                tmdbTitle = COALESCE(NULLIF(tmdbTitle, ''), ?),
-                                posterPath = COALESCE(NULLIF(posterPath, ''), ?),
-                                year = COALESCE(NULLIF(year, ''), ?),
-                                rating = COALESCE(NULLIF(rating, ''), ?),
-                                overview = COALESCE(NULLIF(overview, ''), ?),
-                                director = COALESCE(NULLIF(director, ''), ?),
-                                actors = COALESCE(NULLIF(actors, '[]'), ?),
-                                genreNames = COALESCE(NULLIF(genreNames, '[]'), ?),
-                                metadata_json = COALESCE(NULLIF(metadata_json, '{{}}'), ?),
-                                failed = 0
-                            WHERE path IN ({placeholders})
-                        """, (*up_values, *all_paths))
+                        is_reliable, sim = is_matching_reliable(cleaned, info, sample_path)
+                        if is_reliable:
+                            # 매칭 진행
+                            # 🔴 시리즈 정보 업데이트 (모든 중복 path에 대해 적용)
+                            up_values = (
+                            info.get('tmdbId'), info.get('title'), info.get('posterPath'), info.get('year'),
+                            info.get('rating'), info.get('overview'), info.get('director'),
+                            json.dumps(info.get('actors', []), ensure_ascii=False),
+                            json.dumps(info.get('genreNames', []), ensure_ascii=False),
+                            info.get('metadata_json', '{}'))
 
-                        conn.commit()
-                        success_count += 1
-                        # 🔴 추가: 성공 시 즉시 상태 갱신
-                        with UPDATE_LOCK:
-                            UPDATE_STATE["success"] = success_count
-                        emit_ui_log(f"✅ [{idx + 1}/{total}] '{info.get('rating')}{cleaned}' 매칭 성공", "success")
+                            # 다중 경로 UPDATE를 위해 IN 절 구성
+                            conn.execute(f"""
+                                UPDATE series SET
+                                    tmdbId = COALESCE(NULLIF(tmdbId, ''), ?),
+                                    tmdbTitle = COALESCE(NULLIF(tmdbTitle, ''), ?),
+                                    posterPath = COALESCE(NULLIF(posterPath, ''), ?),
+                                    year = COALESCE(NULLIF(year, ''), ?),
+                                    rating = COALESCE(NULLIF(rating, ''), ?),
+                                    overview = COALESCE(NULLIF(overview, ''), ?),
+                                    director = COALESCE(NULLIF(director, ''), ?),
+                                    actors = COALESCE(NULLIF(actors, '[]'), ?),
+                                    genreNames = COALESCE(NULLIF(genreNames, '[]'), ?),
+                                    metadata_json = COALESCE(NULLIF(metadata_json, '{{}}'), ?),
+                                    failed = 0
+                                WHERE path IN ({placeholders})
+                            """, (*up_values, *all_paths))
 
-                        # 에피소드 정보 업데이트
-                        if info.get('seasons_data'):
-                            # 해당 그룹의 모든 에피소드 조회
-                            cursor.execute(
-                                f''' SELECT id, title, series_path FROM episodes WHERE series_path IN ({','.join(['?'] * len(all_paths))}) ''',
-                                all_paths)
-                            all_eps = cursor.fetchall()
-                            db_ep_map = {}
-                            for ep in all_eps:
-                                sn, en = extract_episode_numbers(f"{ep['series_path']}/{ep['title']}")
-                                db_ep_map[(sn, en)] = ep['id']
+                            conn.commit()
+                            success_count += 1
+                            # 🔴 추가: 성공 시 즉시 상태 갱신
+                            with UPDATE_LOCK:
+                                UPDATE_STATE["success"] = success_count
+                            emit_ui_log(f"✅ [{idx + 1}/{total}] '{info.get('rating')}{cleaned}' 매칭 성공", "success")
 
-                            ep_success_count = 0
-                            ep_fail_count = 0
+                            # 에피소드 정보 업데이트
+                            if info.get('seasons_data'):
+                                # 해당 그룹의 모든 에피소드 조회
+                                cursor.execute(
+                                    f''' SELECT id, title, series_path FROM episodes WHERE series_path IN ({','.join(['?'] * len(all_paths))}) ''',
+                                    all_paths)
+                                all_eps = cursor.fetchall()
+                                db_ep_map = {}
+                                for ep in all_eps:
+                                    sn, en = extract_episode_numbers(f"{ep['series_path']}/{ep['title']}")
+                                    db_ep_map[(sn, en)] = ep['id']
 
-                            for key, ep_data in info['seasons_data'].items():
-                                parts = key.split('_')
-                                if len(parts) != 2: continue
-                                s_num, ep_num = int(parts[0]), int(parts[1])
-                                target_ep_id = db_ep_map.get((s_num, ep_num))
+                                ep_success_count = 0
+                                ep_fail_count = 0
 
-                                if target_ep_id and target_ep_id not in processed_episodes:
-                                    conn.execute(
-                                        """ UPDATE episodes SET overview=?, thumbnailUrl=?, season_number=?, episode_number=? WHERE id = ? """,
-                                        (ep_data.get('overview'), ep_data.get('still_path'), s_num, ep_num,
-                                         target_ep_id))
-                                    # 🔴 [확인용 로그] 이것만 추가하세요!
-                                    log("DB_CHECK",
-                                        f"📺 업데이트 완료됨: {target_ep_id} (제목: {ep_data.get('title') or ep_data.get('name')})")
+                                for key, ep_data in info['seasons_data'].items():
+                                    parts = key.split('_')
+                                    if len(parts) != 2: continue
+                                    s_num, ep_num = int(parts[0]), int(parts[1])
+                                    target_ep_id = db_ep_map.get((s_num, ep_num))
 
-                                    processed_episodes.add(target_ep_id)
-                                    emit_ui_log(f"📺 [에피소드 매칭 성공] '{cleaned}' {s_num}시즌 {ep_num}화 업데이트 완료", "success")
-                                    ep_success_count += 1
-                                elif not target_ep_id:
-                                    emit_ui_log(
-                                        f"⚠️ [에피소드 매칭 실패] '{cleaned}' TMDB({s_num}시즌 {ep_num}화)를 DB에서 찾을 수 없음. (맵: {list(db_ep_map.keys())})",
-                                        "warning")
-                                    ep_fail_count += 1
+                                    if target_ep_id and target_ep_id not in processed_episodes:
+                                        conn.execute(
+                                            """ UPDATE episodes SET overview=?, thumbnailUrl=?, season_number=?, episode_number=? WHERE id = ? """,
+                                            (ep_data.get('overview'), ep_data.get('still_path'), s_num, ep_num,
+                                             target_ep_id))
+                                        # 🔴 [확인용 로그] 이것만 추가하세요!
+                                        log("DB_CHECK",
+                                            f"📺 업데이트 완료됨: {target_ep_id} (제목: {ep_data.get('title') or ep_data.get('name')})")
+
+                                        processed_episodes.add(target_ep_id)
+                                        emit_ui_log(f"📺 [에피소드 매칭 성공] '{cleaned}' {s_num}시즌 {ep_num}화 업데이트 완료",
+                                                    "success")
+                                        ep_success_count += 1
+                                    elif not target_ep_id:
+                                        emit_ui_log(
+                                            f"⚠️ [에피소드 매칭 실패] '{cleaned}' TMDB({s_num}시즌 {ep_num}화)를 DB에서 찾을 수 없음. (맵: {list(db_ep_map.keys())})",
+                                            "warning")
+                                        ep_fail_count += 1
+                        else:
+                            emit_ui_log(f"⚠️ [매칭 신뢰도 낮음] '{cleaned}' vs '{info.get('title')}' (유사도: {sim:.2f})", "warning")
+                            # 실패 처리로 변경
+                            conn.execute(f"UPDATE series SET failed = 1 WHERE path IN ({placeholders})", all_paths)
+                            continue
                     else:
                         # 🔴 추가: 실패 시 즉시 상태 갱신
                         with UPDATE_LOCK:
@@ -9450,43 +9517,42 @@ def admin_filter_page():
             }
 
             // 스캔 및 매칭을 통합 실행하는 함수
-// 스캔 및 매칭을 통합 실행하는 함수
-async function executeAction() {
-    const catSelect = document.getElementById('catSelect');
-    const cat = catSelect ? catSelect.value : null;
-    const path = getPathFromChain(); // 선택된 전체 경로
+            async function executeAction() {
+                const catSelect = document.getElementById('catSelect');
+                const cat = catSelect ? catSelect.value : null;
+                const path = getPathFromChain(); // 선택된 전체 경로
 
-    if(!cat || !path) {
-        alert("카테고리와 폴더 경로를 끝까지 선택해주세요.");
-        return;
-    }
+                if(!cat || !path) {
+                    alert("카테고리와 폴더 경로를 끝까지 선택해주세요.");
+                    return;
+                }
 
-    if (!confirm(`'${path}' 경로에 대해 전체 스캔 및 메타데이터 매칭을 시작하시겠습니까?`)) return;
+                if (!confirm(`'${path}' 경로에 대해 전체 스캔 및 메타데이터 매칭을 시작하시겠습니까?`)) return;
 
-    try {
-                // 이 URL을 구성할 때 cat이 'movies'나 'air'가 아닌 'undefined'가 들어가고 있을 겁니다.
-    const url = `/api/admin/v2_action?cat=${encodeURIComponent(cat)}&path=${encodeURIComponent(path)}`;
-    console.log("DEBUG URL:", url); // 브라우저 F12 콘솔에서 이 URL을 확인해보세요.
-        // action 파라미터 제거, 통합 로직 호출
-        const response = await fetch(`/api/admin/v2_action?path=${encodeURIComponent(path)}&cat=${cat}`);
-        const data = await response.json();
+                try {
+                    // 이 URL을 구성할 때 cat이 'movies'나 'air'가 아닌 'undefined'가 들어가고 있을 겁니다.
+                    const url = `/api/admin/v2_action?cat=${encodeURIComponent(cat)}&path=${encodeURIComponent(path)}`;
+                    console.log("DEBUG URL:", url); // 브라우저 F12 콘솔에서 이 URL을 확인해보세요.
+                    // action 파라미터 제거, 통합 로직 호출
+                    const response = await fetch(`/api/admin/v2_action?path=${encodeURIComponent(path)}&cat=${cat}`);
+                    const data = await response.json();
 
 
-        if (data.status === 'success') {
-            alert(data.message);
+                    if (data.status === 'success') {
+                        alert(data.message);
 
-            // 로그창이 있는 페이지인 경우에만 스크롤 이동
-            const logBox = document.getElementById('terminalBox');
-            if (logBox) {
-                logBox.scrollIntoView({ behavior: 'smooth' });
+                        // 로그창이 있는 페이지인 경우에만 스크롤 이동
+                        const logBox = document.getElementById('terminalBox');
+                        if (logBox) {
+                            logBox.scrollIntoView({ behavior: 'smooth' });
+                        }
+                    } else {
+                        alert('에러: ' + data.message);
+                    }
+                } catch (e) {
+                    alert('통신 오류: ' + e);
+                }
             }
-        } else {
-            alert('에러: ' + data.message);
-        }
-    } catch (e) {
-        alert('통신 오류: ' + e);
-    }
-}
         </script>
     </body>
     </html>
@@ -9549,120 +9615,6 @@ def find_folders_v2():
 
     log("V2_SEARCH", f"검색어 '{query}' 결과: {len(results)}건 (504 방지 최적화 적용)")
     return jsonify(results)
-
-# backup1
-# @app.route('/api/admin/v2_action')
-# def v2_action():
-#     path = request.args.get('path')  # 예: 'air/드라마/...'
-#     cat_code = request.args.get('cat')  # 예: 'air'
-#
-#     if not path or not cat_code:
-#         return jsonify({"status": "error", "message": "경로 또는 카테고리 정보 없음"})
-#
-#     # 1. PATH 설정
-#     label_map = {"movies": "영화", "animations_all": "애니메이션", "air": "방송중", "koreantv": "국내TV", "foreigntv": "외국TV"}
-#     label = label_map.get(cat_code)
-#     if not label or label not in PATH_MAP:
-#         return jsonify({"status": "error", "message": f"알 수 없는 카테고리: {cat_code}"})
-#
-#     base_path_root, prefix = PATH_MAP[label]
-#
-#     # 2. 통합 작업 루틴
-#     def run_scan_and_match():
-#         with app.app_context():
-#             # [경로 탐색] 입력받은 path에서 마지막 폴더명 추출
-#             parts = path.split('/')
-#             target_folder_name = parts[-1]
-#             found_path = None
-#
-#             # os.walk로 실제 경로 탐색
-#             for root, dirs, files in os.walk(base_path_root):
-#                 dirs[:] = [d for d in dirs if d != "OTT 애니메이션"]
-#                 if nfc(os.path.basename(root)) == nfc(target_folder_name):
-#                     found_path = root
-#                     break
-#                 for d in dirs:
-#                     if nfc(d) == nfc(target_folder_name):
-#                         found_path = os.path.join(root, d)
-#                         break
-#                 if found_path: break
-#
-#             if not found_path:
-#                 emit_ui_log(f"❌ 폴더를 찾을 수 없습니다: {target_folder_name}", "error")
-#                 return
-#
-#             # 작품명 정제
-#             raw_name = os.path.basename(found_path)
-#             refined_name, _ = clean_title_complex(raw_name) or (raw_name, None)
-#
-#             emit_ui_log(f"🔎 [{refined_name}] 폴더 스캔 및 매칭 시작...", "info")
-#
-#             # 3. DB 초기화 (실패 상태 복구)
-#             conn = get_db()
-#             conn.execute("UPDATE series SET failed = 0 WHERE path LIKE ?", (f"%{target_folder_name}%",))
-#             conn.commit()
-#             conn.close()
-#
-#             # 4. 스캔 실행 (데이터 삭제 없이 추가/갱신만 수행)
-#             scan_recursive_to_db(found_path, prefix, cat_code, None)
-#
-#             # 5. 매칭 시작
-#             emit_ui_log(f"🎬 [{refined_name}] 상세 정보 매칭 시작...", "info")
-#             fetch_metadata_async(target_name=refined_name, target_category=cat_code)
-#             emit_ui_log(f"🏁 [{refined_name}] 전체 작업 완료.", "success")
-#
-#     threading.Thread(target=run_scan_and_match, daemon=True).start()
-#     return jsonify({"status": "success", "message": f"[{path}] 작업 시작 (로그 확인)"})
-
-# backup2
-# @app.route('/api/admin/v2_action')
-# def v2_action():
-#     path = request.args.get('path')  # 예: '제목/가'
-#     cat_code = request.args.get('cat')
-#
-#     if not path or not cat_code:
-#         emit_ui_log("❌ 파라미터 누락", "error")
-#         return jsonify({"status": "error", "message": "경로 또는 카테고리 정보 없음"})
-#
-#     label_map = {"movies": "영화", "animations_all": "애니메이션", "air": "방송중", "koreantv": "국내TV", "foreigntv": "외국TV"}
-#     label = label_map.get(cat_code)
-#     if not label or label not in PATH_MAP:
-#         return jsonify({"status": "error", "message": f"알 수 없는 카테고리: {cat_code}"})
-#
-#     base_path_root, prefix = PATH_MAP[label]
-#
-#     def run_scan_and_match():
-#         with app.app_context():
-#             # 1. 절대 경로 확정
-#             target_absolute_path = os.path.join(base_path_root, path)
-#             folder_name = os.path.basename(target_absolute_path)
-#
-#             if not os.path.exists(target_absolute_path):
-#                 emit_ui_log(f"❌ 폴더를 찾을 수 없습니다: {target_absolute_path}", "error")
-#                 return
-#
-#             emit_ui_log(f"🔎 [{folder_name}] 작업 시작...", "info")
-#
-#             # 2. DB 초기화 (실패 상태 복구) - 🔴 변수명 수정 완료
-#             # conn = get_db()
-#             # # DB에는 '카테고리코드/경로/...' 형태로 저장되어 있음
-#             # conn.execute("UPDATE series SET failed = 0 WHERE path LIKE ?", (f"{cat_code}/{path}/%",))
-#             # conn.commit()
-#             # conn.close()
-#
-#             # 3. 스캔 실행 (include_only에 folder_name 전달하여 정밀 스캔)
-#             # 🔴 수정: [folder_name]을 넣어 핀셋 스캔을 강제함
-#             # scan_and_match_targeted(base_path_root, prefix, cat_code, [folder_name])
-#
-#             # 4. 매칭 시작 (정제된 이름 사용)
-#             refined_name, _ = clean_title_complex(folder_name) or (folder_name, None)
-#             emit_ui_log(f"🎬 [{refined_name}] 상세 정보 매칭 시작...", "info")
-#
-#             # fetch_metadata_targeted(target_name=refined_name, target_category=cat_code)
-#             emit_ui_log(f"🏁 [{refined_name}] 전체 작업 완료.", "success")
-#
-#     threading.Thread(target=run_scan_and_match, daemon=True).start()
-#     return jsonify({"status": "success", "message": f"[{path}] 작업 시작 (로그 확인)"})
 
 @app.route('/api/admin/v2_action')
 def v2_action():
