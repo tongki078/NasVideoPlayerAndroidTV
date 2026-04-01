@@ -20,7 +20,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
-import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
 import org.nas.videoplayerandroidtv.util.TitleUtils.prettyTitle
@@ -33,12 +32,7 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
     // [수정] 회차 썸네일이 없을 때 무작정 포스터를 보여주던 로직을 제거합니다.
     // 이렇게 하면 서버에서 생성한 thumb_serve 이미지가 더 잘 보이게 됩니다.
     val imageUrl = remember(movie.thumbnailUrl) {
-        val url = movie.thumbnailUrl ?: ""
-        when {
-            url.startsWith("http") -> url // 이미 전체 주소면 그대로 사용
-            url.isEmpty() -> ""           // 빈 값 처리
-            else -> "${NasApiClient.BASE_URL}${if (url.startsWith("/")) "" else "/"}$url" // 서버 내부 경로라면 baseUrl 붙임
-        }
+        movie.thumbnailUrl ?: ""
     }
 
     // 재생 시간 결정 로직 (1순위: 시청기록 duration, 2순위: TMDB runtime)
