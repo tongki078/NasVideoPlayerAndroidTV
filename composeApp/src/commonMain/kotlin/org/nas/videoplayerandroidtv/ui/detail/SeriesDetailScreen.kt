@@ -201,7 +201,7 @@ fun SeriesDetailScreen(
                                 }
                                 PremiumTvButton(text = btnLabel, icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(resumeButtonFocusRequester), onClick = { onPlay(resumeInfo.episode, allEpisodes, resumeInfo.position) })
                             }
-                            PremiumTvButton(text = if (!resumeInfo.isNew) "처음부터" else "재생", icon = if (!resumeInfo.isNew) Icons.Default.Refresh else Icons.Default.PlayArrow, isPrimary = resumeInfo.isNew, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first(), allEpisodes, 0L) })
+                            PremiumTvButton(text = if (!resumeInfo.isNew) "처음부터" else "재생", icon = if (!resumeInfo.isNew) Icons.Default.Refresh else Icons.Default.PlayArrow, isPrimary = resumeInfo.isNew, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first().copy(position = 0.0), allEpisodes, 0L) })
                             
                             if (currentSeries.category != "movies" && state.seasons.isNotEmpty()) {
                                 PremiumTvButton(
@@ -213,7 +213,7 @@ fun SeriesDetailScreen(
                                 )
                             }
                         } else if (allEpisodes.isNotEmpty()) {
-                             PremiumTvButton(text = "재생", icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first(), allEpisodes, 0L) })
+                             PremiumTvButton(text = "재생", icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first().copy(position = 0.0), allEpisodes, 0L) })
                         }
                     }
                 }
