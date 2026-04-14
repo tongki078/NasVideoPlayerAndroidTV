@@ -8,6 +8,7 @@ from collections import deque
 from io import BytesIO
 from difflib import SequenceMatcher
 from collections import Counter
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 CORS(app)
@@ -67,14 +68,43 @@ UPDATE_STATE = {
 }
 UPDATE_LOCK = threading.Lock()
 
+# # =====================================================================
+# # 🚀 형태소 분석기(Kiwi) 지연 초기화 및 경량화 설정
+# # =====================================================================
+# _kiwi_instance = None
+# KIWI_AVAILABLE = False
+#
+# stop_nouns = {
+#     '자신', '사람', '이야기', '그녀', '남자', '여자', '시작', '사건', '모두', '세계',
+#     '소년', '소녀', '누구', '어디', '모든', '통해', '서로', '다시', '때문', '대한',
+#     '가장', '그들', '어떻게', '어떤', '모든', '그의', '다른', '많은', '같은', '어느'
+# }
+#
+#
+# def get_kiwi():
+#     """필요할 때만 메모리에 올리고, 한 번 올리면 재사용합니다."""
+#     global _kiwi_instance, KIWI_AVAILABLE
+#     if _kiwi_instance is None:
+#         try:
+#             from kiwipiepy import Kiwi
+#             # 🚀 [수정] 구버전 호환성을 위해 파라미터 없이 기본형으로 호출!
+#             _kiwi_instance = Kiwi()
+#             KIWI_AVAILABLE = True
+#             print("✅ Kiwi 형태소 분석기 로드 완료", flush=True)
+#         except Exception as e:
+#             print(f"⚠️ Kiwi 엔진 로드 실패: {e}", flush=True)
+#             KIWI_AVAILABLE = False
+#             _kiwi_instance = "FAILED"  # 실패 상태 기록
+#
+#     return _kiwi_instance if KIWI_AVAILABLE else None
+# # =====================================================================
+
 def extract_keywords(overview_text, top_n=3):
-    if not overview_text or len(overview_text) < 15:
-        return []
+    if not overview_text or len(overview_text) < 15: return []
     try:
         # 1. 특수문자 제거 및 단어 단위 분리
         clean_text = re.sub(r'[^가-힣a-zA-Z\s]', ' ', overview_text)
         words = clean_text.split()
-
         # 2. 🚀 강력해진 불용어 사전 (동사/형용사 꼬리, 접속사, 대명사 등 총망라)
         stopwords = {
             '자신', '사람', '이야기', '그녀', '남자', '여자', '위해', '시작', '사건', '모두',
@@ -654,6 +684,11 @@ REGEX_FORBIDDEN_TITLE = re.compile(
 
 REGEX_BRACKETS = re.compile(
     r'\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\)|$)|\{.*?(?:\}|$)|\【.*?(?:\】|$)|\『.*?(?:\』|$)|\「.*?(?:\」|$)|\（.*?(?:\）|$)')
+
+# 🟢 [수정 후] 일반 태그 괄호는 내용을 지우고, 제목 강조 괄호는 기호만 지웁니다!
+REGEX_TAG_BRACKETS = re.compile(r'\[.*?(?:\]|$)|\(.*?(?:\)|$)|\{.*?(?:\}|$)')
+REGEX_TITLE_BRACKETS = re.compile(r'[\【\】\『\』\「\」\（\）]')
+
 REGEX_TMDB_HINT = re.compile(r'\{tmdb[\s-]*(\d+)\}')
 # [수정] 중요 구분 키워드는 지우지 않도록 보완 (극장판, 스페셜, OVA 등 보존)
 REGEX_JUNK_KEYWORDS = re.compile(
@@ -719,10 +754,21 @@ def clean_title_complex(title, full_path=None, base_path=None):
                          'gds3', 'specials', 'season', '시즌', '극장판', '극장', 'movie', 'themovie', 'other', '0z',
                          'featurettes','라프텔 애니메이션'}
 
+            # for p in reversed(parts[:-1]):
+            #     p_clean = nfc(p.lower().replace(" ", ""))
+            #     if any(x in p_clean for x in ['season', '시즌', 'other', 'featurettes', '0z']): continue
+            #     if len(p_clean) == 1 and re.match(r'[가-하0-9]', p_clean): continue
+            #     if p_clean in SKIP_DIRS: continue
+            #     series_name = re.sub(r'(?i)극장판', '', p).strip()
+            #     break
             for p in reversed(parts[:-1]):
                 p_clean = nfc(p.lower().replace(" ", ""))
-                if any(x in p_clean for x in ['season', '시즌', 'other', 'featurettes', '0z']): continue
-                if len(p_clean) == 1 and re.match(r'[가-하0-9]', p_clean): continue
+                # 🚀 [강화] Season, Part, CD 등의 쓰레기 폴더 완전 무시
+                if any(x in p_clean for x in
+                       ['season', '시즌', 'other', 'featurettes', '0z', 'part', '파트', 'vol', 'disc', 'disk',
+                        'cd']): continue
+                # 🚀 [강화] '가', 'A' 등 1글자로 된 초성 분류 폴더 완전 무시
+                if len(p_clean) <= 1: continue
                 if p_clean in SKIP_DIRS: continue
                 series_name = re.sub(r'(?i)극장판', '', p).strip()
                 break
@@ -731,7 +777,14 @@ def clean_title_complex(title, full_path=None, base_path=None):
     if not series_name:
         series_name = os.path.splitext(t_orig)[0]
 
-    series_name = REGEX_BRACKETS.sub(' ', series_name)
+    # series_name = REGEX_BRACKETS.sub(' ', series_name)
+    # 🟢 [핵심 수정]
+    # 1. [] () {} 안의 내용은 불필요한 릴리즈 태그나 연도이므로 통째로 날림
+    series_name = REGEX_TAG_BRACKETS.sub(' ', series_name)
+
+    # 2. 【 】 『 』 「 」 등의 괄호는 일본 애니메이션에서 "제목 자체"를 강조할 때 쓰이므로,
+    # 괄호 기호만 지우고 안의 내용물(예: 최애의 아이)은 살려둡니다!
+    series_name = REGEX_TITLE_BRACKETS.sub(' ', series_name)
 
     # 🟢 [핵심 수정 1] 영화나 극장판은 '1장', '1부' 같은 부제를 자르지 않고 온전히 보존합니다!
     if not is_movie:
@@ -768,12 +821,22 @@ def clean_title_complex(title, full_path=None, base_path=None):
     is_meaningful = (len(series_name) >= 2) or (any(c.isdigit() for c in series_name))
     if not is_meaningful and full_path:
         parts = [p.strip() for p in full_path.replace('\\', '/').split('/') if p.strip()]
+        # for p in reversed(parts[:-1]):
+        #     p_clean = nfc(p.lower().replace(" ", ""))
+        #     # ... (SKIP_DIRS 필터링 코드 그대로 유지) ...
+        #     if p_clean in SKIP_DIRS: continue
+        #
+        #     # [수정] 폴더명에서 '극장판'을 강제로 제거하고 series_name에 대입
+        #     series_name = re.sub(r'(?i)극장판', '', p).strip()
+        #     break
         for p in reversed(parts[:-1]):
             p_clean = nfc(p.lower().replace(" ", ""))
-            # ... (SKIP_DIRS 필터링 코드 그대로 유지) ...
+            # 🚀 [강화] Season, Part, CD 등의 쓰레기 폴더 완전 무시
+            if any(x in p_clean for x in
+                   ['season', '시즌', 'other', 'featurettes', '0z', 'part', '파트', 'vol', 'disc', 'disk', 'cd']): continue
+            # 🚀 [강화] '가', 'A' 등 1글자로 된 초성 분류 폴더 완전 무시
+            if len(p_clean) <= 1: continue
             if p_clean in SKIP_DIRS: continue
-
-            # [수정] 폴더명에서 '극장판'을 강제로 제거하고 series_name에 대입
             series_name = re.sub(r'(?i)극장판', '', p).strip()
             break
     # 8. 최종 보루 (반환 직전)
@@ -1506,54 +1569,98 @@ def scan_recursive_debug(bp, prefix, category, include_only=None):
 
     log("DEBUG_SCAN", f"✅ 디버그 스캔 종료. 총 {len(all_files)}개 파일 확인됨.")
 
+
 # def scan_and_match_targeted(target_absolute_path, prefix, cat_code, path_input):
 #     emit_ui_log(f"🔎 파일 단위 스캔 시작: {target_absolute_path}", "info")
+#
 #     conn = get_db()
 #     cursor = conn.cursor()
-#
 #     cursor.execute(f"UPDATE series SET failed = 0 WHERE path LIKE ?", (f"{cat_code}/{path_input.strip('/')}/%",))
 #
 #     label_map = {"movies": "영화", "animations_all": "애니메이션", "air": "방송중", "koreantv": "국내TV", "foreigntv": "외국TV"}
 #     base_path_root = PATH_MAP[label_map[cat_code]][0]
 #
-#     # 🔴 [핵심] 발견된 모든 작품명의 고유 리스트를 모을 집합(Set) 생성
 #     found_cleaned_names = set()
+#
+#     # 1. 하위 폴더 의심 키워드
+#     # junk_pattern = re.compile(r'(?i)(season|시즌|part|파트|vol|disc|disk|cd|1080p|2160p|4k|uhd|모바일|다운로드)')
+#     # 패턴을 찾기 쉽고 강력하게 변경합니다.
+#     junk_pattern = re.compile(r'(?i)\b(?:season|시즌|part|파트|vol|disc|disk|cd|1080p|2160p|4k|uhd|모바일|다운로드)\b')
+#     # 2. 시스템(분류) 폴더 목록 (소문자, 공백 제거 상태로 저장)
+#     system_folders_clean = [
+#         '영화', '외국tv', '국내tv', '일본애니메이션', '라프텔', '애니메이션', '방송중', '드라마', '예능', '교양', '다큐멘터리',
+#         '라프텔애니메이션', '시사', 'video', '중국드라마', '미국드라마', '일본드라마', '기타국가드라마', '제목', '최신', 'uhd'
+#     ]
 #
 #     for root, dirs, files in os.walk(target_absolute_path):
 #         dirs[:] = [d for d in dirs if not d.startswith(('.', '@', '#'))]
 #
-#         # 각 루트 폴더마다 작품명 추출
-#         rel_to_target = os.path.relpath(root, target_absolute_path)
-#         parts = rel_to_target.split(os.sep)
-#         # series_name = os.path.basename(target_absolute_path) if rel_to_target == "." else parts[0]
-#         series_name = os.path.basename(os.path.dirname(fp))
+#         # 🟢 [핵심 수정] 폴더명 추출 (NFC 정규화 필수!)
+#         parent_dir = root
+#         series_name = nfc(os.path.basename(parent_dir))
+#
+#         # if junk_pattern.search(series_name):
+#         #     # 조부모 폴더 이름 확인
+#         #     grandparent_dir = os.path.dirname(parent_dir)
+#         #     grand_name = nfc(os.path.basename(grandparent_dir))
+#         #     grand_name_clean = grand_name.replace(" ", "").lower()
+#         #
+#         #     # 3. 🔴 [핵심 방어막] 조부모 폴더가 시스템 폴더인지 검사합니다.
+#         #     # 만약 시스템 폴더(예: '라프텔애니메이션')라면,
+#         #     # "아, 현재 폴더(SPYxFAMILY Season 3)가 진짜 작품 폴더였구나!" 하고 위로 올라가는 것을 포기합니다.
+#         #     is_system_folder = False
+#         #     for sys_folder in system_folders_clean:
+#         #         if sys_folder in grand_name_clean:  # 부분 일치 허용 (예: '라프텔 애니메이션' -> '라프텔' 매칭)
+#         #             is_system_folder = True
+#         #             break
+#         #
+#         #     # 조부모 폴더가 시스템 폴더가 아닐 때만, 조부모 폴더를 작품명으로 삼고 위로 올라갑니다.
+#         #     if not is_system_folder and len(grand_name_clean) > 1:
+#         #         series_name = grand_name
+#
+#         current_dir = parent_dir
+#         current_name = series_name
+#         while junk_pattern.search(current_name):
+#             parent_of_current = os.path.dirname(current_dir)
+#             if parent_of_current == current_dir or parent_of_current == base_path_root:
+#                 break
+#             current_dir = parent_of_current
+#             current_name = nfc(os.path.basename(current_dir))
+#
+#         # 거슬러 올라가 찾은 폴더가 시스템 폴더(미국드라마 등)가 아닌지 최종 확인
+#         grand_name_clean = current_name.replace(" ", "").lower()
+#         is_system_folder = False
+#         for sys_folder in system_folders_clean:
+#             if sys_folder in grand_name_clean:
+#                 is_system_folder = True
+#                 break
+#
+#         # 시스템 폴더가 아니라면 진짜 작품명으로 확정!
+#         if not is_system_folder and len(grand_name_clean) > 1:
+#             series_name = current_name
+#
 #         for file in files:
 #             if file.lower().endswith(VIDEO_EXTS):
 #                 fp = nfc(os.path.join(root, file))
 #
-#                 # 정제 수행
-#                 full_context_name = f"{series_name} {os.path.splitext(file)[0]}"
-#                 ct, yr = clean_title_complex(full_context_name, full_path=None, base_path=None)
-#
-#                 # 🔴 정제된 이름 수집 (중복 제거를 위해 Set에 추가)
+#                 # 🟢 [핵심 수정] full_context_name 대신, 위에서 잘 추출한 series_name을 넘깁니다.
+#                 # full_path=None 으로 넘겨서 정제 함수가 경로를 멋대로 다시 파싱하는 것을 차단합니다.
+#                 ct, yr = clean_title_complex(series_name, full_path=None)
 #                 if ct: found_cleaned_names.add(ct)
 #
 #                 # DB path 생성
 #                 rel_to_root = nfc(os.path.relpath(fp, base_path_root)).replace('\\', '/')
 #                 full_spath = f"{cat_code}/{rel_to_root}".replace('//', '/').strip('/')
 #
-#                 # 시리즈/에피소드 등록
+#                 # 시리즈 등록
 #                 cursor.execute(
 #                     'INSERT OR IGNORE INTO series (path, category, name, cleanedName, yearVal) VALUES (?, ?, ?, ?, ?)',
 #                     (full_spath, cat_code, series_name, ct, yr))
 #
+#                 # 에피소드 등록
 #                 mid = hashlib.md5(fp.encode()).hexdigest()
 #                 sn, en = (1, 1) if cat_code == 'movies' else extract_episode_numbers(fp)
-#                 # cursor.execute(
-#                 #     'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl, season_number, episode_number) VALUES (?, ?, ?, ?, ?, ?, ?)',
-#                 #     (mid, full_spath, file,
-#                 #      f"/video_serve?type={prefix}&path={urllib.parse.quote(rel_to_root)}",
-#                 #      f"/thumb_serve?type={prefix}&id={mid}&path={urllib.parse.quote(rel_to_root)}", sn, en))
+#
 #                 cursor.execute(
 #                     'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl, season_number, episode_number, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
 #                     (mid, full_spath, file,
@@ -1563,23 +1670,12 @@ def scan_recursive_debug(bp, prefix, category, include_only=None):
 #     conn.commit()
 #     conn.close()
 #
-#     # 🔴 매칭 예약: 수집된 모든 고유 작품명에 대해 매칭 스레드 실행
-#     # for name in found_cleaned_names:
-#     #     log("SCAN_MATCH", f"매칭 예약: {name}")
-#     #     threading.Thread(target=fetch_metadata_targeted,
-#     #                      kwargs={'target_name': name, 'target_category': cat_code},
-#     #                      daemon=True).start()
-#     #
-#     # emit_ui_log(f"🏁 스캔 완료. {len(found_cleaned_names)}개의 작품에 대해 매칭을 시작합니다.", "success")
-#
-#     # 🔴 [핵심] Executor를 사용하여 스레드 관리 및 작업 종료 대기
 #     emit_ui_log(f"🏁 {len(found_cleaned_names)}개 작품 매칭 시작...", "info")
 #
 #     with ThreadPoolExecutor(max_workers=4) as executor:
 #         for name in found_cleaned_names:
 #             executor.submit(fetch_metadata_targeted, target_name=name, target_category=cat_code)
 #
-#     # 🔴 [핵심] 모든 스레드(매칭)가 여기서 다 끝나기를 기다림
 #     emit_ui_log(f"🏁 스캔 완료. {len(found_cleaned_names)}개의 작품에 대해 매칭을 시작합니다.", "success")
 
 
@@ -1598,7 +1694,7 @@ def scan_and_match_targeted(target_absolute_path, prefix, cat_code, path_input):
     # 1. 하위 폴더 의심 키워드
     junk_pattern = re.compile(r'(?i)(season|시즌|part|파트|vol|disc|disk|cd|1080p|2160p|4k|uhd|모바일|다운로드)')
 
-    # 2. 시스템(분류) 폴더 목록 (소문자, 공백 제거 상태로 저장)
+    # 2. 시스템(분류) 폴더 목록
     system_folders_clean = [
         '영화', '외국tv', '국내tv', '일본애니메이션', '라프텔', '애니메이션', '방송중', '드라마', '예능', '교양', '다큐멘터리',
         '라프텔애니메이션', '시사', 'video', '중국드라마', '미국드라마', '일본드라마', '기타국가드라마', '제목', '최신', 'uhd'
@@ -1607,48 +1703,53 @@ def scan_and_match_targeted(target_absolute_path, prefix, cat_code, path_input):
     for root, dirs, files in os.walk(target_absolute_path):
         dirs[:] = [d for d in dirs if not d.startswith(('.', '@', '#'))]
 
-        # 🟢 [핵심 수정] 폴더명 추출 (NFC 정규화 필수!)
-        parent_dir = root
+        parent_dir = os.path.dirname(fp)
         series_name = nfc(os.path.basename(parent_dir))
 
-        if junk_pattern.search(series_name):
-            # 조부모 폴더 이름 확인
-            grandparent_dir = os.path.dirname(parent_dir)
-            grand_name = nfc(os.path.basename(grandparent_dir))
-            grand_name_clean = grand_name.replace(" ", "").lower()
+        # 1. 폴더명 '전체'가 정크 키워드/숫자로만 된 경우만 상위로 이동 (아파트 보호)
+        junk_folder_pattern = re.compile(
+            r'(?i)^(?:season|시즌|part|파트|vol|disc|disk|cd|1080p|2160p|4k|uhd|hdr|web|h265|x265|[0-9\s\-~_.()\[\]]*)+$'
+        )
 
-            # 3. 🔴 [핵심 방어막] 조부모 폴더가 시스템 폴더인지 검사합니다.
-            # 만약 시스템 폴더(예: '라프텔애니메이션')라면,
-            # "아, 현재 폴더(SPYxFAMILY Season 3)가 진짜 작품 폴더였구나!" 하고 위로 올라가는 것을 포기합니다.
-            is_system_folder = False
-            for sys_folder in system_folders_clean:
-                if sys_folder in grand_name_clean:  # 부분 일치 허용 (예: '라프텔 애니메이션' -> '라프텔' 매칭)
-                    is_system_folder = True
-                    break
+        current_dir = parent_dir
+        current_name = series_name
 
-            # 조부모 폴더가 시스템 폴더가 아닐 때만, 조부모 폴더를 작품명으로 삼고 위로 올라갑니다.
-            if not is_system_folder and len(grand_name_clean) > 1:
-                series_name = grand_name
+        while junk_folder_pattern.match(current_name):
+            parent_of_current = os.path.dirname(current_dir)
+            if parent_of_current == current_dir or parent_of_current == base_path_root:
+                break
+            current_dir = parent_of_current
+            current_name = nfc(os.path.basename(current_dir))
+
+        # 2. 🟢 [핵심 수정] 시스템 폴더 체크 시 '완전 일치' 검사 및 괄호 제거
+        # '뱀파이어... 다큐멘터리'가 '다큐멘터리' 키워드에 걸려 건너뛰어지는 것을 방지합니다.
+        check_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', current_name)
+        grand_name_clean = check_name.replace(" ", "").lower()
+
+        is_system_folder = False
+        for sys_folder in system_folders_clean:
+            if sys_folder == grand_name_clean:  # 'in' 대신 '==' 사용
+                is_system_folder = True
+                break
+
+        if not is_system_folder and len(grand_name_clean) > 1:
+            series_name = current_name
 
         for file in files:
             if file.lower().endswith(VIDEO_EXTS):
                 fp = nfc(os.path.join(root, file))
 
-                # 🟢 [핵심 수정] full_context_name 대신, 위에서 잘 추출한 series_name을 넘깁니다.
-                # full_path=None 으로 넘겨서 정제 함수가 경로를 멋대로 다시 파싱하는 것을 차단합니다.
+                # 정제 수행
                 ct, yr = clean_title_complex(series_name, full_path=None)
                 if ct: found_cleaned_names.add(ct)
 
-                # DB path 생성
                 rel_to_root = nfc(os.path.relpath(fp, base_path_root)).replace('\\', '/')
                 full_spath = f"{cat_code}/{rel_to_root}".replace('//', '/').strip('/')
 
-                # 시리즈 등록
                 cursor.execute(
                     'INSERT OR IGNORE INTO series (path, category, name, cleanedName, yearVal) VALUES (?, ?, ?, ?, ?)',
                     (full_spath, cat_code, series_name, ct, yr))
 
-                # 에피소드 등록
                 mid = hashlib.md5(fp.encode()).hexdigest()
                 sn, en = (1, 1) if cat_code == 'movies' else extract_episode_numbers(fp)
 
@@ -1669,11 +1770,163 @@ def scan_and_match_targeted(target_absolute_path, prefix, cat_code, path_input):
 
     emit_ui_log(f"🏁 스캔 완료. {len(found_cleaned_names)}개의 작품에 대해 매칭을 시작합니다.", "success")
 
+
+# def run_match_missing_files(cat_code, path_input, missing_files):
+#     log("MATCH_MISSING", f"핀셋 매칭 시작: {len(missing_files)}개 파일")
+#     # 1. URL용 prefix 매핑 (DB 카테고리와 URL prefix가 다른 경우 대응)
+#     prefix_map = {v[1]: v[1] for k, v in PATH_MAP.items()}  # 기본 매핑
+#     # 특수 케이스 강제 지정 (DB cat_code -> PATH_MAP prefix)
+#     url_prefix_map = {
+#         "animations_all": "anim_all",
+#         "koreantv": "ktv",
+#         "foreigntv": "ftv",
+#         "movies": "movies",
+#         "air": "air"
+#     }
+#     url_prefix = url_prefix_map.get(cat_code, cat_code)
+#
+#     label_map = {"movies": "영화", "animations_all": "애니메이션", "air": "방송중", "koreantv": "국내TV", "foreigntv": "외국TV"}
+#     label = label_map.get(cat_code)
+#     if not label: return 0
+#
+#     base_path_root = PATH_MAP[label][0]
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     found_cleaned_names = set()
+#
+#     try:
+#         inserted_series = 0
+#         inserted_episodes = 0
+#
+#         # 🟢 [여기로 이동] 루프 바깥에서 한 번만 만들어둡니다.
+#         junk_pattern = re.compile(r'(?i)(season|시즌|part|파트|vol|disc|disk|cd|1080p|2160p|4k|uhd|모바일|다운로드)')
+#         system_folders_clean = [nfc(f).replace(" ", "").lower() for f in [
+#             '영화', '외국tv', '국내tv', '일본애니메이션', '라프텔', '애니메이션', '방송중', '드라마', '예능', '교양', '다큐멘터리',
+#             '라프텔애니메이션', '시사', 'video', '중국드라마', '미국드라마', '일본드라마', '기타국가드라마', '제목', '최신', 'uhd'
+#         ]]
+#
+#         for file_path_rel in missing_files:
+#             fp = nfc(os.path.join(base_path_root, file_path_rel))
+#             if not os.path.exists(fp):
+#                 log("DEBUG_INSERT", f"파일 없음: {fp}")
+#                 continue
+#
+#             # 1. 파일 전체 경로 spath 생성
+#             spath = f"{cat_code}/{file_path_rel}".replace('\\', '/').replace('//', '/')
+#
+#             # 2. 작품 폴더명만 추출
+#             # 🟢 [여기를 이렇게 교체해 주세요!]
+#             # parent_dir = os.path.dirname(fp)
+#             # series_name = nfc(os.path.basename(parent_dir))
+#             #
+#             # if junk_pattern.search(series_name):
+#             #     # 조부모 폴더 이름 확인
+#             #     grandparent_dir = os.path.dirname(parent_dir)
+#             #     grand_name = nfc(os.path.basename(grandparent_dir))
+#             #     grand_name_clean = grand_name.replace(" ", "").lower()
+#             #
+#             #     # 3. 🔴 [핵심 방어막] 조부모 폴더가 시스템 폴더인지 검사합니다.
+#             #     # 만약 시스템 폴더(예: '라프텔애니메이션')라면,
+#             #     # "아, 현재 폴더(SPYxFAMILY Season 3)가 진짜 작품 폴더였구나!" 하고 위로 올라가는 것을 포기합니다.
+#             #     is_system_folder = False
+#             #     for sys_folder in system_folders_clean:
+#             #         if sys_folder in grand_name_clean:  # 부분 일치 허용 (예: '라프텔 애니메이션' -> '라프텔' 매칭)
+#             #             is_system_folder = True
+#             #             break
+#             #
+#             #     # 조부모 폴더가 시스템 폴더가 아닐 때만, 조부모 폴더를 작품명으로 삼고 위로 올라갑니다.
+#             #     if not is_system_folder and len(grand_name_clean) > 1:
+#             #         series_name = grand_name
+#
+#             # 2. 작품 폴더명만 추출
+#             parent_dir = os.path.dirname(fp)
+#             series_name = nfc(os.path.basename(parent_dir))
+#
+#             # 🚀 [강력 방어막] 쓰레기 폴더나 1글자 폴더를 만나면 계속 상위 폴더를 탐색
+#             current_dir = parent_dir
+#             current_name = series_name
+#             while junk_pattern.search(current_name):
+#                 parent_of_current = os.path.dirname(current_dir)
+#                 if parent_of_current == current_dir or parent_of_current == base_path_root:
+#                     break
+#                 current_dir = parent_of_current
+#                 current_name = nfc(os.path.basename(current_dir))
+#
+#             grand_name_clean = current_name.replace(" ", "").lower()
+#             is_system_folder = False
+#             for sys_folder in system_folders_clean:
+#                 if sys_folder in grand_name_clean:
+#                     is_system_folder = True
+#                     break
+#
+#             if not is_system_folder and len(grand_name_clean) > 1:
+#                 series_name = current_name
+#
+#             # 3. 정제 수행
+#             ct, yr = clean_title_complex(series_name, full_path=None)
+#             if ct: found_cleaned_names.add(ct)
+#
+#             # 4. 시리즈 등록
+#             cursor.execute(
+#                 'INSERT OR IGNORE INTO series (path, category, name, cleanedName, yearVal, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+#                 (spath, cat_code, series_name, ct, yr))
+#
+#             series_status = "추가됨" if cursor.rowcount > 0 else "이미 존재"
+#             if cursor.rowcount > 0: inserted_series += 1
+#
+#             # 5. 에피소드 등록
+#             mid = hashlib.md5(fp.encode()).hexdigest()
+#             sn, en = (1, 1) if cat_code == 'movies' else extract_episode_numbers(fp)
+#
+#             # cursor.execute(
+#             #     'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl, season_number, episode_number, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+#             #     (mid, spath, os.path.basename(file_path_rel),
+#             #      f"/video_serve?type={url_prefix}&path={urllib.parse.quote(file_path_rel)}",
+#             #      f"/thumb_serve?type={url_prefix}&id={mid}&path={urllib.parse.quote(file_path_rel)}",
+#             #      sn, en))
+#             cursor.execute(
+#                 'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl, season_number, episode_number, updated_at, category) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)',
+#                 (mid, spath, os.path.basename(file_path_rel),
+#                  f"/video_serve?type={url_prefix}&path={urllib.parse.quote(file_path_rel)}",
+#                  f"/thumb_serve?type={url_prefix}&id={mid}&path={urllib.parse.quote(file_path_rel)}",
+#                  sn, en, cat_code))
+#             if cursor.rowcount > 0: inserted_episodes += 1
+#
+#             # 🔴 디버깅 로그: 상세 등록 정보 (DB 실행 직후 값 확인용)
+#             log("DEBUG_INSERT", f"--- DB 등록 디버그 ---")
+#             log("DEBUG_INSERT", f"파일명: {os.path.basename(file_path_rel)}")
+#             log("DEBUG_INSERT", f"시리즈 경로(spath): {spath}")
+#             log("DEBUG_INSERT", f"카테고리(cat_code): {cat_code}")
+#             log("DEBUG_INSERT", f"시리즈 이름(series_name): {series_name}")
+#             log("DEBUG_INSERT", f"시리즈 등록상태: {series_status}")
+#             log("DEBUG_INSERT", f"에피소드 정보: S{sn}E{en}")
+#             log("DEBUG_INSERT", f"정제된 이름(cleanedName): {ct}")
+#             log("DEBUG_INSERT", f"년도(year): {yr}")
+#             log("DEBUG_INSERT", f"주소 접두어(url_prefix): {url_prefix}")
+#             log("DEBUG_INSERT", f"----------------------")
+#
+#         conn.commit()
+#         log("MATCH_MISSING", f"최종 커밋 완료: 시리즈 {inserted_series}건, 에피소드 {inserted_episodes}건 신규 삽입/갱신")
+#         # 🔴 5. 매칭 트리거 및 최종 완료 로그
+#         if found_cleaned_names:
+#             for name in found_cleaned_names:
+#                 threading.Thread(target=fetch_metadata_targeted,
+#                                  kwargs={'target_name': name, 'target_category': cat_code},
+#                                  daemon=True).start()
+#             log("MATCH_MISSING", f"메타데이터 매칭 요청됨: {len(found_cleaned_names)}개 시리즈")
+#
+#         log("MATCH_MISSING", "🎉 핀셋 매칭 및 모든 작업이 성공적으로 완료되었습니다.")
+#         return len(found_cleaned_names)
+#
+#     except Exception as e:
+#         log("MATCH_MISSING", f"에러 발생: {str(e)}")
+#         return 0
+#     finally:
+#         cursor.close()
+#         conn.close()
+
 def run_match_missing_files(cat_code, path_input, missing_files):
     log("MATCH_MISSING", f"핀셋 매칭 시작: {len(missing_files)}개 파일")
-    # 1. URL용 prefix 매핑 (DB 카테고리와 URL prefix가 다른 경우 대응)
-    prefix_map = {v[1]: v[1] for k, v in PATH_MAP.items()}  # 기본 매핑
-    # 특수 케이스 강제 지정 (DB cat_code -> PATH_MAP prefix)
     url_prefix_map = {
         "animations_all": "anim_all",
         "koreantv": "ktv",
@@ -1696,8 +1949,8 @@ def run_match_missing_files(cat_code, path_input, missing_files):
         inserted_series = 0
         inserted_episodes = 0
 
-        # 🟢 [여기로 이동] 루프 바깥에서 한 번만 만들어둡니다.
-        junk_pattern = re.compile(r'(?i)(season|시즌|part|파트|vol|disc|disk|cd|1080p|2160p|4k|uhd|모바일|다운로드)')
+        junk_keywords = ['season', '시즌', 'part', '파트', 'vol', 'disc', 'disk', 'cd', '1080p', '2160p', '4k', 'uhd',
+                         '모바일', '다운로드']
         system_folders_clean = [nfc(f).replace(" ", "").lower() for f in [
             '영화', '외국tv', '국내tv', '일본애니메이션', '라프텔', '애니메이션', '방송중', '드라마', '예능', '교양', '다큐멘터리',
             '라프텔애니메이션', '시사', 'video', '중국드라마', '미국드라마', '일본드라마', '기타국가드라마', '제목', '최신', 'uhd'
@@ -1709,55 +1962,53 @@ def run_match_missing_files(cat_code, path_input, missing_files):
                 log("DEBUG_INSERT", f"파일 없음: {fp}")
                 continue
 
-            # 1. 파일 전체 경로 spath 생성
             spath = f"{cat_code}/{file_path_rel}".replace('\\', '/').replace('//', '/')
 
-            # 2. 작품 폴더명만 추출
-            # 🟢 [여기를 이렇게 교체해 주세요!]
             parent_dir = os.path.dirname(fp)
             series_name = nfc(os.path.basename(parent_dir))
 
-            if junk_pattern.search(series_name):
-                # 조부모 폴더 이름 확인
-                grandparent_dir = os.path.dirname(parent_dir)
-                grand_name = nfc(os.path.basename(grandparent_dir))
-                grand_name_clean = grand_name.replace(" ", "").lower()
+            # 1. 폴더명 '전체'가 정크 키워드/숫자로만 된 경우만 상위로 이동 (아파트 보호)
+            junk_folder_pattern = re.compile(
+                r'(?i)^(?:season|시즌|part|파트|vol|disc|disk|cd|1080p|2160p|4k|uhd|hdr|web|h265|x265|[0-9\s\-~_.()\[\]]*)+$'
+            )
 
-                # 3. 🔴 [핵심 방어막] 조부모 폴더가 시스템 폴더인지 검사합니다.
-                # 만약 시스템 폴더(예: '라프텔애니메이션')라면,
-                # "아, 현재 폴더(SPYxFAMILY Season 3)가 진짜 작품 폴더였구나!" 하고 위로 올라가는 것을 포기합니다.
-                is_system_folder = False
-                for sys_folder in system_folders_clean:
-                    if sys_folder in grand_name_clean:  # 부분 일치 허용 (예: '라프텔 애니메이션' -> '라프텔' 매칭)
-                        is_system_folder = True
-                        break
+            current_dir = parent_dir
+            current_name = series_name
 
-                # 조부모 폴더가 시스템 폴더가 아닐 때만, 조부모 폴더를 작품명으로 삼고 위로 올라갑니다.
-                if not is_system_folder and len(grand_name_clean) > 1:
-                    series_name = grand_name
+            while junk_folder_pattern.match(current_name):
+                parent_of_current = os.path.dirname(current_dir)
+                if parent_of_current == current_dir or parent_of_current == base_path_root:
+                    break
+                current_dir = parent_of_current
+                current_name = nfc(os.path.basename(current_dir))
+
+            # 2. 🟢 [핵심 수정] 시스템 폴더 체크 시 '완전 일치' 검사 및 괄호 제거
+            # '뱀파이어... 다큐멘터리'가 '다큐멘터리' 키워드에 걸려 건너뛰어지는 것을 방지합니다.
+            check_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', current_name)
+            grand_name_clean = check_name.replace(" ", "").lower()
+
+            is_system_folder = False
+            for sys_folder in system_folders_clean:
+                if sys_folder == grand_name_clean:  # 'in' 대신 '==' 사용
+                    is_system_folder = True
+                    break
+
+            if not is_system_folder and len(grand_name_clean) > 1:
+                series_name = current_name
 
             # 3. 정제 수행
             ct, yr = clean_title_complex(series_name, full_path=None)
             if ct: found_cleaned_names.add(ct)
 
-            # 4. 시리즈 등록
             cursor.execute(
                 'INSERT OR IGNORE INTO series (path, category, name, cleanedName, yearVal, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
                 (spath, cat_code, series_name, ct, yr))
-
             series_status = "추가됨" if cursor.rowcount > 0 else "이미 존재"
             if cursor.rowcount > 0: inserted_series += 1
 
-            # 5. 에피소드 등록
             mid = hashlib.md5(fp.encode()).hexdigest()
             sn, en = (1, 1) if cat_code == 'movies' else extract_episode_numbers(fp)
 
-            # cursor.execute(
-            #     'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl, season_number, episode_number, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
-            #     (mid, spath, os.path.basename(file_path_rel),
-            #      f"/video_serve?type={url_prefix}&path={urllib.parse.quote(file_path_rel)}",
-            #      f"/thumb_serve?type={url_prefix}&id={mid}&path={urllib.parse.quote(file_path_rel)}",
-            #      sn, en))
             cursor.execute(
                 'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl, season_number, episode_number, updated_at, category) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)',
                 (mid, spath, os.path.basename(file_path_rel),
@@ -1765,7 +2016,6 @@ def run_match_missing_files(cat_code, path_input, missing_files):
                  f"/thumb_serve?type={url_prefix}&id={mid}&path={urllib.parse.quote(file_path_rel)}",
                  sn, en, cat_code))
             if cursor.rowcount > 0: inserted_episodes += 1
-
             # 🔴 디버깅 로그: 상세 등록 정보 (DB 실행 직후 값 확인용)
             log("DEBUG_INSERT", f"--- DB 등록 디버그 ---")
             log("DEBUG_INSERT", f"파일명: {os.path.basename(file_path_rel)}")
@@ -1781,15 +2031,28 @@ def run_match_missing_files(cat_code, path_input, missing_files):
 
         conn.commit()
         log("MATCH_MISSING", f"최종 커밋 완료: 시리즈 {inserted_series}건, 에피소드 {inserted_episodes}건 신규 삽입/갱신")
-        # 🔴 5. 매칭 트리거 및 최종 완료 로그
-        if found_cleaned_names:
-            for name in found_cleaned_names:
-                threading.Thread(target=fetch_metadata_targeted,
-                                 kwargs={'target_name': name, 'target_category': cat_code},
-                                 daemon=True).start()
-            log("MATCH_MISSING", f"메타데이터 매칭 요청됨: {len(found_cleaned_names)}개 시리즈")
 
-        log("MATCH_MISSING", "🎉 핀셋 매칭 및 모든 작업이 성공적으로 완료되었습니다.")
+        # if found_cleaned_names:
+        #     for name in found_cleaned_names:
+        #         threading.Thread(target=fetch_metadata_targeted,
+        #                          kwargs={'target_name': name, 'target_category': cat_code},
+        #                          daemon=True).start()
+        #     log("MATCH_MISSING", f"메타데이터 매칭 요청됨: {len(found_cleaned_names)}개 시리즈")
+        #
+        # log("MATCH_MISSING", "🎉 핀셋 매칭 및 모든 작업이 성공적으로 완료되었습니다.")
+        # 🟢 [수정] 스레드를 직접 만들지 않고 큐에 넣기만 함
+        if found_cleaned_names:
+            global WORKER_RUNNING
+            for name in found_cleaned_names:
+                MATCH_QUEUE.put((name, cat_code))
+
+            with WORKER_LOCK:
+                if not WORKER_RUNNING:
+                    WORKER_RUNNING = True
+                    log("MATCH_MISSING", "워커 스레드를 시작합니다.")
+                    threading.Thread(target=metadata_worker, daemon=True).start()
+
+            log("MATCH_MISSING", f"메타데이터 매칭 요청됨: {len(found_cleaned_names)}개 시리즈를 큐에 등록")
         return len(found_cleaned_names)
 
     except Exception as e:
@@ -1798,6 +2061,39 @@ def run_match_missing_files(cat_code, path_input, missing_files):
     finally:
         cursor.close()
         conn.close()
+
+import queue
+# 큐와 워커 실행 여부를 추적할 변수
+MATCH_QUEUE = queue.Queue()
+WORKER_RUNNING = False
+WORKER_LOCK = threading.Lock()
+
+
+def metadata_worker():
+    global WORKER_RUNNING
+    while True:
+        try:
+            # 큐에서 작업을 꺼냄 (대기시간 1초)
+            task = MATCH_QUEUE.get(timeout=1)
+            if task is None: break
+
+            target_name, cat_code = task
+            log("METADATA_WORKER", f"매칭 시작: {target_name}")
+
+            # API 호출 (fetch_metadata_targeted 함수 호출)
+            fetch_metadata_targeted(target_name=target_name, target_category=cat_code)
+
+            # 🔴 [핵심] TMDB 블락 방지를 위한 API 호출 간격 확보 (0.7초)
+            time.sleep(0.7)
+            MATCH_QUEUE.task_done()
+        except queue.Empty:
+            # 큐가 비어있으면 워커 종료
+            with WORKER_LOCK:
+                WORKER_RUNNING = False
+            log("METADATA_WORKER", "큐가 비어 워커를 종료합니다.")
+            break
+        except Exception as e:
+            log("METADATA_WORKER_ERROR", str(e))
 
 @app.route('/api/admin/match_missing_files', methods=['POST'])
 def match_missing_files():
@@ -3275,7 +3571,7 @@ def get_sections_for_category(cat, kw=None):
         # 노출된 작품 기록
         for item in selected_recent: seen_items_ids.add(item['path'])
 
-        recent_titles = ["🔥 방금 올라온 따끈한 신작", "오늘의 핫 트렌드", "가장 최근에 업데이트된 작품", "지금 가장 뜨거운 신작"]
+        recent_titles = ["방금 올라온 따끈한 신작", "오늘의 핫 트렌드", "가장 최근에 업데이트된 작품", "지금 가장 뜨거운 신작"]
         sections.append({
             "title": random.choice(recent_titles),
             "items": selected_recent
@@ -9471,145 +9767,6 @@ def force_refresh_cache():
     threading.Thread(target=build_all_caches, daemon=True).start()
     return jsonify({"status": "success", "message": "Cache rebuilding started"})
 
-# @app.route('/api/admin/db_pro_data')
-# def api_db_pro_data():
-#     table = request.args.get('table', 'series')
-#     kw = request.args.get('q', '').strip()
-#     if kw:
-#         kw = urllib.parse.unquote(kw)  # URL 인코딩을 한글로 복원
-#     # 🔴 디버깅용: 서버 로그에 확인
-#     log("DEBUG_QUERY", f"입력받은 키워드(kw): {kw}")
-#     cat_filter = request.args.get('cat', '전체')
-#     # 데이터를 한 번에 최대 200개로 제한하여 브라우저 메모리 폭주 방지
-#     limit = min(int(request.args.get('limit', 50)), 200)
-#     offset = int(request.args.get('offset', 0))
-#     sort = request.args.get('sort', '')
-#     direction = request.args.get('dir', 'ASC')
-#
-#     if table not in ['series', 'episodes', 'playback_progress', 'tmdb_cache']:
-#         return jsonify({"error": "Invalid table"}), 400
-#
-#     conn = get_db()
-#     # conn = get_db_readonly()
-#     where_clauses = []
-#     params = []
-#
-#     # 🔴 핵심 수정: 쿼리 파라미터로 들어가기 전에 NFC 정규화 강제 수행
-#     # if kw:
-#     #     # 검색어를 NFC 표준으로 통일
-#     #     kw_nfc = nfc(kw)
-#     #     if table == 'series':
-#     #         where_clauses.append("(name LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ?)")
-#     #         # 🔴 파라미터에 정규화된 kw_nfc를 넣습니다
-#     #         params.extend([f'%{kw_nfc}%', f'%{kw_nfc}%', f'%{kw_nfc}%'])
-#     #     elif table == 'episodes':
-#     #         where_clauses.append("(title LIKE ? OR series_path LIKE ?)")
-#     #         params.extend([f'%{kw_nfc}%', f'%{kw_nfc}%'])
-#     if kw:
-#         kw_nfc = nfc(kw)
-#         # 🔴 수정: 앞에만 %를 붙이면 인덱스를 탑니다.
-#         # 사용자가 검색창에 '하이큐'라고 치면 '하이큐%'가 되어 인덱스 활용!
-#         if table == 'series':
-#             where_clauses.append("(name LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ?)")
-#             params.extend([f'{kw_nfc}%', f'{kw_nfc}%', f'{kw_nfc}%'])
-#         elif table == 'episodes':
-#             where_clauses.append("(title LIKE ? OR series_path LIKE ?)")
-#             params.extend([f'{kw_nfc}%', f'{kw_nfc}%'])
-#     # 카테고리 필터
-#     # if cat_filter != '전체':
-#     #     if table == 'series':
-#     #         where_clauses.append("category = ?")
-#     #         params.append(cat_filter)
-#     #     elif table == 'episodes':
-#     #         where_clauses.append("series_path LIKE ?")
-#     #         params.append(f"{cat_filter}/%")
-#
-#     # 카테고리 필터
-#     if cat_filter != '전체':
-#         if table == 'series':
-#             where_clauses.append("category = ?")
-#             params.append(cat_filter)
-#         elif table == 'episodes':
-#             # 🔴 수정: 이미 kw 검색에서 에피소드 테이블은 title/series_path 검색을 하고 있으므로,
-#             # 여기서는 카테고리 필터만 추가하는 것이 맞습니다.
-#             where_clauses.append("series_path LIKE ?")
-#             params.append(f"{cat_filter}/%")
-#
-#     where_stmt = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
-#
-#     try:
-#         # 전체 개수 확인 (필터링된 조건 내에서만 카운트)
-#         total_count = conn.execute(f"SELECT COUNT(*) FROM {table} {where_stmt}", params).fetchone()[0]
-#
-#         # 정렬 설정
-#         # order_by = f" ORDER BY {sort} {direction}" if sort else ""
-#         # 🔴 정렬 설정: sort 파라미터가 없으면 updated_at DESC로 기본 정렬
-#         if not sort:
-#             if 'updated_at' in [d[0] for d in conn.execute(f"PRAGMA table_info({table})").fetchall()]:
-#                 # 핵심: 시간도 DESC, 물리적 생성순서(rowid)도 DESC로 잡아줘야 최신순이 위로 옵니다.
-#                 order_by = " ORDER BY updated_at DESC, rowid DESC"
-#             else:
-#                 order_by = " ORDER BY rowid DESC"
-#         else:
-#             order_by = f" ORDER BY {sort} {direction}"
-#
-#         # 쿼리 실행 (LIMIT과 OFFSET 적용)
-#         # query = f"SELECT * FROM {table} {where_stmt} {order_by} LIMIT ? OFFSET ?"
-#         # 🔴 수정: 컬럼을 직접 지정하여 불러올 양을 최소화
-#         # target_columns = "path, name, cleanedName, tmdbTitle, rating, posterPath, category, updated_at" if table == 'series' else "*"
-#         # query = f"SELECT {target_columns} FROM {table} {where_stmt} {order_by} LIMIT ? OFFSET ?"
-#         # cursor = conn.execute(query, params + [limit, offset])
-#
-#         # 🔴 수정: 테이블에 따라 target_columns를 확실하게 지정
-#         if table == 'series':
-#             target_columns = "path, name, cleanedName, tmdbTitle, rating, posterPath, category, updated_at"
-#         else:
-#             target_columns = "*"
-#
-#         query = f"SELECT {target_columns} FROM {table} {where_stmt} {order_by} LIMIT ? OFFSET ?"
-#         cursor = conn.execute(query, params + [limit, offset])
-#
-#         # query = f"SELECT * FROM {table} {where_stmt} {order_by} LIMIT ? OFFSET ?"
-#         # cursor = conn.execute(query, params + [limit, offset])
-#
-#         # 🔴 [수정] 컬럼 순서를 posterPath가 맨 앞에 오도록 강제 정렬
-#         raw_columns = [d[0] for d in cursor.description]
-#         # 현재 테이블에 있는 컬럼들만 추려서 순서를 만듭니다.
-#         # priority = ['posterPath', 'cleanedName', 'tmdbTitle', 'name', 'category']
-#
-#         # 🔴 컬럼 순서 우선순위 정의 (series와 episodes 모두 대응)
-#         # 테이블 종류에 따라 우선순위를 다르게 적용합니다.
-#         if table == 'series':
-#             priority = ['posterPath', 'cleanedName', 'tmdbTitle', 'name', 'category', 'updated_at']
-#         elif table == 'episodes':
-#             priority = ['thumbnailUrl', 'season_number', 'episode_number', 'title', 'series_path', 'updated_at']
-#         else:
-#             priority = []
-#         columns = []
-#
-#         # 우선순위 컬럼을 먼저 넣음
-#         for p in priority:
-#             if p in raw_columns:
-#                 columns.append(p)
-#
-#         # 나머지 컬럼들 추가
-#         for c in raw_columns:
-#             if c not in columns:
-#                 columns.append(c)
-#
-#         data = [dict(row) for row in cursor.fetchall()]
-#         return jsonify({
-#             "columns": columns,
-#             "data": data,
-#             "total": total_count,
-#             "offset": offset,
-#             "limit": limit
-#         })
-#     except Exception as e:
-#         return jsonify({"error": str(e)})
-#     finally:
-#         conn.close() # 🔴 모든 경우(성공/실패)에 대해 연결을 안전하게 종료
-
 @app.route('/api/admin/db_pro_data')
 def api_db_pro_data():
     table = request.args.get('table', 'series')
@@ -9624,6 +9781,7 @@ def api_db_pro_data():
     start_date = request.args.get('startDate')
     end_date = request.args.get('endDate')
 
+    quick_filter = request.args.get('quick_filter', '')
     # 데이터를 한 번에 최대 200개로 제한하여 브라우저 메모리 폭주 방지
     limit = min(int(request.args.get('limit', 50)), 200)
     offset = int(request.args.get('offset', 0))
@@ -9637,14 +9795,6 @@ def api_db_pro_data():
     where_clauses = []
     params = []
 
-    # if kw:
-    #     kw_nfc = nfc(kw)
-    #     if table == 'series':
-    #         where_clauses.append("(name LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ?)")
-    #         params.extend([f'{kw_nfc}%', f'{kw_nfc}%', f'{kw_nfc}%'])
-    #     elif table == 'episodes':
-    #         where_clauses.append("(title LIKE ? OR series_path LIKE ?)")
-    #         params.extend([f'{kw_nfc}%', f'{kw_nfc}%'])
     if kw:
         kw_nfc = nfc(kw)
         if table == 'series':
@@ -9673,6 +9823,28 @@ def api_db_pro_data():
     if end_date:
         where_clauses.append("updated_at <= ?")
         params.append(f"{end_date} 23:59:59")
+
+    # 🚀 [수정] 1시간/오늘 필터 로직: 에러 수정
+    if quick_filter in ['1h', 'today']:
+        hours = 1 if quick_filter == '1h' else 24
+
+        # 🔴 datetime 모듈을 직접 사용하도록 수정
+        # from datetime import datetime, timedelta가 임포트되어 있다면 아래와 같이 작성합니다.
+        # 만약 import datetime만 되어 있다면 datetime.datetime.now() 등으로 사용해야 합니다.
+
+        # 현재 코드의 import 구문을 확인해보니 'from datetime import datetime'이 있다면 아래가 맞습니다.
+        threshold_time = (datetime.utcnow() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+
+        where_clauses.append("updated_at >= ?")
+        params.append(threshold_time)
+
+        log("DEBUG_FILTER", f"필터({quick_filter}) 적용: updated_at >= {threshold_time}")
+    elif quick_filter == 'today':
+        where_clauses.append("updated_at >= datetime('now', '-24 hour', 'localtime')")
+    elif quick_filter == 'failed':
+        # 시리즈 테이블일 때만 매칭 실패 필터 적용 (에피소드 테이블에는 failed 컬럼이 없음)
+        if table == 'series':
+            where_clauses.append("(failed = 1 OR tmdbId IS NULL)")
 
     where_stmt = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
 

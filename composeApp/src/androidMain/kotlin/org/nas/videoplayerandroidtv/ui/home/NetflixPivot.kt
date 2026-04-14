@@ -159,7 +159,9 @@ fun NetflixPivotItem(
                             itemEpisodeCount = details.episodes.size
                             isDataLoaded = true
                         }
-                    } catch (_: Exception) { isDataLoaded = true }
+                    } catch (e: Exception) { 
+                        isDataLoaded = true
+                    }
                 } else {
                     isDataLoaded = true
                 }
@@ -216,7 +218,6 @@ fun NetflixPivotItem(
                     
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(20.dp)) {
                         if (isDataLoaded) {
-                            // 1. 장르 (최대 1개, 길면 줄임)
                             if (itemGenres.isNotEmpty()) {
                                 Text(
                                     text = itemGenres.first(), 
@@ -229,7 +230,6 @@ fun NetflixPivotItem(
                                 Text(text = " • ", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
                             }
                             
-                            // 2. 나머지 정보 (년도, 에피소드)
                             if (!itemYear.isNullOrBlank()) {
                                 Text(text = itemYear!!, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 Text(text = " • ", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
@@ -238,7 +238,6 @@ fun NetflixPivotItem(
                                 Text(text = "에피소드 ${itemEpisodeCount}개", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                             
-                            // 3. 등급 배지: 우측 끝으로 밀지 않고, 좌측부터 순서대로 배치
                             if (!itemRating.isNullOrBlank()) {
                                 Text(text = " • ", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp))
                                 NetflixRatingBadge(itemRating!!)
@@ -261,12 +260,20 @@ fun NetflixPivotItem(
 @Composable
 fun NetflixRatingBadge(rating: String) {
     val backgroundColor = when {
-        rating.contains("19") || rating.contains("청불") -> Color(0xFFE50914)
-        rating.contains("15") -> Color(0xFFF5A623)
-        rating.contains("12") -> Color(0xFFF8E71C)
-        rating.contains("전체") -> Color(0xFF46D369)
+        rating.contains("19") || rating.contains("청불") || rating.contains("MA") || rating.contains("R") -> Color(0xFFE50914)
+        rating.contains("15") || rating.contains("14") -> Color(0xFFF5A623)
+        rating.contains("12") || rating.contains("PG") -> Color(0xFFF8E71C)
+        rating.contains("전체") || rating.contains("All") || rating.contains("G") -> Color(0xFF46D369)
         else -> Color.Gray.copy(alpha = 0.5f)
     }
+
+    val displayText = when {
+        rating.contains("전체") -> "All"
+        rating.startsWith("TV-") -> rating.substringAfter("TV-")
+        rating.any { it.isDigit() } -> rating.filter { it.isDigit() }
+        else -> rating
+    }
+
     Surface(
         color = backgroundColor,
         shape = RoundedCornerShape(2.dp),
@@ -274,7 +281,7 @@ fun NetflixRatingBadge(rating: String) {
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(
-                text = rating.filter { it.isDigit() }.ifEmpty { if(rating.contains("전체")) "All" else rating.take(2) },
+                text = displayText,
                 color = if (backgroundColor == Color(0xFFF8E71C)) Color.Black else Color.White,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Black,
