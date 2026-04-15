@@ -69,7 +69,8 @@ fun VideoPreview(url: String, modifier: Modifier = Modifier) {
             .build().apply {
                 playWhenReady = true
                 volume = 1f // [수정] 0f(음소거) -> 1f(원래 볼륨)으로 변경하여 소리가 나게 함
-                repeatMode = Player.REPEAT_MODE_ALL
+                // [수정] 무한 반복(REPEAT_MODE_ALL) 대신 한 번만 재생(REPEAT_MODE_OFF) 하도록 설정
+                repeatMode = Player.REPEAT_MODE_OFF
                 addListener(object : Player.Listener {
                     override fun onRenderedFirstFrame() {
                         isVideoRendered = true
