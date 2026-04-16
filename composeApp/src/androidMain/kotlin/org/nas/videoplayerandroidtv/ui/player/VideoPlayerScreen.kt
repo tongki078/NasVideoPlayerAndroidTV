@@ -169,8 +169,9 @@ fun VideoPlayerScreen(
     }
 
     LaunchedEffect(currentSeekIndex) {
+        if (!isSeeking) return@LaunchedEffect
         if (allThumbnails.isNotEmpty()) {
-            val prefetchRange = -2..2
+            val prefetchRange = -3..3
             prefetchRange.forEach { offset ->
                 val targetIndex = (currentSeekIndex + offset).coerceIn(allThumbnails.indices)
                 val timestamp = allThumbnails[targetIndex]
