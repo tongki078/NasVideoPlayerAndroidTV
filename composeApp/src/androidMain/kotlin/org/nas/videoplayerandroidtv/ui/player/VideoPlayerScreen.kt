@@ -30,6 +30,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.input.key.*
@@ -45,6 +46,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
+import coil3.imageLoader
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import kotlinx.coroutines.delay
@@ -154,6 +156,34 @@ fun VideoPlayerScreen(
     val allThumbnails = remember(totalDuration) {
         if (totalDuration <= 0) emptyList()
         else (0L..totalDuration step 10000L).toList()
+    }
+    val context = LocalContext.current
+    // Coil ImageLoader 가져오기 (커스텀 설정 가능)
+    val imageLoader = remember { context.imageLoader }
+
+// 🔴 [수정] 썸네일 리스트가 비어있을 경우를 대비해 안전하게 인덱스를 계산합니다.
+    val currentSeekIndex = if (allThumbnails.isNotEmpty()) {
+        (seekTime / 10000L).toInt().coerceIn(allThumbnails.indices)
+    } else {
+        0
+    }
+
+    LaunchedEffect(currentSeekIndex) {
+        if (allThumbnails.isNotEmpty()) {
+            val prefetchRange = -2..2
+            prefetchRange.forEach { offset ->
+                val targetIndex = (currentSeekIndex + offset).coerceIn(allThumbnails.indices)
+                val timestamp = allThumbnails[targetIndex]
+                val url = "${movie.videoUrl?.replace("video_serve", "thumb_serve")}&id=${movie.id}&t=${timestamp/1000}"
+
+                val request = ImageRequest.Builder(context)
+                    .data(url)
+                    .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
+                    .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
+                    .build()
+                imageLoader.enqueue(request)
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -413,7 +443,19 @@ fun VideoPlayerScreen(
                             LazyRow(state = thumbListState, contentPadding = PaddingValues(horizontal = horizontalPadding), horizontalArrangement = Arrangement.spacedBy(20.dp), userScrollEnabled = false, modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                                 itemsIndexed(allThumbnails) { _, timestamp ->
                                     Box(modifier = Modifier.width(280.dp).height(160.dp).clip(RoundedCornerShape(8.dp)).background(Color.DarkGray).border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))) {
-                                        AsyncImage(model = ImageRequest.Builder(LocalContext.current).data("${movie.videoUrl?.replace("video_serve", "thumb_serve")}&id=${movie.id}&t=${timestamp/1000}").crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                        //AsyncImage(model = ImageRequest.Builder(LocalContext.current).data("${movie.videoUrl?.replace("video_serve", "thumb_serve")}&id=${movie.id}&t=${timestamp/1000}").crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                        // VideoPlayerScreen.kt 내 LazyRow 부분
+                                        AsyncImage(
+                                            model = ImageRequest.Builder(LocalContext.current)
+                                                .data("${movie.videoUrl?.replace("video_serve", "thumb_serve")}&id=${movie.id}&t=${timestamp/1000}")
+                                                .crossfade(true)
+                                                .build(),
+                                            placeholder = ColorPainter(Color.DarkGray), // 로딩 전 짙은 회색 표시
+                                            contentDescription = null,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop
+                                        )
+
                                     }
                                 }
                             }

@@ -22,6 +22,7 @@ ksp = "1.9.24-1.0.20"
 okio = "3.9.1"
 androidx-tv-foundation = "1.0.0-alpha12"
 androidx-tv-material = "1.0.0"
+firebaseDatabaseKtx = "22.0.1"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -77,6 +78,7 @@ sqldelight-native = { module = "app.cash.sqldelight:native-driver", version = "2
 
 # Okio
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
+firebase-database-ktx = { group = "com.google.firebase", name = "firebase-database-ktx", version.ref = "firebaseDatabaseKtx" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
