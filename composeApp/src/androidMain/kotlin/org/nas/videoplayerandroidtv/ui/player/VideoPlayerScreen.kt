@@ -168,20 +168,35 @@ fun VideoPlayerScreen(
         0
     }
 
-    LaunchedEffect(currentSeekIndex) {
-        if (!isSeeking) return@LaunchedEffect
-        if (allThumbnails.isNotEmpty()) {
-            val prefetchRange = -3..3
-            prefetchRange.forEach { offset ->
-                val targetIndex = (currentSeekIndex + offset).coerceIn(allThumbnails.indices)
+    // 🔥 핵심: 이미 큐에 넣은 썸네일을 추적하여 중복 요청(DDoS)을 완벽 차단
+    val requestedThumbnails = remember(movie.id) { mutableSetOf<Int>() }
+
+    // 🔥 탐색(Seek) 중일 때는 리모컨 위치, 재생 중일 때는 시청 위치 기준
+    // 시청 중일 때도 뒤에서 알아서 미리(앞으로 100초) 생성해 둡니다.
+    val targetBaseIndex = if (isSeeking) currentSeekIndex else (currentPosition / 10000L).toInt()
+
+    LaunchedEffect(targetBaseIndex) {
+        if (allThumbnails.isEmpty()) return@LaunchedEffect
+
+        // 뒤로 2개, 앞으로 10개 (총 12개, 약 100초 분량) 백그라운드 생성
+        val prefetchRange = -2..10
+
+        prefetchRange.forEach { offset ->
+            val targetIndex = (targetBaseIndex + offset).coerceIn(allThumbnails.indices)
+
+            // 아직 서버에 한 번도 안 보낸 인덱스만 골라서 1회만 요청
+            if (requestedThumbnails.add(targetIndex)) {
                 val timestamp = allThumbnails[targetIndex]
-                val url = "${movie.videoUrl?.replace("video_serve", "thumb_serve")}&id=${movie.id}&t=${timestamp/1000}"
+                val url = "${movie.videoUrl?.replace("video_serve", "thumb_serve")}&id=${movie.id}&t=${timestamp/1000}&w=320"
 
                 val request = ImageRequest.Builder(context)
                     .data(url)
                     .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
                     .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
                     .build()
+
+                // 리모컨 연타로 targetBaseIndex가 바뀌어 LaunchedEffect가 취소되더라도,
+                // enqueue를 쓰면 중간에 끊기지 않고 서버에서 끝까지 만들어 캐시에 저장합니다.
                 imageLoader.enqueue(request)
             }
         }
@@ -221,7 +236,8 @@ fun VideoPlayerScreen(
     LaunchedEffect(seekTime, isSeeking) {
         if (isSeeking && allThumbnails.isNotEmpty()) {
             val targetIndex = (seekTime / 10000L).toInt().coerceIn(allThumbnails.indices)
-            thumbListState.animateScrollToItem(targetIndex, 0)
+            // 즉각적인 리모컨 반응을 위해 애니메이션 제거
+            thumbListState.scrollToItem(targetIndex, 0)
         }
     }
 

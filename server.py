@@ -2074,7 +2074,7 @@ def metadata_worker():
     while True:
         try:
             # 큐에서 작업을 꺼냄 (대기시간 1초)
-            task = MATCH_QUEUE.get(timeout=1)
+            task = MATCH_QUEUE.get(timeout=2)
             if task is None: break
 
             target_name, cat_code = task
@@ -3554,27 +3554,51 @@ def get_sections_for_category(cat, kw=None):
     # 🌟 다이내믹 큐레이션 알고리즘 (중복 제거 & 감성 테마 강화)
     # =========================================================================
 
+    # def get_recent_score(item):
+    #     year_str = item.get('year') or '0'
+    #     nums = re.findall(r'\d+', str(year_str))
+    #     return int(nums[0]) if nums else 0
+
     def get_recent_score(item):
-        year_str = item.get('year') or '0'
-        nums = re.findall(r'\d+', str(year_str))
-        return int(nums[0]) if nums else 0
+        # 🔴 [핵심] 기존 로직(updated_at 우선)을 유지하면서,
+        # 비교 시에는 무조건 정수(숫자)로 반환되게 함
+        updated_at = item.get('updated_at') or '1900-01-01 00:00:00'
+        # 하이픈, 콜론, 공백을 제거하여 순수한 숫자로만 만듭니다 (예: 20260417032412)
+        return int(re.sub(r'[^0-9]', '', updated_at))
+
 
     # 🚀 [추가 1] 화면에 이미 노출된 작품들을 추적하여 중복 추천을 막습니다.
     seen_items_ids = set()
 
     # [테마 1] 따끈따끈한 신작 (가장 최근 연도 + 무작위 섞기)
+    # if len(target_list) > 10:
+    #     sorted_by_recent = sorted(target_list, key=get_recent_score, reverse=True)
+    #     top_recent = sorted_by_recent[:max(30, len(target_list) // 3)]
+    #
+    #     selected_recent = random.sample(top_recent, min(20, len(top_recent)))
+    #     # 노출된 작품 기록
+    #     for item in selected_recent: seen_items_ids.add(item['path'])
+    #
+    #     recent_titles = ["방금 올라온 따끈한 신작", "오늘의 핫 트렌드", "가장 최근에 업데이트된 작품", "지금 가장 뜨거운 신작"]
+    #     sections.append({
+    #         "title": random.choice(recent_titles),
+    #         "items": selected_recent
+    #     })
+
+    # [테마 1] 따끈따끈한 신작
     if len(target_list) > 10:
         sorted_by_recent = sorted(target_list, key=get_recent_score, reverse=True)
-        top_recent = sorted_by_recent[:max(30, len(target_list) // 3)]
+        # 🔴 [수정] 무작위 추출(random.sample)을 제거하고,
+        # 정렬된 최신순 데이터를 그대로 사용합니다.
+        top_recent = sorted_by_recent[:20]
 
-        selected_recent = random.sample(top_recent, min(20, len(top_recent)))
         # 노출된 작품 기록
-        for item in selected_recent: seen_items_ids.add(item['path'])
+        for item in top_recent: seen_items_ids.add(item['path'])
 
         recent_titles = ["방금 올라온 따끈한 신작", "오늘의 핫 트렌드", "가장 최근에 업데이트된 작품", "지금 가장 뜨거운 신작"]
         sections.append({
             "title": random.choice(recent_titles),
-            "items": selected_recent
+            "items": top_recent
         })
 
     # =========================================================================
@@ -5057,44 +5081,96 @@ def get_diagnostics():
         "limit": limit
     })
 
+# def _generate_thumb_file(path_raw, prefix, tid, t, w):
+#     # 기존: target_w = "1280"
+#     # 수정: 480 정도로 낮추어 로딩 속도 최적화
+#     target_w = "480"
+#     tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{target_w}.jpg")
+#     if os.path.exists(tp) and os.path.getsize(tp) > 0: return tp
+#
+#     try:
+#         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
+#         # 🔴 경로 디코딩 로그 추가
+#         decoded_path = urllib.parse.unquote_plus(path_raw)
+#         vp = get_real_path(os.path.join(base, nfc(decoded_path)))
+#
+#         if not os.path.exists(vp):
+#             log("THUMB_DIAG", f"❌ 파일을 찾을 수 없음: {vp}")
+#             return None
+#
+#         with THUMB_SEMAPHORE:
+#             if os.path.exists(tp): return tp
+#             log("THUMB_DIAG", f"📸 썸네일 생성 중: {os.path.basename(vp)} ({t}초 지점)")
+#
+#             # 2. 압축 옵션 개선: -q:v 5 (중간) -> 8 (더 높은 압축률)
+#             # JPEG 품질 수치는 높을수록 용량이 커집니다. 8~10 정도로 설정하는 것이 좋습니다.
+#             subprocess.run([
+#                 FFMPEG_PATH, "-y",
+#                 "-ss", str(t),
+#                 "-i", vp,
+#                 "-frames:v", "1",
+#                 "-q:v", "15",
+#                 "-vf", f"scale={target_w}:-1",
+#                 tp
+#             ], timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+#
+#         return tp if os.path.exists(tp) else None
+#     except Exception as e:
+#         log("THUMB_DIAG", f"⚠️ 에러 발생: {str(e)}")
+#         return None
+
 def _generate_thumb_file(path_raw, prefix, tid, t, w):
-    # 기존: target_w = "1280"
-    # 수정: 480 정도로 낮추어 로딩 속도 최적화
-    target_w = "480"
-    tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{target_w}.jpg")
-    if os.path.exists(tp) and os.path.getsize(tp) > 0: return tp
+    target_w = "320"
+    # 파일명이 확실하게 고정되는지 확인 (t값을 문자열로 강제 변환)
+    tp = os.path.join(DATA_DIR, f"seek_{tid}_{str(t)}_{target_w}.jpg")
+
+    # 1. 1차 안전 검사 (파일 존재 AND 사이즈 확인)
+    if os.path.exists(tp) and os.path.getsize(tp) > 0:
+        return tp
 
     try:
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
-        # 🔴 경로 디코딩 로그 추가
         decoded_path = urllib.parse.unquote_plus(path_raw)
         vp = get_real_path(os.path.join(base, nfc(decoded_path)))
 
         if not os.path.exists(vp):
-            log("THUMB_DIAG", f"❌ 파일을 찾을 수 없음: {vp}")
+            log("THUMB_ERROR", f"원본 파일 없음: {vp}")
             return None
 
+        # 2. 확실한 세마포어 점유
         with THUMB_SEMAPHORE:
-            if os.path.exists(tp): return tp
-            log("THUMB_DIAG", f"📸 썸네일 생성 중: {os.path.basename(vp)} ({t}초 지점)")
+            # 3. 진입 후 재검사 (다른 작업이 방금 끝냈을 수 있음)
+            if os.path.exists(tp) and os.path.getsize(tp) > 0:
+                return tp
 
-            # 2. 압축 옵션 개선: -q:v 5 (중간) -> 8 (더 높은 압축률)
-            # JPEG 품질 수치는 높을수록 용량이 커집니다. 8~10 정도로 설정하는 것이 좋습니다.
-            subprocess.run([
+            log("THUMB_SYNC", f"📸 썸네일 생성 시작: {os.path.basename(vp)} ({t}초)")
+
+            # 4. 강제 타임아웃 10초 설정 및 표준 에러 수집
+            result = subprocess.run([
                 FFMPEG_PATH, "-y",
                 "-ss", str(t),
                 "-i", vp,
                 "-frames:v", "1",
-                "-q:v", "8",
+                "-q:v", "15",
                 "-vf", f"scale={target_w}:-1",
                 tp
-            ], timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ], timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
-        return tp if os.path.exists(tp) else None
-    except Exception as e:
-        log("THUMB_DIAG", f"⚠️ 에러 발생: {str(e)}")
+            if result.returncode != 0:
+                log("THUMB_ERROR", f"FFmpeg 실패: {result.stderr.decode()}")
+                return None
+
+        # 5. 최종 확인
+        if os.path.exists(tp) and os.path.getsize(tp) > 0:
+            return tp
         return None
 
+    except subprocess.TimeoutExpired:
+        log("THUMB_ERROR", f"생성 시간 초과(10초): {t}초")
+        return None
+    except Exception as e:
+        log("THUMB_ERROR", f"생성 중 예외 발생: {str(e)}")
+        return None
 
 @app.route('/thumb_serve')
 def thumb_serve():
@@ -5166,30 +5242,70 @@ def get_video_duration(path):
         return 0
 
 
+# @app.route('/storyboard')
+# def gen_seek_thumbnails():
+#     path_raw = request.args.get('path')
+#     prefix = request.args.get('type')
+#     try:
+#         # 1. 경로 복원 및 검증
+#         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
+#         decoded_path = urllib.parse.unquote_plus(path_raw)
+#         vp = get_real_path(os.path.join(base, nfc(decoded_path)))
+#
+#         if not os.path.exists(vp):
+#             return "Not Found", 404
+#
+#         # 2. 영상 길이 확인
+#         duration = get_video_duration(vp)
+#
+#         if duration == 0:
+#             return "Duration Error", 500
+#
+#         # 3. 캐시 확인
+#         file_hash = hashlib.md5(vp.encode()).hexdigest()
+#         sb_path = os.path.join(DATA_DIR, f"sb_{file_hash}.jpg")
+#
+#         if os.path.exists(sb_path) and os.path.getsize(sb_path) > 0:
+#             return send_file(sb_path, mimetype='image/jpeg')
+#
+#         # 4. 스토리보드 생성 시도
+#         with STORYBOARD_SEMAPHORE:
+#             cmd = [
+#                 FFMPEG_PATH, "-y",
+#                 "-i", vp,
+#                 "-vf", f"fps=101/{duration},scale=160:90,tile=10x10",
+#                 "-frames:v", "1", "-an", "-sn", "-dn", "-q:v", "5",
+#                 sb_path
+#             ]
+#             proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+#
+#             if os.path.exists(sb_path):
+#                 resp = make_response(send_file(sb_path, mimetype='image/jpeg'))
+#                 resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+#                 return resp
+#             else:
+#                 return "Generation Failed", 500
+#
+#     except Exception as e:
+#         return "Internal Server Error", 500
+
 @app.route('/storyboard')
 def gen_seek_thumbnails():
     path_raw = request.args.get('path')
     prefix = request.args.get('type')
-    log("DIAG", "=== 스토리보드 생성 진단 시작 ===")
-    log("DIAG", f"1. 앱에서 전달된 경로: {path_raw}")
-
     try:
         # 1. 경로 복원 및 검증
         base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
         decoded_path = urllib.parse.unquote_plus(path_raw)
         vp = get_real_path(os.path.join(base, nfc(decoded_path)))
-        log("DIAG", f"2. 서버에서 찾은 실제 경로: {vp}")
 
         if not os.path.exists(vp):
-            log("DIAG", "❌ 에러: 파일을 찾을 수 없습니다. 경로를 다시 확인하세요.")
             return "Not Found", 404
 
         # 2. 영상 길이 확인
         duration = get_video_duration(vp)
-        log("DIAG", f"3. 영상 재생 시간: {duration}초")
 
         if duration == 0:
-            log("DIAG", "❌ 에러: ffprobe가 영상 길이를 읽지 못했습니다.")
             return "Duration Error", 500
 
         # 3. 캐시 확인
@@ -5197,36 +5313,38 @@ def gen_seek_thumbnails():
         sb_path = os.path.join(DATA_DIR, f"sb_{file_hash}.jpg")
 
         if os.path.exists(sb_path) and os.path.getsize(sb_path) > 0:
-            log("DIAG", "4. 기존 캐시 파일 발견. 즉시 반환합니다.")
             return send_file(sb_path, mimetype='image/jpeg')
 
         # 4. 스토리보드 생성 시도
         with STORYBOARD_SEMAPHORE:
-            log("DIAG", "5. FFmpeg 생성 명령을 실행합니다...")
             cmd = [
                 FFMPEG_PATH, "-y",
+                "-skip_frame", "nokey",  # 🔴 [핵심 최적화] P/B 프레임을 버리고 키프레임(I-frame)만 디코딩! CPU 연산량 90% 이상 감소
+                "-threads", "4",  # 멀티스레드 활용
                 "-i", vp,
                 "-vf", f"fps=101/{duration},scale=160:90,tile=10x10",
-                "-frames:v", "1", "-an", "-sn", "-dn", "-q:v", "5",
+                "-frames:v", "1",
+                "-an", "-sn", "-dn",  # 오디오, 자막 무시
+                "-preset", "ultrafast",
+                "-q:v", "5",
                 sb_path
             ]
-            log("DIAG", f"6. 실행 명령어: {' '.join(cmd)}")
 
-            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+            # stdout은 버리고 stderr만 캡처하여 메모리 오버헤드 방지
+            proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=120)
 
-            if os.path.exists(sb_path):
-                log("DIAG", f"✅ 생성 성공: {sb_path}")
+            # 🔴 [응답 코드 복구] 정상적으로 생성되었으면 반드시 이미지를 반환해야 함!
+            if proc.returncode == 0 and os.path.exists(sb_path):
                 resp = make_response(send_file(sb_path, mimetype='image/jpeg'))
                 resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
                 return resp
             else:
-                log("DIAG", f"❌ 생성 실패. FFmpeg 메시지: {proc.stderr}")
+                log("STORYBOARD_ERROR", f"생성 실패: {proc.stderr}")
                 return "Generation Failed", 500
 
     except Exception as e:
-        log("DIAG", f"❌ 서버 내부 예외 발생: {str(e)}")
+        log("STORYBOARD_ERROR", f"서버 에러: {str(e)}")
         return "Internal Server Error", 500
-
 
 @app.route('/api/status')
 def get_server_status():
@@ -6011,7 +6129,7 @@ def updater_ui():
             <!-- [추가] 상단 탭 메뉴 -->
             <div class="nav-tabs">
                 <a href="/updater" class="nav-tab active"><i class="fas fa-sync-alt"></i> 대시보드</a>
-                <a href="/admin/ghost" class="nav-tab"><i class="fas fa-ghost"></i> 유령 데이터 관리</a>
+                <a href="/admin/filter" class="nav-tab active"><i class="fas fa-folder-tree"></i> 경로 기반 정밀 관리</a>
                 <a href="/admin" class="nav-tab"><i class="fas fa-search"></i> 매칭 진단</a>
                 <a href="/admin/db_pro" class="nav-tab active" style="background: var(--accent); color: white;"><i class="fas fa-database"></i> DB Pro (데이터 관리)</a>
             </div>
@@ -7013,10 +7131,16 @@ def _rebuild_fast_memory_cache():
 
     for cat in CATS:
         if cat == 'movies':
-            query = "SELECT s.*, (SELECT COUNT(DISTINCT season_number) FROM episodes WHERE series_path = s.path) as actual_seasons FROM series s WHERE (s.category = 'movies' OR s.category = 'movie') ORDER BY s.yearVal DESC"
+            query = "SELECT s.*, (SELECT COUNT(DISTINCT season_number) FROM episodes WHERE series_path = s.path) as actual_seasons FROM series s WHERE (s.category = 'movies' OR s.category = 'movie') ORDER BY s.updated_at DESC, s.yearVal DESC"
             rows = conn.execute(query).fetchall()
         else:
-            query = "SELECT s.*, (SELECT COUNT(DISTINCT season_number) FROM episodes WHERE series_path = s.path) as actual_seasons FROM series s WHERE s.category = ? ORDER BY s.yearVal DESC"
+            # 🔴 [수정] s.yearVal DESC 대신 s.updated_at DESC (최근 데이터 갱신 순) 적용
+            query = """
+                    SELECT s.*, (SELECT COUNT(DISTINCT season_number) FROM episodes WHERE series_path = s.path) as actual_seasons
+                    FROM series s
+                    WHERE s.category = ?
+                    ORDER BY s.updated_at DESC, s.yearVal DESC
+                """
             rows = conn.execute(query, (cat,)).fetchall()
         items = []
         seen_keys = set()
@@ -7067,6 +7191,13 @@ def _rebuild_fast_memory_cache():
                 if r['genreNames']: item["genreNames"] = json.loads(r['genreNames'])
             except:
                 pass
+            # --- [필터링 로직 추가] ---
+            # 국내TV, 외국TV, 방송중 카테고리에서 특정 장르 제외
+            if cat in ["koreantv", "foreigntv", "air"]:
+                exclude_keywords = {"다큐멘터리", "교양", "다큐", "Documentary"}
+                if any(g in exclude_keywords for g in item["genreNames"]):
+                    continue # 제외 대상이면 리스트에 넣지 않고 건너뜀
+            # ------------------------
             items.append(item)
 
             parts = path.split('/')
@@ -7235,9 +7366,8 @@ def build_home_recommend():
             if picks: new_sections.append({"title": title, "items": picks})
 
         air_data = _FAST_CATEGORY_CACHE.get('air', {})
-        air = list(air_data.get("all", []))  # 바뀐 구조 대응
+        air = list(air_data.get("all", []))
         if air:
-            random.shuffle(air)
             new_sections.append({"title": "실시간 방영 중", "items": air[:15]})
 
         HOME_RECOMMEND = new_sections
@@ -7710,13 +7840,442 @@ def manual_match_simple():
     except Exception as e:
         emit_ui_log(f"에러 발생: {str(e)}", "error")
         return jsonify({"status": "error", "message": str(e)}), 500
+# V1
+# @app.route('/api/manual_match_v2')
+# def manual_match_v2():
+#     target_name = request.args.get('name')
+#     full_id = request.args.get('id')
+#     cat = request.args.get('cat')  # 🔴 전달받은 카테고리 값
+#     # 🔴 카테고리 매핑 (DB의 실제 path 키워드로 변환)
+#     cat_map = {
+#         "영화": "movies",
+#         "국내TV": "koreantv",
+#         "외국TV": "foreigntv",
+#         "애니메이션": "animations_all",
+#         "방송중": "air"
+#     }
+#
+#     db_cat = cat_map.get(cat, cat)
+#
+#     if not target_name or not full_id or ':' not in full_id:
+#         return jsonify({"status": "error", "message": "오류: 작품 키워드와 TMDB ID가 필요합니다."}), 400
+#
+#     emit_ui_log(f"수동 연결 v2 시작: '{target_name}' -> {full_id}", "info")
+#     query_condition = ""
+#     params = [f'%{target_name}%', f'%{target_name}%']
+#
+#     if cat and cat != '전체':
+#         query_condition = "AND path LIKE ?"
+#         params.append(f'{db_cat}%')
+#         emit_ui_log(f"🔍 카테고리 필터 적용: '{cat}' 폴더 대상", "info")
+#     else:
+#         emit_ui_log(f"🌐 카테고리 제한 없음 (전체)", "info")
+#
+#     try:
+#         m_type, t_id = full_id.split(':')
+#         headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
+#
+#         response = requests.get(
+#             f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=credits,content_ratings,release_dates,keywords",
+#             headers=headers, timeout=10)
+#         if response.status_code != 200:
+#             return jsonify({"status": "error", "message": f"TMDB 응답 오류: {response.status_code}"}), 500
+#
+#         d_resp = response.json()
+#
+#         if 'id' not in d_resp:
+#             return jsonify({"status": "error", "message": f"오류: TMDB ID {t_id}를 찾을 수 없습니다."}), 404
+#
+#
+#         # 🔴 수정 2: 등급 파싱 로직 추가 (TV/Movie 분기)
+#         rating = "등급없음"
+#         if m_type == 'tv' and 'content_ratings' in d_resp:
+#             res_r = d_resp['content_ratings'].get('results', [])
+#             kr_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'KR'), None)
+#             us_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'US'), None)
+#             final = kr_rating or us_rating or (res_r[0].get('rating') if res_r else None)
+#             if final: rating = f"{final}+" if str(final).isdigit() else final
+#         elif m_type == 'movie' and 'release_dates' in d_resp:
+#             res_r = d_resp['release_dates'].get('results', [])
+#             kr_data = next((r.get('release_dates', []) for r in res_r if r.get('iso_3166_1') == 'KR'), [])
+#             final = next((r.get('certification') for r in kr_data if r.get('certification')), None)
+#             if final: rating = final
+#
+#         tmdb_title = d_resp.get('title') or d_resp.get('name')
+#         ai_keywords = []
+#
+#         # 1. TMDB에서 제공하는 공식 키워드(tags) 수집
+#         tmdb_keywords = d_resp.get('keywords', {}).get('keywords', []) if m_type == 'movie' else d_resp.get('keywords',
+#                                                                                                             {}).get(
+#             'results', [])
+#
+#         for kw_obj in tmdb_keywords:
+#             kw_name = kw_obj.get('name', '').strip()
+#
+#             # 🚀 [핵심 방어막] 키워드에 한글(가~힣)이 단 한 글자라도 포함되어 있을 때만 인정!
+#             # (영어만 있는 'investigation' 같은 태그는 여기서 걸러져서 버려집니다)
+#             if any('가' <= c <= '힣' for c in kw_name):
+#                 ai_keywords.append(kw_name)
+#                 if len(ai_keywords) >= 3:  # 3개 찾으면 그만!
+#                     break
+#
+#         # 2. TMDB에서 건질 만한 한글 키워드가 2개 미만이라면?
+#         # -> 미련 없이 우리 자체 파이썬 형태소 분석기를 돌려서 한글 명사를 뽑아옵니다!
+#         if len(ai_keywords) < 2:
+#             overview_text = d_resp.get('overview', '')
+#             ai_keywords.extend(extract_keywords(overview_text, top_n=3))
+#
+#         # 3. 중복 제거 및 리스트화
+#         ai_keywords = list(set(ai_keywords))
+#
+#         # 🔴 metadata_json 생성 추가
+#         metadata_json = json.dumps({
+#             "tagline": d_resp.get("tagline"),
+#             "backdrop_path": d_resp.get("backdrop_path"),
+#             "homepage": d_resp.get("homepage"),
+#             "status": d_resp.get("status"),
+#             "vote_average": d_resp.get("vote_average"),
+#             "popularity": d_resp.get("popularity")
+#         }, ensure_ascii=False)
+#
+#         conn = get_db()
+#         cursor = conn.cursor()
+#
+#         # 1. 시리즈 정보 업데이트 (metadata_json 포함)
+#         up = (
+#             d_resp.get('poster_path'),
+#             (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0],
+#             d_resp.get('overview'),
+#             d_resp.get('number_of_seasons'),
+#             json.dumps([g['id'] for g in d_resp.get('genres', [])]),
+#             json.dumps([g['name'] for g in d_resp.get('genres', [])], ensure_ascii=False),
+#             next((c['name'] for c in d_resp.get('credits', {}).get('crew', []) if c.get('job') == 'Director'), ""),
+#             json.dumps([{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in
+#                         d_resp.get('credits', {}).get('cast', [])[:10]], ensure_ascii=False),
+#             full_id,
+#             tmdb_title,
+#             d_resp.get('runtime'),
+#             json.dumps(ai_keywords, ensure_ascii=False),
+#             metadata_json,
+#             rating,
+#             tmdb_title,  # cleanedName
+#             f'%{target_name}%', f'%{target_name}%'
+#         )
+#
+#         sql_query = f"""
+#             UPDATE series
+#             SET posterPath=?, year=?, overview=?, seasonCount=?,
+#                 genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
+#                 tmdbTitle=?, runtime=?, ai_tags=?, metadata_json=?, rating=?, cleanedName=?
+#             WHERE (name LIKE ? OR cleanedName LIKE ?) {query_condition}
+#         """
+#         debug_params = up + tuple(params[2:])
+#
+#         cursor.execute(sql_query, debug_params)
+#         series_updated = cursor.rowcount
+#
+#         # 2. 에피소드 정보 업데이트 (성능 최적화 및 파일명 파싱 기반 매칭)
+#         ep_updated = 0
+#         if m_type == 'tv':
+#             cursor.execute(f"""
+#                       SELECT id, title, series_path FROM episodes
+#                       WHERE series_path IN (
+#                           SELECT path FROM series
+#                           WHERE (name LIKE ? OR cleanedName LIKE ?) {query_condition}
+#                       )
+#                   """, tuple(params))
+#
+#             db_eps = cursor.fetchall()
+#
+#             # 2. 캐싱: 파일명 파싱 결과를 미리 다 뽑아두어 루프 속도를 높임
+#             # (시즌, 회차) -> DB의 ID
+#             db_ep_map = {}
+#             for ep in db_eps:
+#                 sn, en = extract_episode_numbers(f"{ep['series_path']}")
+#                 db_ep_map[(sn, en)] = ep['id']
+#             # 3. TMDB 데이터를 돌며 매칭되는 것이 있으면 업데이트
+#             s_count = d_resp.get('number_of_seasons', 1)
+#             for s_num in range(1, s_count + 1):
+#                 s_resp = requests.get(f"{TMDB_BASE_URL}/tv/{t_id}/season/{s_num}?language=ko-KR", headers=headers,
+#                                       timeout=10).json()
+#
+#                 for ep_data in s_resp.get('episodes', []):
+#                     tmdb_s = ep_data.get('season_number')
+#                     tmdb_e = ep_data.get('episode_number')
+#
+#                     target_ep_id = db_ep_map.get((tmdb_s, tmdb_e))
+#
+#                     if target_ep_id:
+#                         cursor.execute("""
+#                                UPDATE episodes SET
+#                                    overview = ?,
+#                                    air_date = ?,
+#                                    thumbnailUrl = ?,
+#                                    runtime = ?,
+#                                    season_number = ?,
+#                                    episode_number = ?
+#                                WHERE id = ?
+#                            """, (
+#                             ep_data.get('overview'),
+#                             ep_data.get('air_date'),
+#                             f"https://image.tmdb.org/t/p/w500{ep_data.get('still_path')}" if ep_data.get(
+#                                 'still_path') else None,
+#                             ep_data.get('runtime'),
+#                             tmdb_s,
+#                             tmdb_e,
+#                             target_ep_id
+#                         ))
+#                         emit_ui_log(f"📺 매칭 성공: {tmdb_s}시즌 {tmdb_e}화 -> {ep_data.get('name', '이름없음')}", "info")
+#
+#                         ep_updated += cursor.rowcount
+#         conn.commit()
+#         conn.close()
+#
+#         build_all_caches()
+#
+#         result_msg = f"성공! 시리즈 {series_updated}건, 에피소드 {ep_updated}건 갱신 완료."
+#         emit_ui_log(f"✅ {result_msg}", "success")
+#         response_data = {"status": "success", "message": result_msg}
+#         response = make_response(json.dumps(response_data, ensure_ascii=False))
+#         response.headers['Content-Type'] = 'application/json; charset=utf-8'
+#         return response
+#
+#     except Exception as e:
+#         if 'conn' in locals():
+#             conn.close()
+#         emit_ui_log(f"에러: {str(e)}", "error")
+#         return jsonify({"status": "error", "message": str(e)}), 500
 
+# V2
+# @app.route('/api/manual_match_v2')
+# def manual_match_v2():
+#     target_name = request.args.get('name')
+#     full_id = request.args.get('id')
+#     cat = request.args.get('cat')
+#
+#     cat_map = {
+#         "영화": "movies",
+#         "국내TV": "koreantv",
+#         "외국TV": "foreigntv",
+#         "애니메이션": "animations_all",
+#         "방송중": "air"
+#     }
+#
+#     db_cat = cat_map.get(cat, cat)
+#
+#     # (수정) HTML 방지: early return 시 jsonify 적용
+#     if not target_name or not full_id or ':' not in full_id:
+#         return jsonify({"status": "error", "message": "오류: 작품 키워드와 TMDB ID가 필요합니다."}), 400
+#
+#     emit_ui_log(f"수동 연결 v2 시작: '{target_name}' -> {full_id}", "info")
+#     query_condition = ""
+#     params = [f'%{target_name}%', f'%{target_name}%']
+#
+#     if cat and cat != '전체':
+#         query_condition = "AND path LIKE ?"
+#         params.append(f'{db_cat}%')
+#         emit_ui_log(f"🔍 카테고리 필터 적용: '{cat}' 폴더 대상", "info")
+#     else:
+#         emit_ui_log(f"🌐 카테고리 제한 없음 (전체)", "info")
+#
+#     try:
+#         m_type, t_id = full_id.split(':')
+#         headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
+#
+#         # ---------------------------------------------------------
+#         # --- [1단계] 네트워크 통신 (DB 연결 없음 - 락 발생 원천 차단) ---
+#         # ---------------------------------------------------------
+#         response = requests.get(
+#             f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=credits,content_ratings,release_dates,keywords",
+#             headers=headers, timeout=10)
+#         if response.status_code != 200:
+#             return jsonify({"status": "error", "message": f"TMDB 응답 오류: {response.status_code}"}), 500
+#
+#         d_resp = response.json()
+#
+#         # (수정) HTML 방지
+#         if 'id' not in d_resp:
+#             return jsonify({"status": "error", "message": f"오류: TMDB ID {t_id}를 찾을 수 없습니다."}), 404
+#
+#         # 🔴 [구조 변경 핵심]: DB를 열기 전에, 필요한 모든 시즌 데이터를 미리 다 다운받아 리스트에 담아둡니다.
+#         all_seasons_responses = []
+#         if m_type == 'tv':
+#             s_count = d_resp.get('number_of_seasons', 1)
+#             for s_num in range(1, s_count + 1):
+#                 # 기존에 루프 아래쪽에 있던 requests.get을 위로 끌어올렸습니다.
+#                 s_resp = requests.get(f"{TMDB_BASE_URL}/tv/{t_id}/season/{s_num}?language=ko-KR", headers=headers,
+#                                       timeout=10).json()
+#                 all_seasons_responses.append(s_resp)
+#
+#         # ---------------------------------------------------------
+#         # --- [2단계] 데이터 파싱 (기존 로직 100% 동일 유지) ---
+#         # ---------------------------------------------------------
+#         rating = "등급없음"
+#         if m_type == 'tv' and 'content_ratings' in d_resp:
+#             res_r = d_resp['content_ratings'].get('results', [])
+#             kr_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'KR'), None)
+#             us_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'US'), None)
+#             final = kr_rating or us_rating or (res_r[0].get('rating') if res_r else None)
+#             if final: rating = f"{final}+" if str(final).isdigit() else final
+#         elif m_type == 'movie' and 'release_dates' in d_resp:
+#             res_r = d_resp['release_dates'].get('results', [])
+#             kr_data = next((r.get('release_dates', []) for r in res_r if r.get('iso_3166_1') == 'KR'), [])
+#             final = next((r.get('certification') for r in kr_data if r.get('certification')), None)
+#             if final: rating = final
+#
+#         tmdb_title = d_resp.get('title') or d_resp.get('name')
+#         ai_keywords = []
+#
+#         tmdb_keywords = d_resp.get('keywords', {}).get('keywords', []) if m_type == 'movie' else d_resp.get('keywords',
+#                                                                                                             {}).get(
+#             'results', [])
+#         for kw_obj in tmdb_keywords:
+#             kw_name = kw_obj.get('name', '').strip()
+#             if any('가' <= c <= '힣' for c in kw_name):
+#                 ai_keywords.append(kw_name)
+#                 if len(ai_keywords) >= 3:
+#                     break
+#
+#         if len(ai_keywords) < 2:
+#             overview_text = d_resp.get('overview', '')
+#             ai_keywords.extend(extract_keywords(overview_text, top_n=3))
+#
+#         ai_keywords = list(set(ai_keywords))
+#
+#         metadata_json = json.dumps({
+#             "tagline": d_resp.get("tagline"),
+#             "backdrop_path": d_resp.get("backdrop_path"),
+#             "homepage": d_resp.get("homepage"),
+#             "status": d_resp.get("status"),
+#             "vote_average": d_resp.get("vote_average"),
+#             "popularity": d_resp.get("popularity")
+#         }, ensure_ascii=False)
+#
+#         # ---------------------------------------------------------
+#         # --- [3단계] DB 업데이트 (가장 짧게 유지되는 핵심 구간) ---
+#         # ---------------------------------------------------------
+#         conn = get_db()
+#         conn.execute("PRAGMA busy_timeout = 5000")  # Lock 대비
+#         cursor = conn.cursor()
+#
+#         # 1. 시리즈 업데이트 (기존과 동일)
+#         up = (
+#             d_resp.get('poster_path'),
+#             (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0],
+#             d_resp.get('overview'),
+#             d_resp.get('number_of_seasons'),
+#             json.dumps([g['id'] for g in d_resp.get('genres', [])]),
+#             json.dumps([g['name'] for g in d_resp.get('genres', [])], ensure_ascii=False),
+#             next((c['name'] for c in d_resp.get('credits', {}).get('crew', []) if c.get('job') == 'Director'), ""),
+#             json.dumps([{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in
+#                         d_resp.get('credits', {}).get('cast', [])[:10]], ensure_ascii=False),
+#             full_id,
+#             tmdb_title,
+#             d_resp.get('runtime'),
+#             json.dumps(ai_keywords, ensure_ascii=False),
+#             metadata_json,
+#             rating,
+#             tmdb_title,  # cleanedName
+#             f'%{target_name}%', f'%{target_name}%'
+#         )
+#
+#         sql_query = f"""
+#             UPDATE series
+#             SET posterPath=?, year=?, overview=?, seasonCount=?,
+#                 genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
+#                 tmdbTitle=?, runtime=?, ai_tags=?, metadata_json=?, rating=?, cleanedName=?
+#             WHERE (name LIKE ? OR cleanedName LIKE ?) {query_condition}
+#         """
+#         debug_params = up + tuple(params[2:])
+#         cursor.execute(sql_query, debug_params)
+#         series_updated = cursor.rowcount
+#
+#         # 2. 에피소드 업데이트
+#         ep_updated = 0
+#         if m_type == 'tv':
+#             cursor.execute(f"""
+#                       SELECT id, title, series_path FROM episodes
+#                       WHERE series_path IN (
+#                           SELECT path FROM series
+#                           WHERE (name LIKE ? OR cleanedName LIKE ?) {query_condition}
+#                       )
+#                   """, tuple(params))
+#
+#             db_eps = cursor.fetchall()
+#             db_ep_map = {}
+#             for ep in db_eps:
+#                 sn, en = extract_episode_numbers(f"{ep['series_path']}")
+#                 db_ep_map[(sn, en)] = ep['id']
+#
+#             # 🔴 [구조 변경 핵심]: 아까 1단계에서 다운받아둔 리스트를 돌립니다. 인터넷 대기가 없습니다.
+#             for s_resp in all_seasons_responses:
+#                 for ep_data in s_resp.get('episodes', []):
+#                     tmdb_s = ep_data.get('season_number')
+#                     tmdb_e = ep_data.get('episode_number')
+#
+#                     target_ep_id = db_ep_map.get((tmdb_s, tmdb_e))
+#
+#                     if target_ep_id:
+#                         cursor.execute("""
+#                                UPDATE episodes SET
+#                                    overview = ?,
+#                                    air_date = ?,
+#                                    thumbnailUrl = ?,
+#                                    runtime = ?,
+#                                    season_number = ?,
+#                                    episode_number = ?
+#                                WHERE id = ?
+#                            """, (
+#                             ep_data.get('overview'),
+#                             ep_data.get('air_date'),
+#                             f"https://image.tmdb.org/t/p/w500{ep_data.get('still_path')}" if ep_data.get(
+#                                 'still_path') else None,
+#                             ep_data.get('runtime'),
+#                             tmdb_s,
+#                             tmdb_e,
+#                             target_ep_id
+#                         ))
+#                         # 기존 로그 완벽 유지
+#                         emit_ui_log(f"📺 매칭 성공: {tmdb_s}시즌 {tmdb_e}화 -> {ep_data.get('name', '이름없음')}", "info")
+#                         ep_updated += cursor.rowcount
+#
+#         conn.commit()
+#         conn.close()  # 통신 대기가 없으므로 순식간에 닫힙니다.
+#
+#         # ---------------------------------------------------------
+#         # --- [4단계] 후처리 및 반환 (기존 형태 유지) ---
+#         # ---------------------------------------------------------
+#         # 1. DB 업데이트가 끝났으니 성공 로그를 '먼저' 출력합니다.
+#         result_msg = f"성공! 시리즈 {series_updated}건, 에피소드 {ep_updated}건 갱신 완료."
+#         emit_ui_log(f"✅ {result_msg} (캐시 반영 중...)", "success")
+#
+#         # 2. 그 다음 무거운 캐시 빌드를 돌립니다.
+#         build_all_caches()
+#
+#         # HTML 응답 이슈 방지를 위한 기존 JSON 반환 로직
+#         response_data = {"status": "success", "message": result_msg}
+#         response = make_response(json.dumps(response_data, ensure_ascii=False))
+#         response.headers['Content-Type'] = 'application/json; charset=utf-8'
+#         return response
+#
+#     except Exception as e:
+#         # (수정) 에러 발생 시 DB 누수 방지
+#         if 'conn' in locals():
+#             try:
+#                 conn.close()
+#             except:
+#                 pass
+#
+#         emit_ui_log(f"에러: {str(e)}", "error")
+#         return jsonify({"status": "error", "message": str(e)}), 500
+
+# V3
 @app.route('/api/manual_match_v2')
 def manual_match_v2():
     target_name = request.args.get('name')
     full_id = request.args.get('id')
-    cat = request.args.get('cat')  # 🔴 전달받은 카테고리 값
-    # 🔴 카테고리 매핑 (DB의 실제 path 키워드로 변환)
+    cat = request.args.get('cat')
+
     cat_map = {
         "영화": "movies",
         "국내TV": "koreantv",
@@ -7724,237 +8283,196 @@ def manual_match_v2():
         "애니메이션": "animations_all",
         "방송중": "air"
     }
-
-    # 변환된 카테고리 값 사용
     db_cat = cat_map.get(cat, cat)
 
     if not target_name or not full_id or ':' not in full_id:
-        return "오류: 작품 키워드와 TMDB ID가 필요합니다.", 400
+        return jsonify({"status": "error", "message": "오류: 작품 키워드와 TMDB ID가 필요합니다."}), 400
 
     emit_ui_log(f"수동 연결 v2 시작: '{target_name}' -> {full_id}", "info")
-    # 🔴 2. 동적 SQL 조건 구성
-    query_condition = ""
-    # 처음 두 파라미터는 name과 cleanedName LIKE 조건용
-    params = [f'%{target_name}%', f'%{target_name}%']
 
-    # if cat and cat != '전체':
-    #     query_condition = "AND path LIKE ?"
-    #     params.append(f'%{cat}%')
+    # -------------------------------------------------------------
+    # 시간이 오래 걸리는 작업 전체를 별도의 함수로 분리
+    # -------------------------------------------------------------
+    def run_match_task():
+        query_condition = ""
+        params = [f'%{target_name}%', f'%{target_name}%']
 
-    if cat and cat != '전체':
-        query_condition = "AND path LIKE ?"
-        params.append(f'{db_cat}%')
-        # 🔴 [추가] 작업 중인 카테고리 로그 기록
-        emit_ui_log(f"🔍 카테고리 필터 적용: '{cat}' 폴더 대상", "info")
-    else:
-        # 🔴 [추가] 전체 작업 로그 기록
-        emit_ui_log(f"🌐 카테고리 제한 없음 (전체)", "info")
+        if cat and cat != '전체':
+            query_condition = "AND path LIKE ?"
+            params.append(f'{db_cat}%')
+            emit_ui_log(f"🔍 카테고리 필터 적용: '{cat}' 폴더 대상", "info")
+        else:
+            emit_ui_log(f"🌐 카테고리 제한 없음 (전체)", "info")
 
-    try:
-        m_type, t_id = full_id.split(':')
-        headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
+        try:
+            m_type, t_id = full_id.split(':')
+            headers = {"Authorization": f"Bearer {TMDB_API_KEY}"}
 
-        # 🔴 수정: response를 먼저 받고, .json()은 한 번만 호출합니다.
-        # response = requests.get(
-        #     f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=credits,content_ratings,release_dates",
-        #     headers=headers, timeout=10)
-        response = requests.get(
-            f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=credits,content_ratings,release_dates,keywords",
-            headers=headers, timeout=10)
-        if response.status_code != 200:
-            return jsonify({"status": "error", "message": f"TMDB 응답 오류: {response.status_code}"}), 500
+            response = requests.get(
+                f"{TMDB_BASE_URL}/{m_type}/{t_id}?language=ko-KR&append_to_response=credits,content_ratings,release_dates,keywords",
+                headers=headers, timeout=10)
 
-        # 여기서 .json()을 호출하여 d_resp에 담습니다.
-        d_resp = response.json()
+            if response.status_code != 200:
+                emit_ui_log(f"TMDB 응답 오류: {response.status_code}", "error")
+                return
 
-        if 'id' not in d_resp:
-            return f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", 404
+            d_resp = response.json()
 
+            if 'id' not in d_resp:
+                emit_ui_log(f"오류: TMDB ID {t_id}를 찾을 수 없습니다.", "error")
+                return
 
-        # 🔴 수정 2: 등급 파싱 로직 추가 (TV/Movie 분기)
-        rating = "등급없음"
-        if m_type == 'tv' and 'content_ratings' in d_resp:
-            res_r = d_resp['content_ratings'].get('results', [])
-            kr_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'KR'), None)
-            us_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'US'), None)
-            final = kr_rating or us_rating or (res_r[0].get('rating') if res_r else None)
-            if final: rating = f"{final}+" if str(final).isdigit() else final
-        elif m_type == 'movie' and 'release_dates' in d_resp:
-            res_r = d_resp['release_dates'].get('results', [])
-            kr_data = next((r.get('release_dates', []) for r in res_r if r.get('iso_3166_1') == 'KR'), [])
-            final = next((r.get('certification') for r in kr_data if r.get('certification')), None)
-            if final: rating = final
+            # 등급 파싱 로직
+            rating = "등급없음"
+            if m_type == 'tv' and 'content_ratings' in d_resp:
+                res_r = d_resp['content_ratings'].get('results', [])
+                kr_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'KR'), None)
+                us_rating = next((r.get('rating') for r in res_r if r.get('iso_3166_1') == 'US'), None)
+                final = kr_rating or us_rating or (res_r[0].get('rating') if res_r else None)
+                if final: rating = f"{final}+" if str(final).isdigit() else final
+            elif m_type == 'movie' and 'release_dates' in d_resp:
+                res_r = d_resp['release_dates'].get('results', [])
+                kr_data = next((r.get('release_dates', []) for r in res_r if r.get('iso_3166_1') == 'KR'), [])
+                final = next((r.get('certification') for r in kr_data if r.get('certification')), None)
+                if final: rating = final
 
-        tmdb_title = d_resp.get('title') or d_resp.get('name')
-        # 🟢 [수정 후] TMDB 키워드 중 "한글"로 된 것만 골라내기!
-        ai_keywords = []
+            tmdb_title = d_resp.get('title') or d_resp.get('name')
+            ai_keywords = []
 
-        # 1. TMDB에서 제공하는 공식 키워드(tags) 수집
-        tmdb_keywords = d_resp.get('keywords', {}).get('keywords', []) if m_type == 'movie' else d_resp.get('keywords',
-                                                                                                            {}).get(
-            'results', [])
+            tmdb_keywords = d_resp.get('keywords', {}).get('keywords', []) if m_type == 'movie' else d_resp.get(
+                'keywords', {}).get('results', [])
 
-        for kw_obj in tmdb_keywords:
-            kw_name = kw_obj.get('name', '').strip()
+            for kw_obj in tmdb_keywords:
+                kw_name = kw_obj.get('name', '').strip()
+                if any('가' <= c <= '힣' for c in kw_name):
+                    ai_keywords.append(kw_name)
+                    if len(ai_keywords) >= 3:
+                        break
 
-            # 🚀 [핵심 방어막] 키워드에 한글(가~힣)이 단 한 글자라도 포함되어 있을 때만 인정!
-            # (영어만 있는 'investigation' 같은 태그는 여기서 걸러져서 버려집니다)
-            if any('가' <= c <= '힣' for c in kw_name):
-                ai_keywords.append(kw_name)
-                if len(ai_keywords) >= 3:  # 3개 찾으면 그만!
-                    break
+            if len(ai_keywords) < 2:
+                overview_text = d_resp.get('overview', '')
+                ai_keywords.extend(extract_keywords(overview_text, top_n=3))
 
-        # 2. TMDB에서 건질 만한 한글 키워드가 2개 미만이라면?
-        # -> 미련 없이 우리 자체 파이썬 형태소 분석기를 돌려서 한글 명사를 뽑아옵니다!
-        if len(ai_keywords) < 2:
-            overview_text = d_resp.get('overview', '')
-            ai_keywords.extend(extract_keywords(overview_text, top_n=3))
+            ai_keywords = list(set(ai_keywords))
 
-        # 3. 중복 제거 및 리스트화
-        ai_keywords = list(set(ai_keywords))
+            metadata_json = json.dumps({
+                "tagline": d_resp.get("tagline"),
+                "backdrop_path": d_resp.get("backdrop_path"),
+                "homepage": d_resp.get("homepage"),
+                "status": d_resp.get("status"),
+                "vote_average": d_resp.get("vote_average"),
+                "popularity": d_resp.get("popularity")
+            }, ensure_ascii=False)
 
-        # 🔴 metadata_json 생성 추가
-        metadata_json = json.dumps({
-            "tagline": d_resp.get("tagline"),
-            "backdrop_path": d_resp.get("backdrop_path"),
-            "homepage": d_resp.get("homepage"),
-            "status": d_resp.get("status"),
-            "vote_average": d_resp.get("vote_average"),
-            "popularity": d_resp.get("popularity")
-        }, ensure_ascii=False)
+            conn = get_db()
+            cursor = conn.cursor()
 
-        conn = get_db()
-        cursor = conn.cursor()
+            # 1. 시리즈 정보 업데이트
+            up = (
+                d_resp.get('poster_path'),
+                (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0],
+                d_resp.get('overview'),
+                d_resp.get('number_of_seasons'),
+                json.dumps([g['id'] for g in d_resp.get('genres', [])]),
+                json.dumps([g['name'] for g in d_resp.get('genres', [])], ensure_ascii=False),
+                next((c['name'] for c in d_resp.get('credits', {}).get('crew', []) if c.get('job') == 'Director'), ""),
+                json.dumps([{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in
+                            d_resp.get('credits', {}).get('cast', [])[:10]], ensure_ascii=False),
+                full_id,
+                tmdb_title,
+                d_resp.get('runtime'),
+                json.dumps(ai_keywords, ensure_ascii=False),
+                metadata_json,
+                rating,
+                tmdb_title,
+                f'%{target_name}%', f'%{target_name}%'
+            )
 
-        # 1. 시리즈 정보 업데이트 (metadata_json 포함)
-        up = (
-            d_resp.get('poster_path'),
-            (d_resp.get('release_date') or d_resp.get('first_air_date') or "").split('-')[0],
-            d_resp.get('overview'),
-            d_resp.get('number_of_seasons'),
-            json.dumps([g['id'] for g in d_resp.get('genres', [])]),
-            json.dumps([g['name'] for g in d_resp.get('genres', [])], ensure_ascii=False),
-            next((c['name'] for c in d_resp.get('credits', {}).get('crew', []) if c.get('job') == 'Director'), ""),
-            json.dumps([{"name": c['name'], "profile": c['profile_path'], "role": c['character']} for c in
-                        d_resp.get('credits', {}).get('cast', [])[:10]], ensure_ascii=False),
-            full_id,
-            tmdb_title,
-            d_resp.get('runtime'),
-            json.dumps(ai_keywords, ensure_ascii=False),
-            metadata_json,  # 🔴 추가
-            rating,
-            tmdb_title,  # cleanedName
-            f'%{target_name}%', f'%{target_name}%'
-        )
+            sql_query = f"""
+                UPDATE series
+                SET posterPath=?, year=?, overview=?, seasonCount=?,
+                    genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
+                    tmdbTitle=?, runtime=?, ai_tags=?, metadata_json=?, rating=?, cleanedName=?
+                WHERE (name LIKE ? OR cleanedName LIKE ?) {query_condition}
+            """
+            debug_params = up + tuple(params[2:])
+            cursor.execute(sql_query, debug_params)
+            series_updated = cursor.rowcount
 
-        # cursor.execute("""
-        #     UPDATE series
-        #     SET posterPath=?, year=?, overview=?, seasonCount=?,
-        #         genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
-        #         tmdbTitle=?, runtime=?, metadata_json=?, rating=?, cleanedName=?
-        #     WHERE name LIKE ? OR cleanedName LIKE ?
-        # """, up)
+            # 2. 에피소드 정보 업데이트
+            ep_updated = 0
+            if m_type == 'tv':
+                cursor.execute(f"""
+                          SELECT id, title, series_path FROM episodes
+                          WHERE series_path IN (
+                              SELECT path FROM series
+                              WHERE (name LIKE ? OR cleanedName LIKE ?) {query_condition}
+                          )
+                      """, tuple(params))
 
-        # 🔴 쿼리문 변수 정의
-        sql_query = f"""
-            UPDATE series
-            SET posterPath=?, year=?, overview=?, seasonCount=?,
-                genreIds=?, genreNames=?, director=?, actors=?, tmdbId=?, failed=0,
-                tmdbTitle=?, runtime=?, ai_tags=?, metadata_json=?, rating=?, cleanedName=?
-            WHERE (name LIKE ? OR cleanedName LIKE ?) {query_condition}
-        """
-        debug_params = up + tuple(params[2:])
+                db_eps = cursor.fetchall()
+                db_ep_map = {}
+                for ep in db_eps:
+                    sn, en = extract_episode_numbers(f"{ep['series_path']}")
+                    db_ep_map[(sn, en)] = ep['id']
 
-        # 🔴 로그 기록
-        # emit_ui_log(f"SQL UPDATE: {sql_query}", "info")
-        # emit_ui_log(f"SQL Params 개수: {len(debug_params)}", "info")
-        # emit_ui_log(f"SQL Params 값: {debug_params}", "info")
-        cursor.execute(sql_query, debug_params)
-        series_updated = cursor.rowcount
+                s_count = d_resp.get('number_of_seasons', 1)
+                for s_num in range(1, s_count + 1):
+                    s_resp = requests.get(f"{TMDB_BASE_URL}/tv/{t_id}/season/{s_num}?language=ko-KR", headers=headers,
+                                          timeout=10).json()
 
-        # 수정
-        # 2. 에피소드 정보 업데이트 (성능 최적화 및 파일명 파싱 기반 매칭)
-        ep_updated = 0
-        if m_type == 'tv':
-            # 1. 해당 시리즈의 모든 에피소드를 한 번만 조회
-            # cursor.execute("""
-            #           SELECT id, title, series_path FROM episodes
-            #           WHERE series_path IN (SELECT path FROM series WHERE name LIKE ? OR cleanedName LIKE ?)
-            #       """, (f'%{target_name}%', f'%{target_name}%'))
-            cursor.execute(f"""
-                      SELECT id, title, series_path FROM episodes
-                      WHERE series_path IN (
-                          SELECT path FROM series
-                          WHERE (name LIKE ? OR cleanedName LIKE ?) {query_condition}
-                      )
-                  """, tuple(params))  # 🔴 카테고리 파라미터 포함 전달
+                    for ep_data in s_resp.get('episodes', []):
+                        tmdb_s = ep_data.get('season_number')
+                        tmdb_e = ep_data.get('episode_number')
+                        target_ep_id = db_ep_map.get((tmdb_s, tmdb_e))
 
-            db_eps = cursor.fetchall()
+                        if target_ep_id:
+                            cursor.execute("""
+                                   UPDATE episodes SET
+                                       overview = ?, air_date = ?, thumbnailUrl = ?,
+                                       runtime = ?, season_number = ?, episode_number = ?
+                                   WHERE id = ?
+                               """, (
+                                ep_data.get('overview'), ep_data.get('air_date'),
+                                f"https://image.tmdb.org/t/p/w500{ep_data.get('still_path')}" if ep_data.get(
+                                    'still_path') else None,
+                                ep_data.get('runtime'), tmdb_s, tmdb_e, target_ep_id
+                            ))
+                            emit_ui_log(f"📺 매칭 성공: {tmdb_s}시즌 {tmdb_e}화 -> {ep_data.get('name', '이름없음')}", "info")
+                            ep_updated += cursor.rowcount
 
-            # 2. 캐싱: 파일명 파싱 결과를 미리 다 뽑아두어 루프 속도를 높임
-            # (시즌, 회차) -> DB의 ID
-            db_ep_map = {}
-            # for ep in db_eps:
-            #     sn, en = extract_episode_numbers(f"{ep['series_path']}/{ep['title']}")
-            #     db_ep_map[(sn, en)] = ep['id']
-            for ep in db_eps:
-                sn, en = extract_episode_numbers(f"{ep['series_path']}")
-                db_ep_map[(sn, en)] = ep['id']
-            # 3. TMDB 데이터를 돌며 매칭되는 것이 있으면 업데이트
-            s_count = d_resp.get('number_of_seasons', 1)
-            for s_num in range(1, s_count + 1):
-                s_resp = requests.get(f"{TMDB_BASE_URL}/tv/{t_id}/season/{s_num}?language=ko-KR", headers=headers,
-                                      timeout=10).json()
+            conn.commit()
+            conn.close()
 
-                for ep_data in s_resp.get('episodes', []):
-                    tmdb_s = ep_data.get('season_number')
-                    tmdb_e = ep_data.get('episode_number')
+            # 1. DB 업데이트가 끝났으니 성공 로그를 '먼저' 출력합니다.
+            result_msg = f"성공! 시리즈 {series_updated}건, 에피소드 {ep_updated}건 갱신 완료."
+            emit_ui_log(f"✅ {result_msg} (캐시 반영 중...)", "success")
 
-                    # 🔴 핵심: 위에서 만든 맵에서 target_ep_id를 바로 가져옴
-                    target_ep_id = db_ep_map.get((tmdb_s, tmdb_e))
+            # 2. 그 다음 무거운 캐시 빌드를 돌립니다.
+            build_all_caches()
+            emit_ui_log(f"✅ 전체 캐시 갱신 완료.", "info")
 
-                    if target_ep_id:
-                        # 🔴 업데이트 쿼리 (번호 교정 포함)
-                        cursor.execute("""
-                               UPDATE episodes SET
-                                   overview = ?,
-                                   air_date = ?,
-                                   thumbnailUrl = ?,
-                                   runtime = ?,
-                                   season_number = ?,
-                                   episode_number = ?
-                               WHERE id = ?
-                           """, (
-                            ep_data.get('overview'),
-                            ep_data.get('air_date'),
-                            f"https://image.tmdb.org/t/p/w500{ep_data.get('still_path')}" if ep_data.get(
-                                'still_path') else None,
-                            ep_data.get('runtime'),
-                            tmdb_s,
-                            tmdb_e,
-                            target_ep_id
-                        ))
-                        # 🔴 [추가] 상세 로그: 어떤 에피소드가 매칭되었는지 UI 로그에 출력
-                        emit_ui_log(f"📺 매칭 성공: {tmdb_s}시즌 {tmdb_e}화 -> {ep_data.get('name', '이름없음')}", "info")
+        except Exception as e:
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except:
+                    pass
+            emit_ui_log(f"에러: {str(e)}", "error")
 
-                        ep_updated += cursor.rowcount
-        conn.commit()
-        conn.close()
-        build_all_caches()
+    # -------------------------------------------------------------
+    # 스레드를 실행하고 클라이언트에게는 즉시 JSON 응답 반환
+    # -------------------------------------------------------------
+    threading.Thread(target=run_match_task).start()
 
-
-        # 🔴 최종 응답 직전에 변수 확인
-        result_msg = f"성공! 시리즈 {series_updated}건, 에피소드 {ep_updated}건 갱신 완료."
-        emit_ui_log(f"✅ {result_msg}", "success")
-        # 🔴 JSON 강제 변환 (한글 유지)
-        response_data = {"status": "success", "message": result_msg}
-        response = make_response(json.dumps(response_data, ensure_ascii=False))
-        response.headers['Content-Type'] = 'application/json; charset=utf-8'
-        return response
-
-    except Exception as e:
-        emit_ui_log(f"에러: {str(e)}", "error")
-        return jsonify({"status": "error", "message": str(e)}), 500
+    # 인코딩 문제 해결을 위해 make_response와 json.dumps 사용
+    response_data = {
+        "status": "pending",
+        "message": "매칭 작업이 백그라운드에서 시작되었습니다. 웹 UI 로그를 확인해 주세요."
+    }
+    response = make_response(json.dumps(response_data, ensure_ascii=False))
+    response.headers['Content-Type'] = 'application/json; charset=utf-8'
+    return response
 
 @app.route('/api/view_conan_data')
 def view_conan_data():
@@ -8529,7 +9047,6 @@ def admin_ghost_page():
             <!-- 상단 탭 메뉴 -->
             <div class="nav-tabs">
                 <a href="/updater" class="nav-tab"><i class="fas fa-sync-alt"></i> 대시보드</a>
-                <a href="/admin/ghost" class="nav-tab active"><i class="fas fa-ghost"></i> 유령 데이터 관리</a>
                 <a href="/admin" class="nav-tab"><i class="fas fa-search"></i> 매칭 진단</a>
                 <a href="/admin/filter" class="nav-tab active"><i class="fas fa-folder-tree"></i> 경로 기반 정밀 관리</a>
                 <a href="/admin/filter_v2" class="nav-tab active">경로 관리 (V2)</a>
@@ -11477,7 +11994,6 @@ def admin_filter_page():
         <div class="container">
             <div class="nav-tabs">
                 <a href="/updater" class="nav-tab"><i class="fas fa-sync-alt"></i> 대시보드</a>
-                <a href="/admin/ghost" class="nav-tab"><i class="fas fa-ghost"></i> 유령 데이터 관리</a>
                 <a href="/admin/filter" class="nav-tab active"><i class="fas fa-folder-tree"></i> 경로 기반 정밀 관리</a>
                 <a href="/admin" class="nav-tab"><i class="fas fa-search"></i> 매칭 진단</a>
                 <a href="/admin/db_pro" class="nav-tab"><i class="fas fa-database"></i> DB Pro</a>
@@ -11624,14 +12140,14 @@ async function checkMissing() {
                     renderMissingList();
 
                     // (서버 매칭 요청 로직은 동일)
-
+                    /*
                     await fetch('/api/admin/match_missing_files', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({cat: cat, path: path, missing: data.missing})
                     });
                     console.log("매칭 스레드 가동됨");
-
+                    */
                 }
             } else {
                 content.innerHTML = '<div style="color:red;">에러: ' + data.message + '</div>';
