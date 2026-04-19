@@ -204,7 +204,12 @@ actual fun VideoPlayer(
             mediaItemBuilder.setSubtitleConfigurations(subtitleConfigs)
         }
 
-        exoPlayer.setMediaItem(mediaItemBuilder.build(), initialPosition)
+        // 🔥 [버그 수정] exoPlayer에 미디어를 세팅한 뒤, 여기서 바로 seekTo를 호출합니다!
+        exoPlayer.setMediaItem(mediaItemBuilder.build())
+        if (initialPosition > 0) {
+            Log.d("VideoPlayer", "Restoring playback position to: $initialPosition ms")
+            exoPlayer.seekTo(initialPosition)
+        }
         exoPlayer.prepare()
         Log.d("VideoPlayer", "Player prepared with ${subtitleConfigs.size} external subtitle configs")
     }

@@ -4233,6 +4233,10 @@ def get_series_detail_api():
             actual_sn = d.get('season_number') or 1
             actual_en = d.get('episode_number') or 1
 
+            # DB에서 가져온 기본값 (실제 번호)
+            # actual_sn = d.get('season_number') if d.get('season_number') is not None else 1
+            # actual_en = d.get('episode_number') if d.get('episode_number') is not None else 1
+
             if is_single_movie:
                 s_disp, s_weight, en = "영화", 1, 1
             else:
@@ -4323,6 +4327,30 @@ def get_series_detail_api():
                 else:
                     nums = re.findall(r'\d+', ep_title)
                     en = int(nums[-1]) if nums else actual_en
+            #
+            # 상세 파싱 (S/E 마커)
+            # s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
+            # e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
+            # h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
+            #
+            # if s_match:
+            #     actual_sn, en = int(s_match.group(1)), int(s_match.group(2))
+            #     # 🔴 [핵심 수정] 파일명에서 시즌 0을 찾았다면, 표시 탭도 '스페셜'이나 '0시즌'으로 분리해줍니다.
+            #     if actual_sn == 0:
+            #         s_disp, s_weight = "스페셜", 999
+            #     elif not is_single_movie and "극장판" not in s_disp and "스페셜" not in s_disp:
+            #         s_disp, s_weight = f"{actual_sn}시즌", actual_sn
+            # elif e_match:
+            #     en = int(e_match.group(1))
+            # elif h_match:
+            #     en = int(h_match.group(1))
+            # else:
+            #     nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
+            #     if nums:
+            #         en = int(nums[0])
+            #     else:
+            #         nums = re.findall(r'\d+', ep_title)
+            #         en = int(nums[-1]) if nums else actual_en
 
             # 썸네일 보정 로직
             thumb_raw = d.get('thumbnailUrl')
@@ -5083,8 +5111,7 @@ def get_diagnostics():
 
 # def _generate_thumb_file(path_raw, prefix, tid, t, w):
 #     # 기존: target_w = "1280"
-#     # 수정: 480 정도로 낮추어 로딩 속도 최적화
-#     target_w = "480"
+#     target_w = str(w) if w else "320"
 #     tp = os.path.join(DATA_DIR, f"seek_{tid}_{t}_{target_w}.jpg")
 #     if os.path.exists(tp) and os.path.getsize(tp) > 0: return tp
 #
@@ -5119,9 +5146,9 @@ def get_diagnostics():
 #         log("THUMB_DIAG", f"⚠️ 에러 발생: {str(e)}")
 #         return None
 
+
 def _generate_thumb_file(path_raw, prefix, tid, t, w):
-    target_w = "320"
-    # 파일명이 확실하게 고정되는지 확인 (t값을 문자열로 강제 변환)
+    target_w = str(w) if w else "320"
     tp = os.path.join(DATA_DIR, f"seek_{tid}_{str(t)}_{target_w}.jpg")
 
     # 1. 1차 안전 검사 (파일 존재 AND 사이즈 확인)
@@ -5146,30 +5173,45 @@ def _generate_thumb_file(path_raw, prefix, tid, t, w):
             log("THUMB_SYNC", f"📸 썸네일 생성 시작: {os.path.basename(vp)} ({t}초)")
 
             # 4. 강제 타임아웃 10초 설정 및 표준 에러 수집
-            result = subprocess.run([
-                FFMPEG_PATH, "-y",
-                "-ss", str(t),
-                "-i", vp,
-                "-frames:v", "1",
-                "-q:v", "15",
-                "-vf", f"scale={target_w}:-1",
-                tp
-            ], timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            # 🔴 [핵심 최적화] -skip_frame nokey 추가 (P/B 프레임 디코딩 연산 무시)
+            # 🔴 [주의] -fastseek 옵션 제거 (오류 원인)
+            result = None
+            try:
+                cmd = [
+                    FFMPEG_PATH, "-y",
+                    "-skip_frame", "nokey",  # 👈 고사양 코덱(H.265 10bit 등)에서 연산량 90% 이상 감소
+                    "-ss", str(t),
+                    "-i", vp,
+                    "-threads", "1",  # 다중 생성 시 오버헤드 최소화
+                    "-vframes", "1",
+                    "-q:v", "15",
+                    "-preset", "ultrafast",  # 최고 속도 디코딩
+                    "-vf", f"scale={target_w}:-1",
+                    tp
+                ]
 
-            if result.returncode != 0:
-                log("THUMB_ERROR", f"FFmpeg 실패: {result.stderr.decode()}")
+                result = subprocess.run(cmd, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+            except subprocess.TimeoutExpired:
+                log("THUMB_ERROR", f"생성 시간 초과(10초): {t}초")
+                return None
+            except Exception as ffmpeg_e:
+                log("THUMB_ERROR", f"FFmpeg 실행 예외 발생: {str(ffmpeg_e)}")
                 return None
 
-        # 5. 최종 확인
+            # 5. FFmpeg 실패 여부 확인
+            if result and result.returncode != 0:
+                err_msg = result.stderr.decode('utf-8', errors='ignore') if result.stderr else "알 수 없는 에러"
+                log("THUMB_ERROR", f"FFmpeg 실패: {err_msg}")
+                return None
+
+        # 6. 최종 파일 확인
         if os.path.exists(tp) and os.path.getsize(tp) > 0:
             return tp
         return None
 
-    except subprocess.TimeoutExpired:
-        log("THUMB_ERROR", f"생성 시간 초과(10초): {t}초")
-        return None
     except Exception as e:
-        log("THUMB_ERROR", f"생성 중 예외 발생: {str(e)}")
+        log("THUMB_ERROR", f"생성 중 전역 예외 발생: {str(e)}")
         return None
 
 @app.route('/thumb_serve')
@@ -5293,13 +5335,9 @@ def get_video_duration(path):
 def gen_seek_thumbnails():
     path_raw = request.args.get('path')
     prefix = request.args.get('type')
-    try:
-        # 1. 경로 복원 및 검증
-        base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix)
-        decoded_path = urllib.parse.unquote_plus(path_raw)
-        vp = get_real_path(os.path.join(base, nfc(decoded_path)))
-
+    try: # 1. 경로 복원 및 검증 base = next(v[0] for k, v in PATH_MAP.items() if v[1] == prefix) decoded_path = urllib.parse.unquote_plus(path_raw) vp = get_real_path(os.path.join(base, nfc(decoded_path)))
         if not os.path.exists(vp):
+            log("DIAG", "❌ 에러: 파일을 찾을 수 없습니다.")
             return "Not Found", 404
 
         # 2. 영상 길이 확인
@@ -5317,29 +5355,31 @@ def gen_seek_thumbnails():
 
         # 4. 스토리보드 생성 시도
         with STORYBOARD_SEMAPHORE:
+            # 🔴 [최종 수정된 FFmpeg 커맨드]
+            # 1. -skip_frame nokey 삭제 (이것이 듬성듬성 끊어짐의 원인)
+            # 2. 대신 scale=120:-1 로 리사이징 크기를 더 줄여서 디코딩 부하 감소
+            # 3. -q:v 8 로 품질을 낮춰 인코딩 속도 향상
+            # 4. fps 계산식 유지하여 100장의 타일을 부드럽게 연속으로 뽑아냄
             cmd = [
                 FFMPEG_PATH, "-y",
-                "-skip_frame", "nokey",  # 🔴 [핵심 최적화] P/B 프레임을 버리고 키프레임(I-frame)만 디코딩! CPU 연산량 90% 이상 감소
-                "-threads", "4",  # 멀티스레드 활용
+                "-threads", "4",
                 "-i", vp,
-                "-vf", f"fps=101/{duration},scale=160:90,tile=10x10",
+                "-vf", f"fps=100/{duration},scale=120:-1,tile=10x10",
                 "-frames:v", "1",
-                "-an", "-sn", "-dn",  # 오디오, 자막 무시
+                "-an", "-sn", "-dn",
                 "-preset", "ultrafast",
-                "-q:v", "5",
+                "-q:v", "8",
                 sb_path
             ]
 
-            # stdout은 버리고 stderr만 캡처하여 메모리 오버헤드 방지
-            proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=120)
+            proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=180)
 
-            # 🔴 [응답 코드 복구] 정상적으로 생성되었으면 반드시 이미지를 반환해야 함!
             if proc.returncode == 0 and os.path.exists(sb_path):
                 resp = make_response(send_file(sb_path, mimetype='image/jpeg'))
                 resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
                 return resp
             else:
-                log("STORYBOARD_ERROR", f"생성 실패: {proc.stderr}")
+                log("STORYBOARD_ERROR", f"생성 실패(Code {proc.returncode}): {proc.stderr}")
                 return "Generation Failed", 500
 
     except Exception as e:
@@ -12140,14 +12180,14 @@ async function checkMissing() {
                     renderMissingList();
 
                     // (서버 매칭 요청 로직은 동일)
-                    /*
+
                     await fetch('/api/admin/match_missing_files', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({cat: cat, path: path, missing: data.missing})
                     });
                     console.log("매칭 스레드 가동됨");
-                    */
+
                 }
             } else {
                 content.innerHTML = '<div style="color:red;">에러: ' + data.message + '</div>';

@@ -173,10 +173,16 @@ fun VideoPlayerScreen(
 
     // 🔥 탐색(Seek) 중일 때는 리모컨 위치, 재생 중일 때는 시청 위치 기준
     // 시청 중일 때도 뒤에서 알아서 미리(앞으로 100초) 생성해 둡니다.
-    val targetBaseIndex = if (isSeeking) currentSeekIndex else (currentPosition / 10000L).toInt()
+    // 🔴 [버그 수정] 사용자가 컨트롤러(UI)를 띄웠을 때(isSeeking 포함)만 미리보기 썸네일을 생성하도록 변경합니다.
+    // 영상이 켜져있기만 한데 뒤에서 계속 서버를 때리는 현상을 방지합니다.
+    val targetBaseIndex = if (isControllerVisible || isSeeking) {
+        if (isSeeking) currentSeekIndex else (currentPosition / 10000L).toInt()
+    } else {
+        -1 // 컨트롤러가 닫혀있으면 요청하지 않음
+    }
 
     LaunchedEffect(targetBaseIndex) {
-        if (allThumbnails.isEmpty()) return@LaunchedEffect
+        if (allThumbnails.isEmpty() || targetBaseIndex == -1) return@LaunchedEffect
 
         // 뒤로 2개, 앞으로 10개 (총 12개, 약 100초 분량) 백그라운드 생성
         val prefetchRange = -2..10
@@ -207,10 +213,30 @@ fun VideoPlayerScreen(
         try { mainBoxFocusRequester.requestFocus() } catch(e: Exception) {}
     }
 
+//    LaunchedEffect(currentPosition, totalDuration, movie.id) {
+//        if (currentPosition > 0 && totalDuration > 0 && !isSeeking) {
+//            onPositionUpdate(currentPosition, totalDuration)
+//            if (currentPosition % 10000 < 1000 || currentPosition > totalDuration - 5000) {
+//                scope.launch {
+//                    repository.updateProgress(
+//                        movie.id ?: "",
+//                        currentPosition / 1000.0,
+//                        totalDuration / 1000.0
+//                    )
+//                }
+//            }
+//        }
+//    }
+    // 🔥 [버그 수정] 서버 디도스 및 영상 정지 방지를 위한 변수 추가
+    var lastUpdatePos by remember(movie.id) { mutableLongStateOf(0L) }
+
     LaunchedEffect(currentPosition, totalDuration, movie.id) {
         if (currentPosition > 0 && totalDuration > 0 && !isSeeking) {
             onPositionUpdate(currentPosition, totalDuration)
-            if (currentPosition % 10000 < 1000 || currentPosition > totalDuration - 5000) {
+
+            // 🔴 10초(10000ms) 이상 차이가 나거나, 영상이 거의 끝났을 때만 "딱 1번" 서버로 업데이트 요청
+            if (currentPosition - lastUpdatePos >= 10000L || currentPosition > totalDuration - 5000) {
+                lastUpdatePos = currentPosition
                 scope.launch {
                     repository.updateProgress(
                         movie.id ?: "",
