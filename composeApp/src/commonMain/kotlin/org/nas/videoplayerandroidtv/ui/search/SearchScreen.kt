@@ -332,14 +332,15 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
             if (badgeText.isNotEmpty()) {
                 Surface(
                     color = Color.Black.copy(alpha = 0.7f),
-                    shape = RoundedCornerShape(bottomEnd = 8.dp),
-                    modifier = Modifier.align(Alignment.TopStart)
+                    shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp),
+                    modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()
                 ) {
                     Text(
                         text = badgeText,
                         color = Color.White,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
@@ -348,7 +349,7 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
         
         // 포커스 시 제목 표시
         if (isFocused) {
-            // 🔴 태그 제거 및 경로 제거를 동시에 수행하여 순수 제목만 표시
+            // 🔴 [수정] 태그 제거 및 경로 제거를 동시에 수행하여 순수 제목만 표시
             val tagRegex = Regex("""\[(더빙|자막)]|\((더빙|자막)\)|【(더빙|자막)】""", RegexOption.IGNORE_CASE)
             val displayTitle = series.title.substringAfterLast(">").replace(tagRegex, "").trim()
             

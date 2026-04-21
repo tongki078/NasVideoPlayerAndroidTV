@@ -7458,10 +7458,19 @@ def _rebuild_fast_memory_cache():
             except:
                 pass
             # --- [필터링 로직 추가] ---
+            exclude_keywords = {"다큐멘터리", "교양", "다큐", "Documentary"}
+
+            # 1. 장르 이름 필터링 (기존)
+            is_genre_excluded = any(g in exclude_keywords for g in item["genreNames"])
+
+            # 2. 경로(path)나 제목(cleanedName)에 해당 키워드가 포함되어 있는지 확인 (추가)
+            path_lower = path.lower()
+            name_lower = name.lower()
+            is_keyword_in_path = any(kw.lower() in path_lower or kw.lower() in name_lower for kw in exclude_keywords)
+
             # 국내TV, 외국TV, 방송중 카테고리에서 특정 장르 제외
             if cat in ["koreantv", "foreigntv", "air"]:
-                exclude_keywords = {"다큐멘터리", "교양", "다큐", "Documentary"}
-                if any(g in exclude_keywords for g in item["genreNames"]):
+                if is_genre_excluded or is_keyword_in_path:
                     continue # 제외 대상이면 리스트에 넣지 않고 건너뜀
             # ------------------------
             items.append(item)
