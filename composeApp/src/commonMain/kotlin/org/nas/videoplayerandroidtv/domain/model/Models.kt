@@ -72,7 +72,8 @@ data class Series(
     val overview: String? = null,
     val rating: String? = null,
     val seasonCount: Int? = null,
-    val tmdbTitle: String? = null
+    val tmdbTitle: String? = null,
+    val extras: List<Series> = emptyList()
 )
 
 @Serializable

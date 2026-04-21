@@ -5,6 +5,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,6 +46,7 @@ import org.nas.videoplayerandroidtv.data.network.NasApiClient
 import org.nas.videoplayerandroidtv.domain.model.Movie
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
+import org.nas.videoplayerandroidtv.ui.common.MovieCard
 import org.nas.videoplayerandroidtv.ui.detail.components.EpisodeItem
 import org.nas.videoplayerandroidtv.util.TitleUtils
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractEpisode
@@ -192,7 +194,28 @@ fun SeriesDetailScreen(
                     Text(text = "출연: " + currentSeries.actors.take(4).joinToString { it.name }, color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) 
                 }
                 Spacer(modifier = Modifier.height(32.dp))
-                
+
+                if (currentSeries.extras.isNotEmpty()) {
+                    Text(
+                        text = "부가 영상",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                    LazyRow(contentPadding = PaddingValues(bottom = 32.dp)) {
+                        items(currentSeries.extras) { extra ->
+                            MovieCard(series = extra) {
+                                // 부가 영상 클릭 시: 해당 시리즈의 첫 번째 에피소드를 재생
+                                val episodes = extra.episodes
+                                if (episodes.isNotEmpty()) {
+                                    onPlay(episodes.first().copy(position = 0.0), episodes, 0L)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (!state.isLoading) {
                     Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         if (resumeInfo != null) {
