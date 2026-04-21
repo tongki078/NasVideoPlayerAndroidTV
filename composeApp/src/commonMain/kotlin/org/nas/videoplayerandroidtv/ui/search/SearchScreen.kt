@@ -253,20 +253,16 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
     
     // 추가 태그 추출 (Regex 기반 개선)
     val tags = remember(series.title) {
-        val tagRegex = Regex("\\[(.*?)\\]")
+        val tagRegex = Regex("""\[(.*?)\]|\((.*?)\)""")
         val matches = tagRegex.findAll(series.title)
         
-        val list = matches.map { it.groupValues[1].trim() }
+        val list = matches.map { 
+            (it.groupValues[1].takeIf { s -> s.isNotEmpty() } ?: it.groupValues[2]).trim() 
+        }
             .filter { it.isNotEmpty() }
             .distinct()
             .toList()
             
-        // 진단 로그 (문제 해결 확인용)
-        if (series.title.contains("코난")) {
-            println("검색 태그 체크 - 원본 제목: ${series.title}")
-            println("검색 태그 체크 - 결과: $list")
-        }
-        
         list
     }
 
@@ -352,16 +348,18 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
         
         // 포커스 시 제목 표시
         if (isFocused) {
-            val displayTitle = series.title
+            // [수정] 태그가 이미 상단 뱃지로 표시되므로, 제목에서는 태그 부분을 제거하여 중복 표시 방지
+            val tagRegex = Regex("""\[.*?\]|\(.*?\)|【.*?】""")
+            val displayTitle = series.title.replace(tagRegex, "").trim()
             
             Text(
                 text = displayTitle,
                 color = Color.White,
-                fontSize = 12.sp, // 글자 크기를 14.sp 에서 12.sp 로 줄임
+                fontSize = 12.sp, 
                 fontWeight = FontWeight.Bold,
                 maxLines = 2,
                 textAlign = TextAlign.Center,
-                lineHeight = 16.sp, // 줄 간격도 폰트 크기에 맞춰 줄임
+                lineHeight = 16.sp,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 overflow = TextOverflow.Ellipsis
             )
