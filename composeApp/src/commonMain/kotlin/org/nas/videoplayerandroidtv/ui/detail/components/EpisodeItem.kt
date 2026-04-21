@@ -29,13 +29,10 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) { 1.03f } else 1f, label = "EpisodeItemScale")
 
-    // [수정] 회차 썸네일이 없을 때 무작정 포스터를 보여주던 로직을 제거합니다.
-    // 이렇게 하면 서버에서 생성한 thumb_serve 이미지가 더 잘 보이게 됩니다.
     val imageUrl = remember(movie.thumbnailUrl) {
         movie.thumbnailUrl ?: ""
     }
 
-    // 재생 시간 결정 로직 (1순위: 시청기록 duration, 2순위: TMDB runtime)
     val durationDisplay = remember(movie.duration, movie.runtime) {
         val dur = movie.duration ?: 0.0
         if (dur > 0) {
@@ -47,7 +44,6 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
         }
     }
 
-    // 시청 진행률 계산 (하단 게이지용)
     val progress = remember(movie.position, movie.duration) {
         if ((movie.duration ?: 0.0) > 0) {
             (movie.position ?: 0.0) / (movie.duration ?: 1.0)
@@ -115,12 +111,18 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
         Spacer(Modifier.width(18.dp))
         Column(Modifier.weight(1f)) {
             val fullTitle = (movie.title ?: "")
-            val displayTitle = fullTitle.prettyTitle()
             
+            // 🔴 태그 제거 정규식
+            val tagRegex = Regex("""\[(더빙|자막)\]|\((더빙|자막)\)|【(더빙|자막)】""", RegexOption.IGNORE_CASE)
+            
+            // 🔴 제목에서 태그를 제거하고 깨끗한 제목만 추출
+            val displayTitle = fullTitle.replace(tagRegex, "").trim().prettyTitle()
+            
+            // 🔴 뱃지 표시용 태그만 따로 추출
             val typeTag = remember(fullTitle) {
                 when {
-                    fullTitle.contains("더빙") -> " [더빙]"
-                    fullTitle.contains("자막") -> " [자막]"
+                    fullTitle.contains("더빙", ignoreCase = true) -> " [더빙]"
+                    fullTitle.contains("자막", ignoreCase = true) -> " [자막]"
                     else -> ""
                 }
             }

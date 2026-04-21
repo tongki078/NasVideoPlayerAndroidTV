@@ -253,7 +253,7 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
     
     // 추가 태그 추출 (Regex 기반 개선)
     val tags = remember(series.title) {
-        val tagRegex = Regex("""\[(.*?)\]|\((.*?)\)""")
+        val tagRegex = Regex("""\[(.*?)]|\((.*?)\)""")
         val matches = tagRegex.findAll(series.title)
         
         val list = matches.map { 
@@ -348,9 +348,9 @@ private fun SearchGridItem(series: Series, focusRequester: FocusRequester, onSer
         
         // 포커스 시 제목 표시
         if (isFocused) {
-            // [수정] 태그가 이미 상단 뱃지로 표시되므로, 제목에서는 태그 부분을 제거하여 중복 표시 방지
-            val tagRegex = Regex("""\[.*?\]|\(.*?\)|【.*?】""")
-            val displayTitle = series.title.replace(tagRegex, "").trim()
+            // 🔴 태그 제거 및 경로 제거를 동시에 수행하여 순수 제목만 표시
+            val tagRegex = Regex("""\[(더빙|자막)]|\((더빙|자막)\)|【(더빙|자막)】""", RegexOption.IGNORE_CASE)
+            val displayTitle = series.title.substringAfterLast(">").replace(tagRegex, "").trim()
             
             Text(
                 text = displayTitle,

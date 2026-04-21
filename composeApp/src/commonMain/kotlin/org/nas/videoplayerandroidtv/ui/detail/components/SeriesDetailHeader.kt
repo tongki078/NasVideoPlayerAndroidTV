@@ -1,5 +1,6 @@
 package org.nas.videoplayerandroidtv.ui.detail.components
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -17,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import org.nas.videoplayerandroidtv.*
 import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.ui.common.TmdbAsyncImage
@@ -95,9 +97,20 @@ fun SeriesDetailHeader(
         // 정보 영역
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Column(Modifier.weight(1f)) {
+                // 🔴 [수정] series.title이 바뀌어도 정제된 제목을 유지하도록 기억(remember) 키를 fullPath로 고정
+                val displayTitle = remember(series.fullPath) {
+                    val tagRegex = Regex("""\[(더빙|자막)\]|\((더빙|자막)\)|【(더빙|자막)】""", RegexOption.IGNORE_CASE)
+                    val pureTitle = series.title.replace(tagRegex, "").trim().cleanTitle(keepTags = false)
+                    val tag = when {
+                        series.title.contains("더빙", ignoreCase = true) -> " [더빙]"
+                        series.title.contains("자막", ignoreCase = true) -> " [자막]"
+                        else -> ""
+                    }
+                    "$pureTitle$tag"
+                }
+
                 Text(
-                    // [수정] 자막/더빙 태그를 유지하여 제목 표시
-                    text = series.title.cleanTitle(keepTags = true),
+                    text = displayTitle,
                     color = Color.White, 
                     fontSize = 28.sp, 
                     fontWeight = FontWeight.ExtraBold

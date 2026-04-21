@@ -102,9 +102,6 @@ fun SeriesDetailScreen(
                 val lastEp = allEpisodes[lastEpIndex]
                 val isFinished = history.duration > 0 && history.lastPosition > history.duration * 0.95
                 
-                // [수정] 마지막 시청 기록이 완료(isFinished)된 상태에서 
-                // 다음 에피소드가 존재할 때만 다음 화를 추천하도록 함.
-                // 마지막 에피소드인 경우 완료된 에피소드 정보를 유지.
                 if (isFinished && lastEpIndex < allEpisodes.size - 1) {
                     ResumeInfo(allEpisodes[lastEpIndex + 1], 0L, isNext = true)
                 } else {
@@ -134,8 +131,22 @@ fun SeriesDetailScreen(
 
         Row(modifier = Modifier.fillMaxSize().padding(horizontal = 64.dp).padding(top = 48.dp)) { 
             Column(modifier = Modifier.weight(1.5f).fillMaxHeight(), verticalArrangement = Arrangement.Top) {
+                
+                // 🔴 [수정] 카테고리 경로(예: "라프텔 >")를 제거하고 순수 제목 + 태그만 남김
+                val displayTitle = remember(currentSeries.title) {
+                    val rawTitle = currentSeries.title.substringAfterLast(">").trim()
+                    val tagRegex = Regex("""\[(더빙|자막)\]|\((더빙|자막)\)|【(더빙|자막)】""", RegexOption.IGNORE_CASE)
+                    val pureTitle = rawTitle.replace(tagRegex, "").trim()
+                    val tag = when {
+                        rawTitle.contains("더빙", ignoreCase = true) -> " [더빙]"
+                        rawTitle.contains("자막", ignoreCase = true) -> " [자막]"
+                        else -> ""
+                    }
+                    "$pureTitle$tag"
+                }
+                
                 Text(
-                    text = currentSeries.title, color = Color.White, 
+                    text = displayTitle, color = Color.White, 
                     style = TextStyle(fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, shadow = Shadow(color = Color.Black.copy(alpha = 0.5f), offset = Offset(0f, 4f), blurRadius = 12f)), 
                     maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
@@ -377,7 +388,9 @@ private fun EpisodeOverlay(
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             Row(modifier = Modifier.fillMaxSize().padding(48.dp)) {
                 Column(modifier = Modifier.weight(0.35f)) {
-                    Text(text = seriesTitle, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp)
+                    // 🔴 overlay 제목도 카테고리 태그 제거
+                    val overlayTitle = remember(seriesTitle) { seriesTitle.substringAfterLast(">").trim() }
+                    Text(text = overlayTitle, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp)
                     
                     Row(modifier = Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         seriesYear?.let { 
