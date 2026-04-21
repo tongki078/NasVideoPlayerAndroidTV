@@ -39,7 +39,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
-import coil3.compose.LocalPlatformContext
 import kotlinx.coroutines.*
 import org.nas.videoplayerandroidtv.data.WatchHistory
 import org.nas.videoplayerandroidtv.data.network.NasApiClient
@@ -48,7 +47,6 @@ import org.nas.videoplayerandroidtv.domain.model.Series
 import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.ui.common.MovieCard
 import org.nas.videoplayerandroidtv.ui.detail.components.EpisodeItem
-import org.nas.videoplayerandroidtv.util.TitleUtils
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractEpisode
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractSeason
 
@@ -71,9 +69,14 @@ fun SeriesDetailScreen(
     LaunchedEffect(series.fullPath) {
         state = state.copy(isLoading = true)
         
-        if (series.episodes.isNotEmpty() || series.seasons.isNotEmpty()) {
-            val initialSeasons = withContext(Dispatchers.Default) { loadSeasons(series) }
-            state = state.copy(seasons = initialSeasons, isLoading = initialSeasons.isEmpty())
+        val (extraEpisodes, mainEpisodes) = series.episodes.partition {
+            it.videoUrl?.contains("Featurettes", ignoreCase = true) == true
+        }
+        val seriesForSeasons = series.copy(episodes = mainEpisodes)
+        
+        if (seriesForSeasons.episodes.isNotEmpty() || seriesForSeasons.seasons.isNotEmpty()) {
+            val initialSeasons = withContext(Dispatchers.Default) { loadSeasons(seriesForSeasons) }
+            state = state.copy(seasons = initialSeasons, extras = extraEpisodes, isLoading = initialSeasons.isEmpty())
         }
 
         val fullSeries = if (series.fullPath != null) {
@@ -85,8 +88,11 @@ fun SeriesDetailScreen(
         } else series
         
         currentSeries = fullSeries
-        val finalSeasons = withContext(Dispatchers.Default) { loadSeasons(fullSeries) }
-        state = state.copy(seasons = finalSeasons, isLoading = false)
+        val (fullExtra, fullMain) = fullSeries.episodes.partition {
+            it.videoUrl?.contains("Featurettes", ignoreCase = true) == true
+        }
+        val finalSeasons = withContext(Dispatchers.Default) { loadSeasons(fullSeries.copy(episodes = fullMain)) }
+        state = state.copy(seasons = finalSeasons, extras = fullExtra, isLoading = false)
     }
 
     val allEpisodes = state.seasons.flatMap { it.episodes }
@@ -132,123 +138,130 @@ fun SeriesDetailScreen(
         Box(modifier = Modifier.fillMaxSize().background(brush = Brush.horizontalGradient(listOf(Color.Black, Color.Black.copy(alpha = 0.8f), Color.Transparent), endX = 1000f)))
 
         Row(modifier = Modifier.fillMaxSize().padding(horizontal = 64.dp).padding(top = 48.dp)) { 
-            Column(modifier = Modifier.weight(1.5f).fillMaxHeight(), verticalArrangement = Arrangement.Top) {
-                
-                // 🔴 [수정] 카테고리 경로(예: "라프텔 >")를 제거하고 순수 제목 + 태그만 남김
-                val displayTitle = remember(currentSeries.title) {
-                    val rawTitle = currentSeries.title.substringAfterLast(">").trim()
-                    val tagRegex = Regex("""\[(더빙|자막)\]|\((더빙|자막)\)|【(더빙|자막)】""", RegexOption.IGNORE_CASE)
-                    val pureTitle = rawTitle.replace(tagRegex, "").trim()
-                    val tag = when {
-                        rawTitle.contains("더빙", ignoreCase = true) -> " [더빙]"
-                        rawTitle.contains("자막", ignoreCase = true) -> " [자막]"
-                        else -> ""
+            LazyColumn(
+                modifier = Modifier.weight(1.5f).fillMaxHeight(),
+                verticalArrangement = Arrangement.Top
+            ) {
+                item {
+                    val displayTitle = remember(currentSeries.title) {
+                        val tagRegex = Regex("""\[(더빙|자막)\]|\((더빙|자막)\)|【(더빙|자막)】""", RegexOption.IGNORE_CASE)
+                        val pureTitle = currentSeries.title.replace(tagRegex, "").trim()
+                        val tag = when {
+                            currentSeries.title.contains("더빙", ignoreCase = true) -> " [더빙]"
+                            currentSeries.title.contains("자막", ignoreCase = true) -> " [자막]"
+                            else -> ""
+                        }
+                        "$pureTitle$tag"
                     }
-                    "$pureTitle$tag"
-                }
-                
-                Text(
-                    text = displayTitle, color = Color.White, 
-                    style = TextStyle(fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, shadow = Shadow(color = Color.Black.copy(alpha = 0.5f), offset = Offset(0f, 4f), blurRadius = 12f)), 
-                    maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (state.isLoading) {
-                        Box(modifier = Modifier.width(100.dp).height(24.dp).clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)))
-                    } else {
-                        val metadataItems = mutableListOf<@Composable () -> Unit>()
-                        metadataItems.add { MetadataText(text = if (currentSeries.category == "movies") "영화" else "시리즈") }
-                        currentSeries.year?.let { y -> metadataItems.add { MetadataText(text = y) } }
-                        if (currentSeries.genreNames.isNotEmpty()) {
-                            metadataItems.add { MetadataText(text = currentSeries.genreNames.take(3).joinToString(" · ")) }
-                        }
-                        if (currentSeries.category != "movies" && state.seasons.isNotEmpty()) {
-                            metadataItems.add { MetadataText(text = "시즌 ${state.seasons.size}개") }
-                        }
-                        metadataItems.add { InfoBadge(text = "HD", isOutlined = true) }
-                        
-                        currentSeries.rating?.let { r ->
-                            val rating = r.uppercase()
-                            if (rating.contains("19") || rating.contains("18") || rating.contains("청불") ||
-                                rating.contains("15") || rating.contains("12") || 
-                                rating.contains("전체") || rating.contains("ALL")) {
-                                metadataItems.add { DetailRatingBadge(r) }
-                            }
-                        }
-
-                        metadataItems.forEachIndexed { index, component ->
-                            component()
-                            if (index < metadataItems.size - 1) {
-                                MetadataSeparator()
-                            }
-                        }
-                    }
-                }
-                
-                Spacer(modifier = Modifier.height(20.dp))
-                Text(text = (currentSeries.overview ?: "정보가 없습니다.").replace("\n\n", "\n"), color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp, lineHeight = 20.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth(0.9f))
-                Spacer(modifier = Modifier.height(14.dp))
-                if (!state.isLoading && currentSeries.actors.isNotEmpty()) {
-                    Text(text = "출연: " + currentSeries.actors.take(4).joinToString { it.name }, color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) 
-                }
-                Spacer(modifier = Modifier.height(32.dp))
-
-                if (currentSeries.extras.isNotEmpty()) {
+                    
                     Text(
-                        text = "부가 영상",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp,
-                        modifier = Modifier.padding(vertical = 16.dp)
+                        text = displayTitle, color = Color.White, 
+                        style = TextStyle(fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, shadow = Shadow(color = Color.Black.copy(alpha = 0.5f), offset = Offset(0f, 4f), blurRadius = 12f)), 
+                        maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
-                    LazyRow(contentPadding = PaddingValues(bottom = 32.dp)) {
-                        items(currentSeries.extras) { extra ->
-                            MovieCard(series = extra) {
-                                // 부가 영상 클릭 시: 해당 시리즈의 첫 번째 에피소드를 재생
-                                val episodes = extra.episodes
-                                if (episodes.isNotEmpty()) {
-                                    onPlay(episodes.first().copy(position = 0.0), episodes, 0L)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (state.isLoading) {
+                            Box(modifier = Modifier.width(100.dp).height(24.dp).clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)))
+                        } else {
+                            val metadataItems = mutableListOf<@Composable () -> Unit>()
+                            metadataItems.add { MetadataText(text = if (currentSeries.category == "movies") "영화" else "시리즈") }
+                            currentSeries.year?.let { y -> metadataItems.add { MetadataText(text = y) } }
+                            if (currentSeries.genreNames.isNotEmpty()) {
+                                metadataItems.add { MetadataText(text = currentSeries.genreNames.take(3).joinToString(" · ")) }
+                            }
+                            if (currentSeries.category != "movies" && state.seasons.isNotEmpty()) {
+                                metadataItems.add { MetadataText(text = "시즌 ${state.seasons.size}개") }
+                            }
+                            metadataItems.add { InfoBadge(text = "HD", isOutlined = true) }
+                            
+                            currentSeries.rating?.let { r ->
+                                val rating = r.uppercase()
+                                if (rating.contains("19") || rating.contains("18") || rating.contains("청불") ||
+                                    rating.contains("15") || rating.contains("12") || 
+                                    rating.contains("전체") || rating.contains("ALL")) {
+                                    metadataItems.add { DetailRatingBadge(r) }
+                                }
+                            }
+
+                            metadataItems.forEachIndexed { index, component ->
+                                component()
+                                if (index < metadataItems.size - 1) {
+                                    MetadataSeparator()
+                                }
+                            }
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Text(text = (currentSeries.overview ?: "정보가 없습니다.").replace("\n\n", "\n"), color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp, lineHeight = 20.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth(0.9f))
+                    Spacer(modifier = Modifier.height(14.dp))
+                    if (!state.isLoading && currentSeries.actors.isNotEmpty()) {
+                        Text(text = "출연: " + currentSeries.actors.take(4).joinToString { it.name }, color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) 
+                    }
+                    Spacer(modifier = Modifier.height(32.dp))
+                }
+
+                // 🔴 부가 영상 섹션
+                if (state.extras.isNotEmpty()) {
+                    item {
+                        Text("부가 영상", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(vertical = 12.dp))
+                    }
+                    item {
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth().height(140.dp),
+                            contentPadding = PaddingValues(bottom = 16.dp)
+                        ) {
+                            items(state.extras) { extra ->
+                                Box(modifier = Modifier.width(100.dp)) {
+                                    MovieCard(series = Series(title = extra.title ?: "", episodes = listOf(extra), posterPath = extra.thumbnailUrl)) {
+                                        onPlay(extra, listOf(extra), 0L)
+                                    }
                                 }
                             }
                         }
                     }
                 }
 
-                if (!state.isLoading) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        if (resumeInfo != null) {
-                            if (!resumeInfo.isNew) {
-                                val ep = resumeInfo.episode
-                                val seasonNum = ep.season_number ?: ep.title?.extractSeason() ?: 0
-                                val epTitle = ep.title ?: ""
-                                val episodeNumStr = ep.episode_number?.toString() ?: epTitle.extractEpisode()?.replace("화", "") ?: ""
-                                
-                                val seasonLabel = if (seasonNum > 0) "${seasonNum}시즌 " else ""
-                                val episodeLabel = if (episodeNumStr.isNotBlank()) "${episodeNumStr}화 " else ""
-                                
-                                val btnLabel = when {
-                                    resumeInfo.isNext -> "${seasonLabel}${episodeLabel}재생"
-                                    resumeInfo.isFinished -> "다시 보기"
-                                    else -> "${seasonLabel}${episodeLabel}이어보기"
+                // 🔴 버튼 영역
+                item {
+                    if (!state.isLoading) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(top = 16.dp)) {
+                            if (resumeInfo != null) {
+                                if (!resumeInfo.isNew) {
+                                    val ep = resumeInfo.episode
+                                    val seasonNum = ep.season_number ?: ep.title?.extractSeason() ?: 0
+                                    val epTitle = ep.title ?: ""
+                                    val episodeNumStr = ep.episode_number?.toString() ?: epTitle.extractEpisode()?.replace("화", "") ?: ""
+                                    
+                                    val seasonLabel = if (seasonNum > 0) "${seasonNum}시즌 " else ""
+                                    val episodeLabel = if (episodeNumStr.isNotBlank()) "${episodeNumStr}화 " else ""
+                                    
+                                    val btnLabel = when {
+                                        resumeInfo.isNext -> "${seasonLabel}${episodeLabel}재생"
+                                        resumeInfo.isFinished -> "다시 보기"
+                                        else -> "${seasonLabel}${episodeLabel}이어보기"
+                                    }
+                                    PremiumTvButton(text = btnLabel, icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(resumeButtonFocusRequester), onClick = { onPlay(resumeInfo.episode, allEpisodes, resumeInfo.position) })
                                 }
-                                PremiumTvButton(text = btnLabel, icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(resumeButtonFocusRequester), onClick = { onPlay(resumeInfo.episode, allEpisodes, resumeInfo.position) })
+                                PremiumTvButton(text = if (!resumeInfo.isNew) "처음부터" else "재생", icon = if (!resumeInfo.isNew) Icons.Default.Refresh else Icons.Default.PlayArrow, isPrimary = resumeInfo.isNew, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first().copy(position = 0.0), allEpisodes, 0L) })
+                                
+                                if (currentSeries.category != "movies" && state.seasons.isNotEmpty()) {
+                                    PremiumTvButton(
+                                        text = "회차 정보",
+                                        icon = Icons.AutoMirrored.Filled.List,
+                                        isPrimary = false,
+                                        modifier = Modifier.focusRequester(infoButtonFocusRequester),
+                                        onClick = { state = state.copy(showEpisodeOverlay = true) }
+                                    )
+                                }
+                            } else if (allEpisodes.isNotEmpty()) {
+                                 PremiumTvButton(text = "재생", icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first().copy(position = 0.0), allEpisodes, 0L) })
                             }
-                            PremiumTvButton(text = if (!resumeInfo.isNew) "처음부터" else "재생", icon = if (!resumeInfo.isNew) Icons.Default.Refresh else Icons.Default.PlayArrow, isPrimary = resumeInfo.isNew, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first().copy(position = 0.0), allEpisodes, 0L) })
-                            
-                            if (currentSeries.category != "movies" && state.seasons.isNotEmpty()) {
-                                PremiumTvButton(
-                                    text = "회차 정보",
-                                    icon = Icons.AutoMirrored.Filled.List,
-                                    isPrimary = false,
-                                    modifier = Modifier.focusRequester(infoButtonFocusRequester),
-                                    onClick = { state = state.copy(showEpisodeOverlay = true) }
-                                )
-                            }
-                        } else if (allEpisodes.isNotEmpty()) {
-                             PremiumTvButton(text = "재생", icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first().copy(position = 0.0), allEpisodes, 0L) })
                         }
+                        // 🔴 하단 여백 추가
+                        Spacer(modifier = Modifier.height(48.dp))
                     }
                 }
             }
@@ -385,7 +398,7 @@ private fun PremiumTvButton(text: String, icon: androidx.compose.ui.graphics.vec
 }
 
 data class Season(val number: Int, val name: String, val episodes: List<Movie>)
-private data class SeriesDetailState(val seasons: List<Season> = emptyList(), val isLoading: Boolean = true, val selectedSeasonIndex: Int = 0, val showEpisodeOverlay: Boolean = false)
+private data class SeriesDetailState(val seasons: List<Season> = emptyList(), val extras: List<Movie> = emptyList(), val isLoading: Boolean = true, val selectedSeasonIndex: Int = 0, val showEpisodeOverlay: Boolean = false)
 
 private data class ResumeInfo(val episode: Movie, val position: Long, val isNew: Boolean = false, val isNext: Boolean = false, val isFinished: Boolean = false)
 
@@ -411,7 +424,6 @@ private fun EpisodeOverlay(
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             Row(modifier = Modifier.fillMaxSize().padding(48.dp)) {
                 Column(modifier = Modifier.weight(0.35f)) {
-                    // 🔴 overlay 제목도 카테고리 태그 제거
                     val overlayTitle = remember(seriesTitle) { seriesTitle.substringAfterLast(">").trim() }
                     Text(text = overlayTitle, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp)
                     
@@ -476,8 +488,11 @@ private fun EpisodeOverlay(
                     Spacer(modifier = Modifier.height(20.dp))
                     LazyColumn(state = episodeListState, verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
                         items(currentSeason?.episodes ?: emptyList()) { movie -> 
-                            val episodeNum = movie.episode_number ?: 0
-                            val displayTitle = if (episodeNum > 0) "${episodeNum}화 - ${movie.title}" else (movie.title ?: "제목 없음")
+                            // 🔴 [수정] 태그 제거 정규식 적용
+                            val tagRegex = Regex("""\d+화|\d+회|화 -|회 -""", RegexOption.IGNORE_CASE)
+                            val cleanTitle = movie.title?.replace(tagRegex, "")?.trim() ?: "제목 없음"
+                            val displayTitle = if ((movie.episode_number ?: 0) > 0) "${movie.episode_number}화 - $cleanTitle" else cleanTitle
+                            
                             EpisodeItem(movie = movie.copy(title = displayTitle), seriesOverview = seriesOverview, seriesPosterPath = seriesPosterPath, onPlay = { onEpisodeClick(movie) })
                         }
                     }
@@ -502,8 +517,12 @@ private fun loadSeasons(series: Series): List<Season> {
                     if (rawThumb.startsWith("/")) "https://image.tmdb.org/t/p/original$rawThumb"
                     else NasApiClient.BASE_URL + "/" + rawThumb
                 } else rawThumb
-                movie.copy(videoUrl = videoUrl, thumbnailUrl = thumbUrl)
-            }.sortedBy { it.episode_number ?: it.title?.let { t -> t.extractEpisode()?.filter { c -> c.isDigit() }?.toIntOrNull() } ?: 0 }
+                
+                // 🔴 [핵심] 영화/부가영상이면 회차를 순서대로 재할당
+                val epNum = if (series.category == "movies" || series.category == "movie_extras") 0 else (movie.episode_number ?: 0)
+                
+                movie.copy(videoUrl = videoUrl, thumbnailUrl = thumbUrl, episode_number = epNum)
+            }.sortedBy { it.episode_number } 
             
             Season(number = seasonNum, name = seasonName, episodes = processedEpisodes)
         }.sortedWith(compareBy(
@@ -513,7 +532,7 @@ private fun loadSeasons(series: Series): List<Season> {
     }
 
     if (series.episodes.isNotEmpty()) {
-        val processedMovies = series.episodes.map { movie ->
+        val processedMovies = series.episodes.mapIndexed { index, movie ->
             val videoUrl = if (movie.videoUrl?.startsWith("http") == false) NasApiClient.BASE_URL + (if (movie.videoUrl.startsWith("/")) "" else "/") + movie.videoUrl else movie.videoUrl ?: ""
             
             val rawThumb = movie.thumbnailUrl ?: series.posterPath
@@ -522,7 +541,11 @@ private fun loadSeasons(series: Series): List<Season> {
                 if (rawThumb.startsWith("/")) "https://image.tmdb.org/t/p/original$rawThumb"
                 else NasApiClient.BASE_URL + "/" + rawThumb
             } else rawThumb
-            movie.copy(videoUrl = videoUrl, thumbnailUrl = thumbUrl)
+            
+            // 🔴 [핵심] 영화면 회차를 순서대로 재할당
+            val epNum = if (series.category == "movies" || series.category == "movie_extras") index + 1 else (movie.episode_number ?: 0)
+            
+            movie.copy(videoUrl = videoUrl, thumbnailUrl = thumbUrl, episode_number = epNum)
         }
 
         val distinctMovies = processedMovies.distinctBy { it.videoUrl }
@@ -536,7 +559,7 @@ private fun loadSeasons(series: Series): List<Season> {
             Season(
                 number = num, 
                 name = if (seasonsMap.size > 1) "${num}시즌" else "회차 정보",
-                episodes = entry.value.sortedBy { it.episode_number ?: it.title?.let { t -> t.extractEpisode()?.filter { c -> c.isDigit() }?.toIntOrNull() } ?: 0 }
+                episodes = entry.value.sortedBy { it.episode_number }
             )
         }.sortedBy { it.number }
     }
