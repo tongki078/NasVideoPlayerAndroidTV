@@ -412,116 +412,6 @@ def get_db_readonly():
 #     except sqlite3.OperationalError as e:
 #         log("DB", f"초기화 중 락 발생: {e}. 이미 실행 중인 프로세스가 있는지 확인하세요.")
 
-def init_db():
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-
-        # 1. 테이블 생성
-        cursor.execute(
-            'CREATE TABLE IF NOT EXISTS series (path TEXT PRIMARY KEY, category TEXT, name TEXT, posterPath TEXT, year TEXT, overview TEXT, rating TEXT, seasonCount INTEGER, genreIds TEXT, genreNames TEXT, director TEXT, actors TEXT, failed INTEGER DEFAULT 0, tmdbId TEXT)')
-        cursor.execute(
-            'CREATE TABLE IF NOT EXISTS episodes (id TEXT PRIMARY KEY, series_path TEXT, title TEXT, videoUrl TEXT, thumbnailUrl TEXT, overview TEXT, air_date TEXT, season_number INTEGER, episode_number INTEGER, FOREIGN KEY (series_path) REFERENCES series (path) ON DELETE CASCADE)')
-        cursor.execute('CREATE TABLE IF NOT EXISTS tmdb_cache (h TEXT PRIMARY KEY, data TEXT)')
-        cursor.execute('CREATE TABLE IF NOT EXISTS server_config (key TEXT PRIMARY KEY, value TEXT)')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS playback_progress (
-                            episode_id TEXT PRIMARY KEY, position REAL DEFAULT 0, duration REAL DEFAULT 0,
-                            last_watched TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE CASCADE)''')
-
-        # 2. 컬럼 보정 및 추가 (ALTER TABLE)
-        try:
-            cursor.execute('ALTER TABLE series ADD COLUMN metadata_json TEXT')
-        except sqlite3.OperationalError:
-            pass
-
-        def add_col_if_missing(table, col, type, default_val=None):
-            cursor.execute(f"PRAGMA table_info({table})")
-            cols = [c[1] for c in cursor.fetchall()]
-            if col not in cols:
-                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {type}")
-                log("DB", f"컬럼 추가: {table}.{col}")
-                if default_val:
-                    cursor.execute(f"UPDATE {table} SET {col} = {default_val}")
-
-        # Series 컬럼 추가
-        add_col_if_missing('series', 'tmdbId', 'TEXT')
-        add_col_if_missing('series', 'genreNames', 'TEXT')
-        add_col_if_missing('series', 'director', 'TEXT')
-        add_col_if_missing('series', 'actors', 'TEXT')
-        add_col_if_missing('series', 'cleanedName', 'TEXT')
-        add_col_if_missing('series', 'yearVal', 'TEXT')
-        add_col_if_missing('series', 'tmdbTitle', 'TEXT')
-        add_col_if_missing('series', 'runtime', 'INTEGER')
-        add_col_if_missing('series', 'updated_at', 'TIMESTAMP')
-
-        # Episodes 컬럼 추가
-        add_col_if_missing('episodes', 'overview', 'TEXT')
-        add_col_if_missing('episodes', 'air_date', 'TEXT')
-        add_col_if_missing('episodes', 'season_number', 'INTEGER')
-        add_col_if_missing('episodes', 'episode_number', 'INTEGER')
-        add_col_if_missing('episodes', 'runtime', 'INTEGER')
-        add_col_if_missing('episodes', 'updated_at', 'TIMESTAMP')
-
-        # 🟢 [추가 1] 에피소드 테이블에 category 컬럼 자동 추가
-        add_col_if_missing('episodes', 'category', 'TEXT')
-        add_col_if_missing('series', 'ai_tags', 'TEXT')
-        # try:
-        #     cursor.execute("""
-        #         UPDATE episodes
-        #         SET category = (SELECT category FROM series WHERE series.path = episodes.series_path)
-        #         WHERE category IS NULL
-        #     """)
-        #     if cursor.rowcount > 0:
-        #         log("DB", f"에피소드 카테고리 자동 동기화 완료: {cursor.rowcount}건")
-        # except sqlite3.OperationalError as e:
-        #     log("DB_ERROR", f"에피소드 카테고리 업데이트 실패: {e}")
-
-        # 3. 트리거 생성
-        cursor.execute('''
-            CREATE TRIGGER IF NOT EXISTS update_series_timestamp
-            AFTER UPDATE ON series
-            BEGIN
-                UPDATE series SET updated_at = CURRENT_TIMESTAMP WHERE path = old.path;
-            END;
-        ''')
-        cursor.execute('''
-            CREATE TRIGGER IF NOT EXISTS update_episodes_timestamp
-            AFTER UPDATE ON episodes
-            BEGIN
-                UPDATE episodes SET updated_at = CURRENT_TIMESTAMP WHERE id = old.id;
-            END;
-        ''')
-
-        # 4. 인덱스 생성 (성능 최적화 적용)
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_category ON series(category)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_tmdbId ON series(tmdbId)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_failed ON series(failed)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cleanedName ON series(cleanedName)')
-        cursor.execute(
-            'CREATE INDEX IF NOT EXISTS idx_series_search_sort ON series(category, name, cleanedName, tmdbTitle, yearVal)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_updated_at ON series(updated_at)')
-        cursor.execute(
-            'CREATE INDEX IF NOT EXISTS idx_episodes_series_path_nocase ON episodes(series_path COLLATE NOCASE)')
-
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_title ON episodes(title)')
-        cursor.execute(
-            'CREATE INDEX IF NOT EXISTS idx_episodes_sort ON episodes(series_path, season_number, episode_number)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_updated_at ON episodes(updated_at)')
-        # 🔴 [추가] DB Pro 화면의 '카테고리 선택 + 최신순 정렬'을 0.1초 만에 뚫어버리는 복합 인덱스
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cat_time ON series(category, updated_at DESC)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_path_time ON episodes(series_path, updated_at DESC)')
-
-        # 🟢 [추가 3] 카테고리 전용 고속 인덱스 2개 추가
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_category ON episodes(category)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_category_time ON episodes(category, updated_at DESC)')
-
-        conn.commit()
-        conn.close()
-        log("DB", "시스템 초기화 및 고성능 인덱스 최적화 완료")
-    except sqlite3.OperationalError as e:
-        log("DB", f"초기화 중 오류: {e}")
-
 # def init_db():
 #     try:
 #         conn = get_db()
@@ -573,7 +463,21 @@ def init_db():
 #         add_col_if_missing('episodes', 'runtime', 'INTEGER')
 #         add_col_if_missing('episodes', 'updated_at', 'TIMESTAMP')
 #
-#         # 3. 트리거 생성 (수정 시 시간 자동 갱신)
+#         # 🟢 [추가 1] 에피소드 테이블에 category 컬럼 자동 추가
+#         add_col_if_missing('episodes', 'category', 'TEXT')
+#         add_col_if_missing('series', 'ai_tags', 'TEXT')
+#         # try:
+#         #     cursor.execute("""
+#         #         UPDATE episodes
+#         #         SET category = (SELECT category FROM series WHERE series.path = episodes.series_path)
+#         #         WHERE category IS NULL
+#         #     """)
+#         #     if cursor.rowcount > 0:
+#         #         log("DB", f"에피소드 카테고리 자동 동기화 완료: {cursor.rowcount}건")
+#         # except sqlite3.OperationalError as e:
+#         #     log("DB_ERROR", f"에피소드 카테고리 업데이트 실패: {e}")
+#
+#         # 3. 트리거 생성
 #         cursor.execute('''
 #             CREATE TRIGGER IF NOT EXISTS update_series_timestamp
 #             AFTER UPDATE ON series
@@ -589,23 +493,252 @@ def init_db():
 #             END;
 #         ''')
 #
-#         # 4. 인덱스 생성
+#         # 🚀 [추가] FTS5 초고속 전문 검색 가상 테이블 생성
+#         # name, cleanedName, tmdbTitle 컬럼을 인덱싱하여 검색 속도를 100배 올립니다.
+#         cursor.execute("""
+#             CREATE VIRTUAL TABLE IF NOT EXISTS series_fts USING fts5(
+#                 name,
+#                 cleanedName,
+#                 tmdbTitle,
+#                 content='series',
+#                 content_rowid='rowid'
+#             );
+#         """)
+#
+#         # 🚀 [추가] 데이터가 추가/삭제/수정될 때 검색 인덱스를 자동 갱신하는 트리거
+#         cursor.execute("""
+#             CREATE TRIGGER IF NOT EXISTS series_ai AFTER INSERT ON series BEGIN
+#               INSERT INTO series_fts(rowid, name, cleanedName, tmdbTitle) VALUES (new.rowid, new.name, new.cleanedName, new.tmdbTitle);
+#             END;
+#         """)
+#         cursor.execute("""
+#             CREATE TRIGGER IF NOT EXISTS series_ad AFTER DELETE ON series BEGIN
+#               INSERT INTO series_fts(series_fts, rowid, name, cleanedName, tmdbTitle) VALUES('delete', old.rowid, old.name, old.cleanedName, old.tmdbTitle);
+#             END;
+#         """)
+#         cursor.execute("""
+#             CREATE TRIGGER IF NOT EXISTS series_au AFTER UPDATE ON series BEGIN
+#               INSERT INTO series_fts(series_fts, rowid, name, cleanedName, tmdbTitle) VALUES('delete', old.rowid, old.name, old.cleanedName, old.tmdbTitle);
+#               INSERT INTO series_fts(rowid, name, cleanedName, tmdbTitle) VALUES (new.rowid, new.name, new.cleanedName, new.tmdbTitle);
+#             END;
+#         """)
+#
+#         # 4. 인덱스 생성 (성능 최적화 적용)
 #         cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_category ON series(category)')
 #         cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_tmdbId ON series(tmdbId)')
 #         cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_failed ON series(failed)')
 #         cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cleanedName ON series(cleanedName)')
 #         cursor.execute(
 #             'CREATE INDEX IF NOT EXISTS idx_series_search_sort ON series(category, name, cleanedName, tmdbTitle, yearVal)')
-#         cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_series_path ON episodes(series_path)')
+#         cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_updated_at ON series(updated_at)')
+#         cursor.execute(
+#             'CREATE INDEX IF NOT EXISTS idx_episodes_series_path_nocase ON episodes(series_path COLLATE NOCASE)')
+#
 #         cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_title ON episodes(title)')
 #         cursor.execute(
 #             'CREATE INDEX IF NOT EXISTS idx_episodes_sort ON episodes(series_path, season_number, episode_number)')
+#         cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_updated_at ON episodes(updated_at)')
+#         # 🔴 [추가] DB Pro 화면의 '카테고리 선택 + 최신순 정렬'을 0.1초 만에 뚫어버리는 복합 인덱스
+#         cursor.execute('CREATE INDEX IF NOT EXISTS idx_series_cat_time ON series(category, updated_at DESC)')
+#         cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_path_time ON episodes(series_path, updated_at DESC)')
+#
+#         # 🟢 [추가 3] 카테고리 전용 고속 인덱스 2개 추가
+#         cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_category ON episodes(category)')
+#         cursor.execute('CREATE INDEX IF NOT EXISTS idx_episodes_category_time ON episodes(category, updated_at DESC)')
 #
 #         conn.commit()
 #         conn.close()
 #         log("DB", "시스템 초기화 및 고성능 인덱스 최적화 완료")
 #     except sqlite3.OperationalError as e:
 #         log("DB", f"초기화 중 오류: {e}")
+
+
+# def init_db():
+#     try:
+#         conn = get_db()
+#         cursor = conn.cursor()
+#
+#         # 1. 테이블 생성
+#         cursor.execute('''CREATE TABLE IF NOT EXISTS series (
+#             path TEXT PRIMARY KEY, category TEXT, name TEXT, posterPath TEXT,
+#             year TEXT, overview TEXT, rating TEXT, seasonCount INTEGER,
+#             genreIds TEXT, genreNames TEXT, director TEXT, actors TEXT,
+#             failed INTEGER DEFAULT 0, tmdbId TEXT, metadata_json TEXT
+#         )''')
+#
+#         cursor.execute('''CREATE TABLE IF NOT EXISTS episodes (
+#             id TEXT PRIMARY KEY, series_path TEXT, title TEXT, videoUrl TEXT,
+#             thumbnailUrl TEXT, overview TEXT, air_date TEXT, season_number INTEGER,
+#             episode_number INTEGER, category TEXT, runtime INTEGER, updated_at TIMESTAMP,
+#             FOREIGN KEY (series_path) REFERENCES series (path) ON DELETE CASCADE
+#         )''')
+#
+#         cursor.execute('CREATE TABLE IF NOT EXISTS tmdb_cache (h TEXT PRIMARY KEY, data TEXT)')
+#         cursor.execute('CREATE TABLE IF NOT EXISTS server_config (key TEXT PRIMARY KEY, value TEXT)')
+#         cursor.execute('''CREATE TABLE IF NOT EXISTS playback_progress (
+#                             episode_id TEXT PRIMARY KEY, position REAL DEFAULT 0, duration REAL DEFAULT 0,
+#                             last_watched TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+#                             FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE CASCADE)''')
+#
+#         # 2. 컬럼 보정 (Helper)
+#         def add_col_if_missing(table, col, type):
+#             cursor.execute(f"PRAGMA table_info({table})")
+#             cols = [c[1] for c in cursor.fetchall()]
+#             if col not in cols:
+#                 cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {type}")
+#                 log("DB", f"컬럼 추가: {table}.{col}")
+#
+#         # Series 컬럼 추가
+#         for col in ['tmdbId', 'genreNames', 'director', 'actors', 'cleanedName', 'yearVal', 'tmdbTitle', 'runtime',
+#                     'updated_at', 'ai_tags']:
+#             add_col_if_missing('series', col, 'TEXT')
+#
+#         # Episodes 컬럼 추가
+#         for col in ['runtime', 'updated_at']:
+#             add_col_if_missing('episodes', col, 'TEXT')
+#
+#         # 3. 트리거 생성
+#         cursor.execute(
+#             'CREATE TRIGGER IF NOT EXISTS update_series_timestamp AFTER UPDATE ON series BEGIN UPDATE series SET updated_at = CURRENT_TIMESTAMP WHERE path = old.path; END;')
+#         cursor.execute(
+#             'CREATE TRIGGER IF NOT EXISTS update_episodes_timestamp AFTER UPDATE ON episodes BEGIN UPDATE episodes SET updated_at = CURRENT_TIMESTAMP WHERE id = old.id; END;')
+#
+#         # 4. FTS5 초고속 전문 검색 설정
+#         cursor.execute("""
+#             CREATE VIRTUAL TABLE IF NOT EXISTS series_fts USING fts5(
+#                 name, cleanedName, tmdbTitle,
+#                 content='series', content_rowid='rowid'
+#             );
+#         """)
+#
+#         # FTS5 인덱스 데이터 동기화 (초기 구축)
+#         cursor.execute("SELECT count(*) FROM series_fts")
+#         if cursor.fetchone()[0] == 0:
+#             cursor.execute(
+#                 "INSERT INTO series_fts(rowid, name, cleanedName, tmdbTitle) SELECT rowid, name, cleanedName, tmdbTitle FROM series")
+#             log("DB", "FTS5 초기 인덱싱 완료")
+#
+#         # FTS5 자동 갱신 트리거
+#         cursor.execute("DROP TRIGGER IF EXISTS series_ai")
+#         cursor.execute(
+#             "CREATE TRIGGER series_ai AFTER INSERT ON series BEGIN INSERT INTO series_fts(rowid, name, cleanedName, tmdbTitle) VALUES (new.rowid, new.name, new.cleanedName, new.tmdbTitle); END;")
+#
+#         cursor.execute("DROP TRIGGER IF EXISTS series_ad")
+#         cursor.execute(
+#             "CREATE TRIGGER series_ad AFTER DELETE ON series BEGIN INSERT INTO series_fts(series_fts, rowid, name, cleanedName, tmdbTitle) VALUES('delete', old.rowid, old.name, old.cleanedName, old.tmdbTitle); END;")
+#
+#         cursor.execute("DROP TRIGGER IF EXISTS series_au")
+#         cursor.execute(
+#             "CREATE TRIGGER series_au AFTER UPDATE ON series BEGIN INSERT INTO series_fts(series_fts, rowid, name, cleanedName, tmdbTitle) VALUES('delete', old.rowid, old.name, old.cleanedName, old.tmdbTitle); INSERT INTO series_fts(rowid, name, cleanedName, tmdbTitle) VALUES (new.rowid, new.name, new.cleanedName, new.tmdbTitle); END;")
+#
+#         # 5. 인덱스 생성
+#         indices = [
+#             'CREATE INDEX IF NOT EXISTS idx_series_category ON series(category)',
+#             'CREATE INDEX IF NOT EXISTS idx_series_tmdbId ON series(tmdbId)',
+#             'CREATE INDEX IF NOT EXISTS idx_series_cat_time ON series(category, updated_at DESC)',
+#             'CREATE INDEX IF NOT EXISTS idx_episodes_category_time ON episodes(category, updated_at DESC)',
+#             'CREATE INDEX IF NOT EXISTS idx_episodes_sort ON episodes(series_path, season_number, episode_number)'
+#         ]
+#         for idx in indices:
+#             cursor.execute(idx)
+#
+#         conn.commit()
+#         conn.close()
+#         log("DB", "시스템 초기화 및 고성능 인덱스 최적화 완료")
+#     except sqlite3.OperationalError as e:
+#         log("DB", f"초기화 중 오류: {e}")
+
+def init_db():
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+
+        # 1. 테이블 생성 (유지)
+        cursor.execute('''CREATE TABLE IF NOT EXISTS series (
+            path TEXT PRIMARY KEY, category TEXT, name TEXT, posterPath TEXT,
+            year TEXT, overview TEXT, rating TEXT, seasonCount INTEGER,
+            genreIds TEXT, genreNames TEXT, director TEXT, actors TEXT,
+            failed INTEGER DEFAULT 0, tmdbId TEXT, metadata_json TEXT
+        )''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS episodes (
+            id TEXT PRIMARY KEY, series_path TEXT, title TEXT, videoUrl TEXT,
+            thumbnailUrl TEXT, overview TEXT, air_date TEXT, season_number INTEGER,
+            episode_number INTEGER, category TEXT, runtime INTEGER, updated_at TIMESTAMP,
+            FOREIGN KEY (series_path) REFERENCES series (path) ON DELETE CASCADE
+        )''')
+        cursor.execute('CREATE TABLE IF NOT EXISTS tmdb_cache (h TEXT PRIMARY KEY, data TEXT)')
+        cursor.execute('CREATE TABLE IF NOT EXISTS server_config (key TEXT PRIMARY KEY, value TEXT)')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS playback_progress (
+                            episode_id TEXT PRIMARY KEY, position REAL DEFAULT 0, duration REAL DEFAULT 0,
+                            last_watched TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE CASCADE)''')
+
+        # 2. 컬럼 보정 (유지)
+        def add_col_if_missing(table, col, type):
+            cursor.execute(f"PRAGMA table_info({table})")
+            cols = [c[1] for c in cursor.fetchall()]
+            if col not in cols:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {type}")
+                log("DB", f"컬럼 추가: {table}.{col}")
+
+        for col in ['tmdbId', 'genreNames', 'director', 'actors', 'cleanedName', 'yearVal', 'tmdbTitle', 'runtime', 'updated_at', 'ai_tags']:
+            add_col_if_missing('series', col, 'TEXT')
+        for col in ['runtime', 'updated_at']:
+            add_col_if_missing('episodes', col, 'TEXT')
+
+        # 3. 트리거 생성 (유지)
+        cursor.execute('CREATE TRIGGER IF NOT EXISTS update_series_timestamp AFTER UPDATE ON series BEGIN UPDATE series SET updated_at = CURRENT_TIMESTAMP WHERE path = old.path; END;')
+        cursor.execute('CREATE TRIGGER IF NOT EXISTS update_episodes_timestamp AFTER UPDATE ON episodes BEGIN UPDATE episodes SET updated_at = CURRENT_TIMESTAMP WHERE id = old.id; END;')
+
+        # 4. FTS5 가상 테이블 생성
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS series_fts USING fts5(
+                name, cleanedName, tmdbTitle,
+                content='series', content_rowid='rowid'
+            );
+        """)
+
+        # FTS5 인덱스 데이터 동기화 (데이터가 비어있을 때만 실행)
+        cursor.execute("SELECT count(*) FROM series_fts")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("INSERT INTO series_fts(rowid, name, cleanedName, tmdbTitle) SELECT rowid, name, cleanedName, tmdbTitle FROM series")
+            log("DB", "FTS5 초기 인덱싱 완료")
+
+        # 🔴 [핵심] 트리거 재생성 방식 변경: 매번 DROP하지 않고 IF NOT EXISTS 사용
+        # 이제 서버를 수백 번 껐다 켜도 이 트리거들은 딱 한 번만 체크하고 그냥 지나갑니다.
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS series_ai AFTER INSERT ON series BEGIN
+              INSERT INTO series_fts(rowid, name, cleanedName, tmdbTitle) VALUES (new.rowid, new.name, new.cleanedName, new.tmdbTitle);
+            END;
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS series_ad AFTER DELETE ON series BEGIN
+              INSERT INTO series_fts(series_fts, rowid, name, cleanedName, tmdbTitle) VALUES('delete', old.rowid, old.name, old.cleanedName, old.tmdbTitle);
+            END;
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS series_au AFTER UPDATE ON series BEGIN
+              INSERT INTO series_fts(series_fts, rowid, name, cleanedName, tmdbTitle) VALUES('delete', old.rowid, old.name, old.cleanedName, old.tmdbTitle);
+              INSERT INTO series_fts(rowid, name, cleanedName, tmdbTitle) VALUES (new.rowid, new.name, new.cleanedName, new.tmdbTitle);
+            END;
+        """)
+
+        # 5. 인덱스 생성
+        indices = [
+            'CREATE INDEX IF NOT EXISTS idx_series_category ON series(category)',
+            'CREATE INDEX IF NOT EXISTS idx_series_tmdbId ON series(tmdbId)',
+            'CREATE INDEX IF NOT EXISTS idx_series_cat_time ON series(category, updated_at DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_episodes_category_time ON episodes(category, updated_at DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_episodes_sort ON episodes(series_path, season_number, episode_number)'
+        ]
+        for idx in indices:
+            cursor.execute(idx)
+
+        conn.commit()
+        conn.close()
+        log("DB", "시스템 초기화 및 고성능 인덱스 최적화 완료")
+    except sqlite3.OperationalError as e:
+        log("DB", f"초기화 중 오류: {e}")
 
 # --- [유틸리티] ---
 def get_real_path(path):
@@ -710,6 +843,13 @@ def clean_title_complex(title, full_path=None, base_path=None):
 
     # title = re.sub(r'[^\w\s가-힣]', ' ', title)
     # title = re.sub(r'\s+', ' ', title).strip()
+
+    t_lower = title.lower()
+    tag = ""
+    if "(더빙)" in t_lower or "[더빙]" in t_lower or "더빙" in t_lower:
+        tag = " 더빙"
+    elif "(자막)" in t_lower or "[자막]" in t_lower or "자막" in t_lower:
+        tag = " 자막"
 
     # 1. 정제 시작 전, 가장 먼저 '극장판'과 그 주변 기호/공백을 완벽 제거
     # 극장판 앞에 붙은 기호나 뒤의 공백까지 포함해서 처리합니다.
@@ -841,8 +981,8 @@ def clean_title_complex(title, full_path=None, base_path=None):
             break
     # 8. 최종 보루 (반환 직전)
     series_name = re.sub(r'(?i)극장판', '', series_name).strip()
-
-    return series_name.strip(), extracted_year
+    final_name = f"{series_name}{tag}".strip()
+    return final_name, extracted_year
 
 @app.route('/api/repair/naruto_movie_liberation')
 def naruto_movie_liberation():
@@ -3861,7 +4001,8 @@ def get_list():
 # 상세페이지 결과 캐시를 위한 전역 변수 (함수 밖에 위치)
 _DETAIL_MEM_CACHE = {}
 
-# 기존에 사용하던 함수
+
+# 자막 더빙 중복 해결 버전
 # @app.route('/api/series_detail')
 # def get_series_detail_api():
 #     try:
@@ -3884,7 +4025,7 @@ _DETAIL_MEM_CACHE = {}
 #         t_id = series_data.get('tmdbId')
 #         db_path = series_data.get('path')
 #
-#         # 자막/더빙 판별
+#         # 자막/더빙 판별 (시리즈 기준)
 #         is_dub = "더빙" in nfc(db_path + series_data.get('name', '')).lower()
 #         is_sub = "자막" in nfc(db_path + series_data.get('name', '')).lower()
 #
@@ -3903,17 +4044,16 @@ _DETAIL_MEM_CACHE = {}
 #                 query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE cleanedName = ?)"
 #                 q_params = [c_name]
 #
-#             # 필터링: 더빙엔 자막 제외, 자막엔 더빙 제외
-#             if is_dub:
-#                 query += " AND e.series_path NOT LIKE '%자막%' AND e.title NOT LIKE '%자막%'"
-#             elif is_sub:
-#                 query += " AND e.series_path NOT LIKE '%더빙%' AND e.title NOT LIKE '%더빙%'"
+#             # 🔴 [수정] 자막/더빙 필터링 제거 -> 두 종류 영상을 모두 가져옴
+#             # if is_dub:
+#             #     query += " AND e.series_path NOT LIKE '%자막%' AND e.title NOT LIKE '%자막%'"
+#             # elif is_sub:
+#             #     query += " AND e.series_path NOT LIKE '%더빙%' AND e.title NOT LIKE '%더빙%'"
 #
 #             is_special = any(k in (c_name or "") for k in SPECIAL_GRANULAR_GROUPS)
 #             if is_special:
 #                 path_parts = db_path.split('/')
 #                 if len(path_parts) >= 2:
-#                     # 'animations_all/라프텔/' 처럼 카테고리와 서브폴더까지만 경로 추출
 #                     folder_prefix = f"{path_parts[0]}/{path_parts[1]}/"
 #                     query += " AND e.series_path LIKE ?"
 #                     q_params.append(f"{folder_prefix}%")
@@ -3925,14 +4065,26 @@ _DETAIL_MEM_CACHE = {}
 #             ep_path = nfc(d['series_path'])
 #             ep_title = nfc(d['title'])
 #
+#             # 🔴 [추가] 각 에피소드 파일별 자막/더빙 태그 판별
+#             ep_is_dub = "더빙" in nfc(ep_path + ep_title).lower()
+#             ep_is_sub = "자막" in nfc(ep_path + ep_title).lower()
+#             tag = "[더빙]" if ep_is_dub else ("[자막]" if ep_is_sub else "")
+#
 #             # DB에서 가져온 기본값 (실제 번호)
-#             actual_sn = d.get('season_number') or 1
-#             actual_en = d.get('episode_number') or 1
+#             # actual_sn = d.get('season_number') or 1
+#             # actual_en = d.get('episode_number') or 1
+#
+#             # DB에서 가져온 기본값 (실제 번호)
+#             actual_sn = d.get('season_number') if d.get('season_number') is not None else 1
+#             actual_en = d.get('episode_number') if d.get('episode_number') is not None else 1
 #
 #             if is_single_movie:
 #                 s_disp, s_weight, en = "영화", 1, 1
+#             # 추가된 부분
+#             elif actual_sn == 0:
+#                 # 🔴 [핵심] DB의 시즌 번호가 0이면 무조건 스페셜로 분류!
+#                 s_disp, s_weight = "스페셜", 999
 #             else:
-#                 # 🔴 수정: 고정된 "1시즌" 대신 actual_sn을 사용
 #                 s_disp = f"{actual_sn}시즌"
 #                 s_weight = actual_sn
 #                 en = actual_en
@@ -3942,7 +4094,6 @@ _DETAIL_MEM_CACHE = {}
 #
 #                 full_name_upper = f"{ep_path}/{ep_title}".upper()
 #                 combined_name_nfc = nfc(parent_folder + " " + ep_title)
-#                 # 시즌 결정 우선순위 (실제 파싱된 값 > 폴더명 분석 > 1시즌)
 #                 temp_season = actual_sn
 #
 #                 # --- [엄격한 특별 분기: 애니메이션 카테고리 + 코난 미공개X파일 한정] ---
@@ -3963,7 +4114,6 @@ _DETAIL_MEM_CACHE = {}
 #                 elif any(kw in full_name_upper for kw in ["스페셜", "OVA", "OAD", "대괴수", "수학여행", "실종사건", "에피소드 원"]):
 #                     s_disp, s_weight = "스페셜", 999
 #                 else:
-#
 #                     clean_folder = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', parent_folder).strip()
 #                     season_match = re.search(r'(?i)(?:시즌|Season|S)\s*(\d+)|(\d+)\s*(?:기|시즌)', clean_folder)
 #
@@ -3980,7 +4130,6 @@ _DETAIL_MEM_CACHE = {}
 #                     elif any(kw in (parent_folder + ep_title).upper() for kw in ["스페셜", "OVA", "OAD", "특전"]):
 #                         s_disp, s_weight = "스페셜", 999
 #                     else:
-#
 #                         base_c_name = re.sub(r'\[.*?\\]|\(.*?\)|{.*?}', '', c_name).strip()
 #                         short_name = clean_folder.replace(base_c_name, '').strip()
 #
@@ -3989,8 +4138,6 @@ _DETAIL_MEM_CACHE = {}
 #                             num_match = re.search(r'\d+', short_name)
 #                             s_weight = int(num_match.group(0)) if num_match else 900
 #                         else:
-#                             # s_disp = f"{temp_season}시즌"
-#                             # s_weight = temp_season
 #                             if temp_season == 0:
 #                                 s_disp, s_weight = "스페셜", 999
 #                             else:
@@ -4000,72 +4147,68 @@ _DETAIL_MEM_CACHE = {}
 #                 if is_high_quality:
 #                     s_disp = f"고화질 ({s_disp})"
 #
-#                 # 파일명에서 'E' 또는 'EP' 뒤, 혹은 '화' 앞의 숫자만 타겟팅
 #                 ep_match = re.search(r'(?i)(?:[.\s_-](?:E|EP))\s*(\d+)|(\d+)\s*(?:화|회)', ep_title)
-#
 #                 if ep_match:
-#                     # 그룹 1(E01) 또는 그룹 2(01화)에서 숫자 추출
 #                     en = int(ep_match.group(1) or ep_match.group(2))
 #                 else:
-#                     # 마커가 없을 때 해상도 숫자(1080, 265, 10 등)를 배제하고 추출
-#                     # 4자리 숫자(1080, 2160) 및 3자리(265)를 피하기 위해
-#                     # 1~2자리 숫자 뭉치만 찾도록 정규식 수정
 #                     nums = re.findall(r'(?<!\d)\d{1,2}(?!\d)', ep_title)
 #                     en = int(nums[-1]) if nums else actual_en
 #
-#             # 1. 파일명에서 S와 E가 명확히 있는 경우 우선 파싱 (예: S01E01)
-#             s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
-#             # 2. E만 있는 경우 (예: E01)
-#             e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
-#             # 3. 화/회 가 있는 경우
-#             h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
-#
-#             if s_match:
-#                 actual_sn = int(s_match.group(1))
-#                 en = int(s_match.group(2))
-#             elif e_match:
-#                 en = int(e_match.group(1))
-#             elif h_match:
-#                 en = int(h_match.group(1))
-#             else:
-#                 # 마커가 없을 때 해상도(1080, 265, 10)를 피해서 번호를 찾기 위한 보완책
-#                 # 파일명에서 'E' 뒤에 오는 숫자만 찾는 패턴을 다시 시도
-#                 nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
-#                 if nums:
-#                     en = int(nums[0])
-#                 else:
-#                     # 최후의 수단: 파일명 끝부분의 숫자만 고려
-#                     nums = re.findall(r'\d+', ep_title)
-#                     en = int(nums[-1]) if nums else actual_en
-#             # 🔴 디버깅 로그 추가
-#             print(f"[DEBUG] EP: {ep_title} | display: {s_disp} | 실제시즌: {actual_sn} | 실제회차: {en} | 가중치: {s_weight}",
-#                   flush=True)
-#             # 🔴 [핵심 수정] 썸네일 경로 강제 보정
-#             # thumb_raw = d.get('thumbnailUrl')
-#             # final_thumb = None
+#             # 상세 파싱 (S/E 마커)
+#             # s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
+#             # e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
+#             # h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
 #             #
-#             # if thumb_raw:
-#             #     thumb_raw = thumb_raw.strip()
-#             #
-#             #     # 1. 이미 외부 전체 주소(http)인 경우
-#             #     if thumb_raw.startswith('http'):
-#             #         final_thumb = thumb_raw
-#             #
-#             #     # 2. 우리 서버 내부 라우터 경로인 경우 (앞에 /가 붙어있음)
-#             #     elif thumb_raw.startswith('/thumb_serve') or thumb_raw.startswith('/custom_poster'):
-#             #         final_thumb = thumb_raw
-#             #
-#             #     # 3. 🔴 TMDB 상대 경로인 경우 (슬래시(/)로 시작하는지 체크)
-#             #     elif thumb_raw.startswith('/'):
-#             #         # 슬래시로 시작하는 경로는 TMDB 이미지 경로로 간주
-#             #         # 단, '/thumb_serve' 같은 내부 경로는 위 2번에서 이미 걸러짐
-#             #         final_thumb = f"https://image.tmdb.org/t/p/w500{thumb_raw}"
-#             #
-#             #     # 4. 그 외: 슬래시 없이 파일명만 있는 경우
+#             # if s_match:
+#             #     actual_sn, en = int(s_match.group(1)), int(s_match.group(2))
+#             # elif e_match:
+#             #     en = int(e_match.group(1))
+#             # elif h_match:
+#             #     en = int(h_match.group(1))
+#             # else:
+#             #     nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
+#             #     if nums:
+#             #         en = int(nums[0])
 #             #     else:
-#             #         final_thumb = f"https://image.tmdb.org/t/p/w500/{thumb_raw}"
-#             # 🔴 DB에 있는 썸네일 경로를 그대로 가져옴 (가공 X)
+#             #         nums = re.findall(r'\d+', ep_title)
+#             #         en = int(nums[-1]) if nums else actual_en
+#
+#             # 상세 파싱 (S/E 마커)
+#             # s_match = re.search(r'(?i)S(\d+)[.\s_-]E(\d+)', ep_title)
+#             # e_match = re.search(r'(?i)(?:.\s_-)(?:\s|일)(\d+)', ep_title)
+#             # h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
+#             #
+#             # if s_match:
+#             #     actual_sn, en = int(s_match.group(1)), int(s_match.group(2))
+#             #
+#             #     # 🔴 [핵심 수정] s_disp를 무조건 덮어쓰지 않고,
+#             #     # '스페셜' 처리(S00)가 필요한 경우에만 '고화질' 태그를 유지하면서 변경합니다.
+#             #     if actual_sn == 0:
+#             #         if "고화질" in s_disp:
+#             #             s_disp = "고화질 (스페셜)"
+#             #         else:
+#             #             s_disp = "스페셜"
+#             #         s_weight = 999
+#             #     else:
+#             #         # 시즌 0이 아닌 일반 시즌(S01 등)일 때는,
+#             #         # 이미 위에서 잘 만들어진 s_disp("고화질 (1시즌)" 등)를 절대 건드리지 않습니다!
+#             #         pass
+#             #
+#             # elif e_match:
+#             #     en = int(e_match.group(1))
+#             # elif h_match:
+#             #     en = int(h_match.group(1))
+#             # else:
+#             #     nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
+#             #     if nums:
+#             #         en = int(nums[0])
+#             #     else:
+#             #         nums = re.findall(r'\d+', ep_title)
+#             #         en = int(nums[-1]) if nums else actual_en
+#
+#             # 썸네일 보정 로직
 #             thumb_raw = d.get('thumbnailUrl')
+#             final_thumb = None
 #             if thumb_raw:
 #                 thumb_raw = thumb_raw.strip()
 #                 if thumb_raw.startswith('http'):
@@ -4075,28 +4218,30 @@ _DETAIL_MEM_CACHE = {}
 #                     final_thumb = f"https://image.tmdb.org/t/p/w500{thumb_raw}"
 #                 else:
 #                     final_thumb = thumb_raw
-#             else:
-#                 final_thumb = None
 #
-#             print(f"[DEBUG] 최종 전송 썸네일: {final_thumb}", flush=True)
+#             # 🔴 [핵심] 태그 포함 제목 생성 -> 앱에서 중복 없이 구분됨
+#             display_title = f"{tag} {c_name} {en}화".strip()
+#
 #             all_refined_eps.append({
 #                 "id": str(d.get('id')),
-#                 "title": c_name,
+#                 "title": display_title,  # 🔴 태그가 포함된 제목 전송
 #                 "videoUrl": d.get('videoUrl'),
 #                 "thumbnailUrl": final_thumb,
 #                 "overview": d.get('overview'),
 #                 "air_date": d.get('air_date'),
-#                 "season_number": actual_sn,  # 🔴 순수 시즌 번호
-#                 "episode_number": en,  # 🔴 순수 회차 번호
+#                 "season_number": actual_sn,
+#                 "episode_number": en,
 #                 "display_season": s_disp,
-#                 "sort_weight": s_weight,  # 🔴 정렬용
+#                 "sort_weight": s_weight,
 #                 "position": d.get('position') or 0,
 #                 "duration": d.get('duration') or 0,
 #                 "runtime": d.get('runtime')
 #             })
 #
+#         # 정렬
 #         sorted_eps = sorted(all_refined_eps, key=lambda x: (x['sort_weight'], x['season_number'], x['episode_number']))
 #
+#         # 중복 제거 (ID 기준) -> 자막/더빙은 ID가 다르므로 둘 다 살아남음
 #         unique_eps_dict = {}
 #         for ep in sorted_eps:
 #             unique_eps_dict[ep['id']] = ep
@@ -4106,48 +4251,27 @@ _DETAIL_MEM_CACHE = {}
 #         for ep in final_sorted_eps:
 #             seasons_map.setdefault(ep['display_season'], []).append(ep)
 #
-#         final_season_count = len(seasons_map)
-#
-#         orig_raw_name = nfc(series_data.get('name', ''))
-#         tag = "더빙" if is_dub else "자막" if is_sub else ""
-#         base_title = c_name if c_name else nfc(series_data.get('tmdbTitle') or series_data.get('name'))
-#
-#         is_special = any(k in base_title for k in SPECIAL_GRANULAR_GROUPS)
-#         sub_folder = db_path.split('/')[1] if is_special and len(db_path.split('/')) > 2 else ""
-#         # if sub_folder and sub_folder not in base_title: base_title = f"{sub_folder} > {base_title}"
-#
-#         final_display_name = f"{base_title} [{tag}]" if tag and f"[{tag}]" not in base_title else base_title
-#         series_data["name"] = final_display_name.strip()
-#         log("DEBUG_FINAL", f"앱으로 보낼 최종 제목: {series_data['name']}")
-#         # 🔴 정렬 우선순위 정의 함수
+#         # 시즌 정렬
 #         def get_sort_priority(season_name):
-#             # 1. 스페셜은 제일 마지막 (가장 큰 숫자)
-#             if "스페셜" in season_name:
-#                 return 3
-#             # 2. 고화질은 그다음 (스페셜보다 작고 일반 시즌보다 큼)
-#             if "고화질" in season_name:
-#                 return 2
-#             # 3. 일반 시즌 (가장 작음)
+#             if "스페셜" in season_name: return 3
+#             if "고화질" in season_name: return 2
 #             return 1
 #
-#         # 🔴 우선순위와 함께 숫자 추출 정렬
 #         def get_season_number(season_name):
-#             # 문자열에서 숫자만 추출 (없으면 0)
 #             nums = re.findall(r'\d+', season_name)
 #             return int(nums[0]) if nums else 0
 #
-#         # 🔴 우선순위와 함께 이름순/번호순으로 정렬
-#         sorted_season_keys = sorted(seasons_map.keys(), key=lambda x: (
-#             get_sort_priority(x),
-#             get_season_number(x),  # 숫자로 정렬
-#             x  # 우선순위가 같다면 이름 순서대로 정렬
-#         ))
-#
-#         # 정렬된 키 순서대로 새 맵 생성
+#         sorted_season_keys = sorted(seasons_map.keys(), key=lambda x: (get_sort_priority(x), get_season_number(x), x))
 #         sorted_seasons_map = {k: seasons_map[k] for k in sorted_season_keys}
 #
 #         final_season_count = len(seasons_map)
-#         print(f"DEBUG: 정렬된 시즌 키 목록: {sorted_season_keys}")  # 🔴 서버 로그 확인
+#
+#         # 시리즈 제목 설정
+#         tag_series = "더빙" if is_dub else "자막" if is_sub else ""
+#         base_title = c_name if c_name else nfc(series_data.get('tmdbTitle') or series_data.get('name'))
+#         final_display_name = f"{base_title} [{tag_series}]" if tag_series and f"[{tag_series}]" not in base_title else base_title
+#         series_data["name"] = final_display_name.strip()
+#
 #         response_data = {
 #             **series_data,
 #             "seasonCount": final_season_count,
@@ -4161,7 +4285,7 @@ _DETAIL_MEM_CACHE = {}
 #     except Exception as e:
 #         return gzip_response({"error": str(e)})
 
-# 자막 더빙 중복 해결 버전
+
 @app.route('/api/series_detail')
 def get_series_detail_api():
     try:
@@ -4188,26 +4312,41 @@ def get_series_detail_api():
         is_dub = "더빙" in nfc(db_path + series_data.get('name', '')).lower()
         is_sub = "자막" in nfc(db_path + series_data.get('name', '')).lower()
 
+        # SQL에 적용할 태그 조건문 생성
+        if is_dub:
+            tag_clause = "AND (path LIKE '%더빙%' OR name LIKE '%더빙%')"
+        elif is_sub:
+            tag_clause = "AND (path LIKE '%자막%' OR name LIKE '%자막%')"
+        else:
+            tag_clause = "AND path NOT LIKE '%더빙%' AND name NOT LIKE '%더빙%' AND path NOT LIKE '%자막%' AND name NOT LIKE '%자막%'"
+
         # 극장판(단일 영화) 여부
         is_single_movie = (cat == 'movies') or ("극장판" in nfc(series_data.get('name', '')))
 
         all_refined_eps = []
+
+        # if is_single_movie:
+        #     query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path = ? OR e.series_path = ?"
+        #     rows = conn.execute(query, (db_path, nfd(db_path))).fetchall()
+        # else:
+        #     if t_id:
+        #         query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE tmdbId = ? AND cleanedName = ?)"
+        #         q_params = [t_id, c_name]
+        #     else:
+        #         query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE cleanedName = ?)"
+        #         q_params = [c_name]
+
         if is_single_movie:
             query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path = ? OR e.series_path = ?"
             rows = conn.execute(query, (db_path, nfd(db_path))).fetchall()
         else:
+            # 3. 🔴 쿼리 수정: 서브쿼리 내에 tag_clause를 추가하여 동일 태그 시리즈만 조회
             if t_id:
-                query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE tmdbId = ? AND cleanedName = ?)"
+                query = f"SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE tmdbId = ? AND cleanedName = ? {tag_clause})"
                 q_params = [t_id, c_name]
             else:
-                query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE cleanedName = ?)"
+                query = f"SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE cleanedName = ? {tag_clause})"
                 q_params = [c_name]
-
-            # 🔴 [수정] 자막/더빙 필터링 제거 -> 두 종류 영상을 모두 가져옴
-            # if is_dub:
-            #     query += " AND e.series_path NOT LIKE '%자막%' AND e.title NOT LIKE '%자막%'"
-            # elif is_sub:
-            #     query += " AND e.series_path NOT LIKE '%더빙%' AND e.title NOT LIKE '%더빙%'"
 
             is_special = any(k in (c_name or "") for k in SPECIAL_GRANULAR_GROUPS)
             if is_special:
@@ -4229,29 +4368,55 @@ def get_series_detail_api():
             ep_is_sub = "자막" in nfc(ep_path + ep_title).lower()
             tag = "[더빙]" if ep_is_dub else ("[자막]" if ep_is_sub else "")
 
-            # DB에서 가져온 기본값 (실제 번호)
-            actual_sn = d.get('season_number') or 1
-            actual_en = d.get('episode_number') or 1
+            # ================= [이 아래부터 덮어쓰기] =================
 
-            # DB에서 가져온 기본값 (실제 번호)
-            # actual_sn = d.get('season_number') if d.get('season_number') is not None else 1
-            # actual_en = d.get('episode_number') if d.get('episode_number') is not None else 1
+            # 1. 1차적으로 DB에서 값을 가져옵니다. (없으면 1로 임시 세팅)
+            actual_sn = d.get('season_number') if d.get('season_number') is not None else 1
+            actual_en = d.get('episode_number') if d.get('episode_number') is not None else 1
 
-            if is_single_movie:
-                s_disp, s_weight, en = "영화", 1, 1
+            # 2. 🔴 [핵심: 예외 처리 및 강제 보정] DB 값이 비어있거나, 파일명에 더 정확한 정보가 있으면 덮어씁니다!
+            s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
+            e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
+            h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
+
+            if s_match:
+                # 파일명에 S00E01 등 명확한 시즌/회차가 있으면 무조건 이걸 믿습니다.
+                actual_sn = int(s_match.group(1))
+                actual_en = int(s_match.group(2))
+            elif e_match:
+                actual_en = int(e_match.group(1))
+            elif h_match:
+                actual_en = int(h_match.group(1))
             else:
+                nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
+                if nums:
+                    actual_en = int(nums[0])
+                else:
+                    nums = re.findall(r'\d+', ep_title)
+                    nums = re.findall(r'\d+', ep_title)
+                    if nums: actual_en = int(nums[-1])
+
+            # 최종 확정된 에피소드 번호를 변수에 할당
+            en = actual_en
+
+            # 3. 화면 표시용 탭 이름(s_disp)과 정렬 가중치(s_weight) 결정
+            if is_single_movie:
+                s_disp, s_weight = "영화", 1
+            elif actual_sn == 0:
+                # 🔴 [핵심 분기] 시즌 0 (S00)은 무조건 "스페셜" 탭으로 보냅니다!
+                s_disp, s_weight = "스페셜", 999
+            else:
+                # 그 외의 경우: DB 값 또는 파싱된 값을 기반으로 기본 탭 이름 생성
                 s_disp = f"{actual_sn}시즌"
                 s_weight = actual_sn
-                en = actual_en
-
-                path_parts = ep_path.split('/')
-                parent_folder = path_parts[-2] if len(path_parts) >= 2 else ""
-
-                full_name_upper = f"{ep_path}/{ep_title}".upper()
-                combined_name_nfc = nfc(parent_folder + " " + ep_title)
                 temp_season = actual_sn
 
-                # --- [엄격한 특별 분기: 애니메이션 카테고리 + 코난 미공개X파일 한정] ---
+                # 폴더명 기반 예외 처리 로직 (코난 등 특수 케이스)
+                path_parts = ep_path.split('/')
+                parent_folder = path_parts[-2] if len(path_parts) >= 2 else ""
+                full_name_upper = f"{ep_path}/{ep_title}".upper()
+                combined_name_nfc = nfc(parent_folder + " " + ep_title)
+
                 if cat == 'animations_all' and "코난" in combined_name_nfc and "미공개X파일" in combined_name_nfc:
                     xfile_match = re.search(r'(?i)미공개\s*X\s*파일\s*(\d+)', combined_name_nfc)
                     if xfile_match:
@@ -4263,7 +4428,6 @@ def get_series_detail_api():
                         s_disp = "미공개X파일"
                         s_weight = 800
                         actual_sn = 800
-                # ------------------------------------------------------------------------
                 elif any(kw in full_name_upper for kw in ["극장판", "MOVIE"]):
                     s_disp, s_weight = "극장판", 1000
                 elif any(kw in full_name_upper for kw in ["스페셜", "OVA", "OAD", "대괴수", "수학여행", "실종사건", "에피소드 원"]):
@@ -4298,59 +4462,12 @@ def get_series_detail_api():
                             else:
                                 s_disp, s_weight = f"{temp_season}시즌", temp_season
 
-                is_high_quality = any(k in ep_path.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"])
-                if is_high_quality:
-                    s_disp = f"고화질 ({s_disp})"
+            # 4. 🔴 고화질 태그 붙이기 (모든 탭 배정이 끝난 가장 마지막에 1번만 실행)
+            is_high_quality = any(k in ep_path.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"])
+            if is_high_quality:
+                s_disp = f"고화질 ({s_disp})"
 
-                ep_match = re.search(r'(?i)(?:[.\s_-](?:E|EP))\s*(\d+)|(\d+)\s*(?:화|회)', ep_title)
-                if ep_match:
-                    en = int(ep_match.group(1) or ep_match.group(2))
-                else:
-                    nums = re.findall(r'(?<!\d)\d{1,2}(?!\d)', ep_title)
-                    en = int(nums[-1]) if nums else actual_en
-
-            # 상세 파싱 (S/E 마커)
-            s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
-            e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
-            h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
-
-            if s_match:
-                actual_sn, en = int(s_match.group(1)), int(s_match.group(2))
-            elif e_match:
-                en = int(e_match.group(1))
-            elif h_match:
-                en = int(h_match.group(1))
-            else:
-                nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
-                if nums:
-                    en = int(nums[0])
-                else:
-                    nums = re.findall(r'\d+', ep_title)
-                    en = int(nums[-1]) if nums else actual_en
-            #
-            # 상세 파싱 (S/E 마커)
-            # s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
-            # e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
-            # h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
-            #
-            # if s_match:
-            #     actual_sn, en = int(s_match.group(1)), int(s_match.group(2))
-            #     # 🔴 [핵심 수정] 파일명에서 시즌 0을 찾았다면, 표시 탭도 '스페셜'이나 '0시즌'으로 분리해줍니다.
-            #     if actual_sn == 0:
-            #         s_disp, s_weight = "스페셜", 999
-            #     elif not is_single_movie and "극장판" not in s_disp and "스페셜" not in s_disp:
-            #         s_disp, s_weight = f"{actual_sn}시즌", actual_sn
-            # elif e_match:
-            #     en = int(e_match.group(1))
-            # elif h_match:
-            #     en = int(h_match.group(1))
-            # else:
-            #     nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
-            #     if nums:
-            #         en = int(nums[0])
-            #     else:
-            #         nums = re.findall(r'\d+', ep_title)
-            #         en = int(nums[-1]) if nums else actual_en
+            # ================= [이 위까지 덮어쓰기 완료] =================
 
             # 썸네일 보정 로직
             thumb_raw = d.get('thumbnailUrl')
@@ -4371,6 +4488,7 @@ def get_series_detail_api():
             all_refined_eps.append({
                 "id": str(d.get('id')),
                 "title": display_title,  # 🔴 태그가 포함된 제목 전송
+                "tag": "더빙" if ep_is_dub else ("자막" if ep_is_sub else "기타"),
                 "videoUrl": d.get('videoUrl'),
                 "thumbnailUrl": final_thumb,
                 "overview": d.get('overview'),
@@ -4431,6 +4549,7 @@ def get_series_detail_api():
     except Exception as e:
         return gzip_response({"error": str(e)})
 
+
 def pre_generate_individual_task(ep_thumb_url):
     try:
         u = urllib.parse.urlparse(ep_thumb_url)
@@ -4440,6 +4559,109 @@ def pre_generate_individual_task(ep_thumb_url):
     except:
         pass
 
+# @app.route('/search')
+# def search_videos():
+#     try:
+#         q = request.args.get('q', '').strip()
+#         cat_filter = request.args.get('cat', '전체')
+#         if not q: return jsonify([])
+#         q_nfc = nfc(q)
+#         conn = get_db()
+#         cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
+#         target_cat = cat_map.get(cat_filter)
+#
+#         # 1. 기본 쿼리
+#         # AND posterPath IS NOT NULL
+#         query = """
+#             SELECT * FROM series
+#             WHERE (name LIKE ? OR name LIKE ? OR cleanedName LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ? OR tmdbTitle LIKE ?)
+#             AND cleanedName NOT IN ('1', '2', '3', '01', '02') -- 의미 없는 숫자 제목 제외
+#             AND EXISTS (SELECT 1 FROM episodes WHERE series_path = series.path)
+#         """
+#
+#         params = [f"%{q_nfc}%", f"%{nfd(q)}%", f"%{q_nfc}%", f"%{nfd(q)}%", f"%{q_nfc}%", f"%{nfd(q)}%"]
+#
+#         # 2. 카테고리 필터 동적 추가
+#         if target_cat:
+#             query += " AND category = ?"
+#             params.append(target_cat)
+#
+#         # 3. [개선] 제외 폴더 동적 추가
+#         for exclude_path in SEARCH_EXCLUDE_PATHS:
+#             query += " AND path NOT LIKE ?"
+#             params.append(f"{exclude_path}%")
+#
+#         special_names_cond = " OR ".join([f"cleanedName LIKE '%{g}%'" for g in SPECIAL_GRANULAR_GROUPS])
+#
+#         query += f"""
+#             GROUP BY category, tmdbId, cleanedName,
+#                 (CASE WHEN ({special_names_cond})
+#                       THEN (CASE WHEN path LIKE '%/%/%' THEN SUBSTR(path, INSTR(path, '/') + 1, INSTR(SUBSTR(path, INSTR(path, '/') + 1), '/') - 1) ELSE '' END)
+#                       ELSE '' END),
+#                 CASE WHEN (path LIKE '%더빙%' OR name LIKE '%더빙%') THEN '더빙' WHEN (path LIKE '%자막%' OR name LIKE '%자막%') THEN '자막' ELSE '' END
+#             ORDER BY
+#                 CASE WHEN tmdbTitle = ? OR cleanedName = ? THEN 1 WHEN tmdbTitle LIKE ? THEN 2 WHEN cleanedName LIKE ? THEN 3 ELSE 4 END ASC,
+#                 seasonCount DESC, name ASC
+#         """
+#
+#         # 정렬을 위한 파라미터 4개 추가
+#         params.extend([q_nfc, q_nfc, f'{q_nfc}%', f'{q_nfc}%'])
+#
+#         cursor = conn.execute(query, params)
+#         rows = []
+#         for row in cursor.fetchall():
+#             item = dict(row)
+#
+#             # --- [폴더 경로 추출 로직] ---
+#             spath = nfc(item.get('path', ''))
+#             parts = spath.split('/')
+#             sub_folder = parts[1] if len(parts) > 2 else ""
+#
+#             # 특수 관리 대상인지 확인
+#             is_special = any(k in nfc(item.get('cleanedName', '')) for k in SPECIAL_GRANULAR_GROUPS)
+#
+#             # 무조건 정제된 이름(cleanedName)이나 공식 이름(tmdbTitle)을 최우선으로 사용합니다.
+#             base_name = nfc(item.get('cleanedName') or item.get('tmdbTitle'))
+#
+#             if not base_name:
+#                 raw_name = nfc(item.get('name', ''))
+#                 base_name, _ = clean_title_complex(raw_name)
+#                 if not base_name: base_name = raw_name
+#
+#             # 특수 대상은 이름 앞에 폴더명을 붙여줍니다.
+#             if is_special and sub_folder:
+#                 base_name = f"{sub_folder} > {base_name}"
+#
+#             full_check = (nfc(item.get('path', '')) + " " + nfc(item.get('name', ''))).lower()
+#             tags = []
+#             if "더빙" in full_check: tags.append("더빙")
+#             if "자막" in full_check: tags.append("자막")
+#             if "극장판" in full_check or item.get('category') == 'movies': tags.append("극장판")
+#             tag_str = "".join([f" [{t}]" for t in tags])
+#
+#             processed = {
+#                 "name": f"{base_name}{tag_str}".strip(),
+#                 "cleanedName": item['cleanedName'],
+#                 "path": item['path'], "category": item['category'],
+#                 "posterPath": item['posterPath'] or "", "year": item['year'] or "",
+#                 "overview": (item['overview'] or "")[:200],
+#                 "genreIds": [], "genreNames": [], "director": item.get('director') or "",
+#                 "rating": item.get('rating') or "",
+#                 "tmdbTitle": item.get('tmdbTitle') or "", "tmdbId": item.get('tmdbId') or "",
+#                 "actors": [], "movies": [], "seasons": {}
+#             }
+#             for col in ['genreIds', 'genreNames', 'actors']:
+#                 try:
+#                     processed[col] = json.loads(item[col]) if item.get(col) else []
+#                 except:
+#                     processed[col] = []
+#             rows.append(processed)
+#         conn.close()
+#         return gzip_response(rows)
+#     except Exception as e:
+#         log("SEARCH_ERROR", f"검색 중 오류: {str(e)}")
+#         return jsonify([])
+
 @app.route('/search')
 def search_videos():
     try:
@@ -4448,48 +4670,46 @@ def search_videos():
         if not q: return jsonify([])
         q_nfc = nfc(q)
         conn = get_db()
+        conn.row_factory = sqlite3.Row
+
         cat_map = {"영화": "movies", "외국TV": "foreigntv", "국내TV": "koreantv", "애니메이션": "animations_all", "방송중": "air"}
         target_cat = cat_map.get(cat_filter)
 
-        # 1. 기본 쿼리
-        # AND posterPath IS NOT NULL
+        # 1. FTS5를 통해 후보군(rowid)을 빠르게 추출
+        fts_query = f'{q_nfc}*'
+
+        # 2. 복잡한 기존 정렬/그룹핑 로직을 유지하면서 FTS5 결과와 결합
+        # JOIN을 통해 FTS5 결과와 원본 시리즈 테이블을 매칭합니다.
         query = """
-            SELECT * FROM series
-            WHERE (name LIKE ? OR name LIKE ? OR cleanedName LIKE ? OR cleanedName LIKE ? OR tmdbTitle LIKE ? OR tmdbTitle LIKE ?)
-            AND cleanedName NOT IN ('1', '2', '3', '01', '02') -- 의미 없는 숫자 제목 제외
-            AND EXISTS (SELECT 1 FROM episodes WHERE series_path = series.path)
+            SELECT s.*
+            FROM series s
+            JOIN series_fts f ON s.rowid = f.rowid
+            WHERE series_fts MATCH ?
         """
+        params = [fts_query]
 
-        params = [f"%{q_nfc}%", f"%{nfd(q)}%", f"%{q_nfc}%", f"%{nfd(q)}%", f"%{q_nfc}%", f"%{nfd(q)}%"]
-
-        # 2. 카테고리 필터 동적 추가
         if target_cat:
-            query += " AND category = ?"
+            query += " AND s.category = ?"
             params.append(target_cat)
 
-        # 3. [개선] 제외 폴더 동적 추가
         for exclude_path in SEARCH_EXCLUDE_PATHS:
-            query += " AND path NOT LIKE ?"
+            query += " AND s.path NOT LIKE ?"
             params.append(f"{exclude_path}%")
 
-        special_names_cond = " OR ".join([f"cleanedName LIKE '%{g}%'" for g in SPECIAL_GRANULAR_GROUPS])
+        special_names_cond = " OR ".join([f"s.cleanedName LIKE '%{g}%'" for g in SPECIAL_GRANULAR_GROUPS])
 
         query += f"""
-            GROUP BY category, tmdbId, cleanedName,
+            GROUP BY s.category, s.tmdbId, s.cleanedName,
                 (CASE WHEN ({special_names_cond})
-                      THEN (CASE WHEN path LIKE '%/%/%' THEN SUBSTR(path, INSTR(path, '/') + 1, INSTR(SUBSTR(path, INSTR(path, '/') + 1), '/') - 1) ELSE '' END)
+                      THEN (CASE WHEN s.path LIKE '%/%/%' THEN SUBSTR(s.path, INSTR(s.path, '/') + 1, INSTR(SUBSTR(s.path, INSTR(s.path, '/') + 1), '/') - 1) ELSE '' END)
                       ELSE '' END),
-                CASE WHEN (path LIKE '%더빙%' OR name LIKE '%더빙%') THEN '더빙' WHEN (path LIKE '%자막%' OR name LIKE '%자막%') THEN '자막' ELSE '' END
-            ORDER BY
-                CASE WHEN tmdbTitle = ? OR cleanedName = ? THEN 1 WHEN tmdbTitle LIKE ? THEN 2 WHEN cleanedName LIKE ? THEN 3 ELSE 4 END ASC,
-                seasonCount DESC, name ASC
+                CASE WHEN (s.path LIKE '%더빙%' OR s.name LIKE '%더빙%') THEN '더빙' WHEN (s.path LIKE '%자막%' OR s.name LIKE '%자막%') THEN '자막' ELSE '' END
+            ORDER BY s.seasonCount DESC, s.name ASC
         """
-
-        # 정렬을 위한 파라미터 4개 추가
-        params.extend([q_nfc, q_nfc, f'{q_nfc}%', f'{q_nfc}%'])
 
         cursor = conn.execute(query, params)
         rows = []
+
         for row in cursor.fetchall():
             item = dict(row)
 
@@ -4502,7 +4722,11 @@ def search_videos():
             is_special = any(k in nfc(item.get('cleanedName', '')) for k in SPECIAL_GRANULAR_GROUPS)
 
             # 무조건 정제된 이름(cleanedName)이나 공식 이름(tmdbTitle)을 최우선으로 사용합니다.
-            base_name = nfc(item.get('cleanedName') or item.get('tmdbTitle'))
+            base_name = nfc(item.get('cleanedName') or item.get('tmdbTitle') or item.get('name'))
+            if "더빙" in item.get('path', '') or "더빙" in item.get('name', ''):
+                base_name += " [더빙]"
+            elif "자막" in item.get('path', '') or "자막" in item.get('name', ''):
+                base_name += " [자막]"
 
             if not base_name:
                 raw_name = nfc(item.get('name', ''))
@@ -4537,11 +4761,13 @@ def search_videos():
                 except:
                     processed[col] = []
             rows.append(processed)
+
         conn.close()
         return gzip_response(rows)
     except Exception as e:
-        log("SEARCH_ERROR", f"검색 중 오류: {str(e)}")
+        traceback.print_exc()
         return jsonify([])
+
 
 
 @app.route('/rescan_broken')

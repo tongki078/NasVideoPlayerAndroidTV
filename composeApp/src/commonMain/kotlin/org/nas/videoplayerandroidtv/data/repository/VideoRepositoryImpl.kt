@@ -42,7 +42,13 @@ class VideoRepositoryImpl : VideoRepository {
     }
 
     private fun Category.toSeries() = Series(
-        title = if (!cleanedName.isNullOrBlank()) cleanedName!! else (if (!name.isNullOrBlank()) name else (tmdbTitle ?: path?.split("/")?.lastOrNull() ?: "기타")).cleanTitle(),
+        title = when {
+            // [자막], [더빙] 태그 정보가 포함된 원본 name을 우선적으로 사용하여 검색 결과 등에서 구분 가능하게 함
+            !name.isNullOrBlank() && (name!!.contains("[") || name!!.contains("(")) -> name!!
+            !cleanedName.isNullOrBlank() -> cleanedName!!
+            !name.isNullOrBlank() -> name!!.cleanTitle()
+            else -> (tmdbTitle ?: path?.split("/")?.lastOrNull() ?: "기타").cleanTitle()
+        },
         cleanedName = cleanedName,
         episodes = movies ?: emptyList(),
         seasons = seasons ?: emptyMap(),

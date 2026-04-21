@@ -25,21 +25,18 @@ import org.nas.videoplayerandroidtv.domain.model.Series
 fun MovieCard(series: Series, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     
-    // 추가 태그 추출 (Regex 기반 개선)
+    // 제목에서 태그 추출 ([자막], [더빙] 등)
     val tags = remember(series.title) {
-        val tagRegex = Regex("\\[(.*?)\\]")
+        val tagRegex = Regex("""[\(\[]\s*(더빙|자막|한글|영어|KOR|DUB|SUB)\s*[\)\]]""", RegexOption.IGNORE_CASE)
         val matches = tagRegex.findAll(series.title)
         
-        val list = matches.map { it.groupValues[1].trim() }
+        matches.map { it.groupValues[1].uppercase().trim() }
             .filter { it.isNotEmpty() }
             .distinct()
             .toList()
-            
-        list
     }
 
-    // 시청 진행률 (전체 에피소드 중 가장 마지막으로 시청한 것의 평균 혹은 대표값)
-    // 여기서는 간단하게 첫 번째 에피소드의 진행률이 있다면 표시 (보통 단일 영화용)
+    // 시청 진행률 계산
     val mainEpisode = series.episodes.firstOrNull()
     val progress = remember(mainEpisode) {
         if (mainEpisode != null && (mainEpisode.duration ?: 0.0) > 0) {
@@ -85,19 +82,19 @@ fun MovieCard(series: Series, onClick: () -> Unit) {
             }
         }
 
-        // 뱃지 추가
+        // [수정] 자막/더빙 뱃지 표시 (우측 상단 또는 좌측 상단)
         if (tags.isNotEmpty()) {
             Surface(
-                color = Color.Black.copy(alpha = 0.7f),
-                shape = RoundedCornerShape(bottomEnd = 8.dp),
-                modifier = Modifier.align(Alignment.TopStart)
+                color = Color.Red.copy(alpha = 0.85f), // 더 눈에 띄게 빨간색 계열 사용
+                shape = RoundedCornerShape(bottomStart = 8.dp),
+                modifier = Modifier.align(Alignment.TopEnd)
             ) {
                 Text(
                     text = tags.joinToString(", "),
                     color = Color.White,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                 )
             }
         }

@@ -89,17 +89,40 @@ fun App(driver: SqlDriver) {
     var isTopBarFocused by remember { mutableStateOf(false) }
 
     // 검색 실행 로직
+//    LaunchedEffect(searchQuery) {
+//        if (searchQuery.isBlank()) {
+//            searchResultSeries = emptyList()
+//            isSearchLoading = false
+//            return@LaunchedEffect
+//        }
+//
+//        isSearchLoading = true
+//        delay(500)
+//        try {
+//            searchResultSeries = repository.searchVideos(searchQuery, "")
+//        } catch (e: Exception) {
+//            searchResultSeries = emptyList()
+//        } finally {
+//            isSearchLoading = false
+//        }
+//    }
+    // [App.kt 내 검색 LaunchedEffect 부분]
     LaunchedEffect(searchQuery) {
-        if (searchQuery.isBlank()) {
+        // 1. 2글자 미만일 때는 서버에 물어보지도 않음 (속도 향상 및 서버 보호)
+        if (searchQuery.trim().length < 2) {
             searchResultSeries = emptyList()
             isSearchLoading = false
             return@LaunchedEffect
         }
-        
+
         isSearchLoading = true
-        delay(500)
+
+        // 2. 사용자가 입력을 멈춘 뒤 0.7초 후에만 서버 호출 (Debounce)
+        delay(700)
+
         try {
-            searchResultSeries = repository.searchVideos(searchQuery, "")
+            // 3. 서버 호출 (이제 서버는 FTS5 덕분에 즉시 응답함)
+            searchResultSeries = repository.searchVideos(searchQuery.trim(), "")
         } catch (e: Exception) {
             searchResultSeries = emptyList()
         } finally {

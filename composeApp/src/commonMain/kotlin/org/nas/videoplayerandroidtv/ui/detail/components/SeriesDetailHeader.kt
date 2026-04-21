@@ -96,7 +96,8 @@ fun SeriesDetailHeader(
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = series.title.cleanTitle(), 
+                    // [수정] 자막/더빙 태그를 유지하여 제목 표시
+                    text = series.title.cleanTitle(keepTags = true),
                     color = Color.White, 
                     fontSize = 28.sp, 
                     fontWeight = FontWeight.ExtraBold

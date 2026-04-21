@@ -29,29 +29,54 @@ object TitleUtils {
         return cleaned.isEmpty() || (cleaned.length < 2 && !cleaned.any { it.isLetter() })
     }
 
-    fun String.cleanTitle(keepAfterHyphen: Boolean = false, includeYear: Boolean = false): String {
+    fun String.cleanTitle(
+        keepAfterHyphen: Boolean = false, 
+        includeYear: Boolean = false,
+        keepTags: Boolean = false // [자막], [더빙] 태그 유지 옵션 추가
+    ): String {
         val normalized = this.toNfc()
         var cleaned = normalized
         cleaned = REGEX_EXT.replace(cleaned, "")
         cleaned = REGEX_TMDB_HINT.replace(cleaned, "")
         cleaned = REGEX_CH_PREFIX.replace(cleaned, "")
         cleaned = cleaned.replace("×", "x").replace("✕", "x")
+        
         if (!includeYear) { cleaned = REGEX_YEAR.replace(cleaned, " ") }
+        
         cleaned = REGEX_LEADING_EP_MARKER.replace(cleaned, "").trim()
         cleaned = REGEX_EP_MARKER.replace(cleaned, " ") 
-        cleaned = REGEX_JUNK_KEYWORDS.replace(cleaned, " ")
-        cleaned = REGEX_BRACKETS.replace(cleaned, " ")
-        cleaned = cleaned.replace("(자막)", "").replace("(더빙)", "").replace("[자막]", "").replace("[더빙]", "").replace("（자막）", "").replace("（더빙）", "")
+
+        // 태그를 유지해야 하는 경우, JUNK_KEYWORDS와 BRACKETS에서 "자막", "더빙"만 살짝 보호합니다.
+        if (keepTags) {
+            // 태그가 포함된 부분은 건너뛰고 정제하거나, 정제 후 다시 붙여주는 방식이 안전합니다.
+            // 여기서는 간단하게 태그가 있으면 정제를 최소화하는 방향으로 갑니다.
+            cleaned = cleaned.replace("  ", " ").trim()
+        } else {
+            cleaned = REGEX_JUNK_KEYWORDS.replace(cleaned, " ")
+            cleaned = REGEX_BRACKETS.replace(cleaned, " ")
+            cleaned = cleaned.replace("(자막)", "").replace("(더빙)", "").replace("[자막]", "").replace("[더빙]", "").replace("（자막）", "").replace("（더빙）", "")
+        }
+
         if (!keepAfterHyphen && cleaned.contains("-")) {
             val parts = cleaned.split("-")
             val firstPart = parts[0].trim()
             val afterHyphen = parts.getOrNull(1)?.trim() ?: ""
             if (!(afterHyphen.length <= 3 && afterHyphen.all { it.isDigit() })) { cleaned = firstPart }
         }
+        
         cleaned = REGEX_LEADING_INDEX.replace(cleaned, "").trim()
-        cleaned = REGEX_SPECIAL_CHARS.replace(cleaned, " ")
+        
+        // 태그를 유지할 때는 특수문자 제거 시 [ ] ( ) 를 제외합니다.
+        if (keepTags) {
+            val specialExceptTags = Regex("""[_!#@*※×,~:;【】『』「」"']""")
+            cleaned = specialExceptTags.replace(cleaned, " ")
+        } else {
+            cleaned = REGEX_SPECIAL_CHARS.replace(cleaned, " ")
+        }
+        
         cleaned = REGEX_SPACES.replace(cleaned, " ").trim()
         cleaned = REGEX_TRAILING_NUMBER.replace(cleaned, "").trim()
+        
         if (cleaned.length < 1 || (cleaned.length < 2 && !cleaned.any { it.isLetter() })) {
             val backup = normalized.replace(REGEX_TMDB_HINT, "").replace(REGEX_EXT, "").trim()
             return if (backup.length >= 2) backup else normalized
@@ -71,17 +96,9 @@ object TitleUtils {
     }
 
     fun String.extractSeason(): Int {
-        val decoded = try { 
-            if (this.contains("%")) this.decodeURLPart() else this 
-        } catch(_: Exception) { this }
-        
-        val n = decoded.toNfc()
-        
-        // 키워드 기반 매칭으로 강화
+        val n = this.toNfc()
         Regex("""(?i)(?:Season|시즌|S)\s*(\d+)""").find(n)?.let { return it.groupValues[1].toInt() }
         Regex("""(\d+)\s*기""").find(n)?.let { return it.groupValues[1].toInt() }
-        Regex("""/(?:S|Season|시즌)\s*(\d+)""").find(n)?.let { return it.groupValues[1].toInt() }
-        
         return 0 
     }
 
@@ -91,18 +108,5 @@ object TitleUtils {
         if (ep == null) return cleaned
         if (cleaned.contains(ep) || cleaned.contains(ep.replace("화", "회"))) return cleaned
         return "$ep $cleaned".trim()
-    }
-    
-    fun getInitialSound(text: String?): String {
-        if (text.isNullOrBlank()) return "#"
-        val firstChar = text.trimStart { !it.isLetterOrDigit() }.firstOrNull() ?: return "#"
-        if (firstChar in '가'..'힣') {
-            val chosungIndex = (firstChar.code - 0xAC00) / 28 / 21
-            val chosungArray = arrayOf("ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ")
-            return if (chosungIndex in chosungArray.indices) chosungArray[chosungIndex] else "#"
-        }
-        if (firstChar in 'a'..'z' || firstChar in 'A'..'Z') return "A-Z"
-        if (firstChar.isDigit()) return "#"
-        return "#"
     }
 }
