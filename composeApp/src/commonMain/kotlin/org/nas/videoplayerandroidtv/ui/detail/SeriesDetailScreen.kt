@@ -139,8 +139,8 @@ fun SeriesDetailScreen(
 
         // 고정 상단 영역과 스크롤 가능 하단 영역으로 분리
         Row(modifier = Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 48.dp)) {
-            // Left Column: 항상 표시 (고정)
-            Column(modifier = Modifier.fillMaxWidth(0.5f).fillMaxHeight(), verticalArrangement = Arrangement.Top) {
+            // Left Column: 항상 표시 (고정). weight를 사용하여 유연하게 공간 확보
+            Column(modifier = Modifier.weight(1.1f).fillMaxHeight(), verticalArrangement = Arrangement.Top) {
                 val isMovie = currentSeries.category?.contains("movie") == true || state.seasons.firstOrNull()?.name?.contains("영화") == true
                 val displayTitle = remember(currentSeries.title) {
                     val tagRegex = Regex("""\[(더빙|자막)\]|\((더빙|자막)\)|【(더빙|자막)】""", RegexOption.IGNORE_CASE)
@@ -191,7 +191,10 @@ fun SeriesDetailScreen(
                 
                 // 버튼 영역 (상단 정보와 함께 고정)
                 if (!state.isLoading) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        modifier = Modifier.wrapContentWidth()
+                    ) {
                         if (resumeInfo != null) {
                             if (!resumeInfo.isNew) {
                                 val ep = resumeInfo.episode
@@ -204,15 +207,39 @@ fun SeriesDetailScreen(
                                     resumeInfo.isFinished -> "다시 보기"
                                     else -> "${seasonLabel}${episodeLabel}이어보기"
                                 }
-                                PremiumTvButton(text = btnLabel, icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(resumeButtonFocusRequester), onClick = { onPlay(resumeInfo.episode, allEpisodes, resumeInfo.position) })
+                                PremiumTvButton(
+                                    text = btnLabel,
+                                    icon = Icons.Default.PlayArrow,
+                                    isPrimary = true,
+                                    modifier = Modifier.height(44.dp).focusRequester(resumeButtonFocusRequester),
+                                    onClick = { onPlay(resumeInfo.episode, allEpisodes, resumeInfo.position) }
+                                )
                             }
-                            PremiumTvButton(text = if (!resumeInfo.isNew) "처음부터" else "재생", icon = if (!resumeInfo.isNew) Icons.Default.Refresh else Icons.Default.PlayArrow, isPrimary = resumeInfo.isNew, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first().copy(position = 0.0), allEpisodes, 0L) })
+                            PremiumTvButton(
+                                text = if (!resumeInfo.isNew) "처음부터" else "재생",
+                                icon = if (!resumeInfo.isNew) Icons.Default.Refresh else Icons.Default.PlayArrow,
+                                isPrimary = resumeInfo.isNew,
+                                modifier = Modifier.height(44.dp).focusRequester(playButtonFocusRequester),
+                                onClick = { onPlay(allEpisodes.first().copy(position = 0.0), allEpisodes, 0L) }
+                            )
                             
                             if (!isMovie || allEpisodes.size > 1) {
-                                PremiumTvButton(text = if (isMovie) "영상 목록" else "회차 정보", icon = Icons.AutoMirrored.Filled.List, isPrimary = false, modifier = Modifier.focusRequester(infoButtonFocusRequester), onClick = { state = state.copy(showEpisodeOverlay = true) })
+                                PremiumTvButton(
+                                    text = if (isMovie) "영상 목록" else "회차 정보",
+                                    icon = Icons.AutoMirrored.Filled.List,
+                                    isPrimary = false,
+                                    modifier = Modifier.height(44.dp).focusRequester(infoButtonFocusRequester),
+                                    onClick = { state = state.copy(showEpisodeOverlay = true) }
+                                )
                             }
                         } else if (allEpisodes.isNotEmpty()) {
-                             PremiumTvButton(text = "재생", icon = Icons.Default.PlayArrow, isPrimary = true, modifier = Modifier.focusRequester(playButtonFocusRequester), onClick = { onPlay(allEpisodes.first().copy(position = 0.0), allEpisodes, 0L) })
+                             PremiumTvButton(
+                                 text = "재생",
+                                 icon = Icons.Default.PlayArrow,
+                                 isPrimary = true,
+                                 modifier = Modifier.height(44.dp).focusRequester(playButtonFocusRequester),
+                                 onClick = { onPlay(allEpisodes.first().copy(position = 0.0), allEpisodes, 0L) }
+                             )
                         }
                     }
                 }
@@ -221,7 +248,7 @@ fun SeriesDetailScreen(
             // Right/Bottom Section: 부가 영상 섹션 (스크롤 가능)
             if (state.extras.isNotEmpty()) {
                 Spacer(modifier = Modifier.width(32.dp))
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(modifier = Modifier.weight(0.9f).fillMaxHeight()) {
                     item {
                         Text("부가 영상", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(vertical = 12.dp))
                     }
@@ -238,6 +265,9 @@ fun SeriesDetailScreen(
                         }
                     }
                 }
+            } else {
+                // 부가 영상이 없는 경우 우측 공간을 비움
+                Spacer(modifier = Modifier.weight(0.9f))
             }
         }
 
@@ -397,11 +427,33 @@ private fun PremiumTvButton(text: String, icon: androidx.compose.ui.graphics.vec
     val backgroundColor = if (isFocused) Color.White else if (isPrimary) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.15f)
     val contentColor = if (isFocused || isPrimary) Color.Black else Color.White
 
-    Surface(onClick = onClick, color = backgroundColor, shape = RoundedCornerShape(8.dp), modifier = modifier.onFocusChanged { isFocused = it.isFocused }.graphicsLayer { scaleX = scale; scaleY = scale }.height(44.dp).wrapContentWidth().shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(8.dp))) {
-        Row(modifier = Modifier.padding(horizontal = 24.dp).fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
+    Surface(
+        onClick = onClick,
+        color = backgroundColor,
+        shape = RoundedCornerShape(8.dp),
+        modifier = modifier
+            .widthIn(min = 120.dp)
+            .onFocusChanged { isFocused = it.isFocused }
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .height(44.dp)
+            .shadow(if (isFocused) 20.dp else 0.dp, RoundedCornerShape(8.dp))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
             Icon(icon, null, tint = contentColor, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(10.dp))
-            Text(text = text, color = contentColor, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = text,
+                color = contentColor,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Visible,
+                softWrap = false
+            )
         }
     }
 }

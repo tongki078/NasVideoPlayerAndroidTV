@@ -180,7 +180,7 @@ PATH_MAP = {
     "방송중": (os.path.join(PARENT_VIDEO_DIR, "방송중"), "air")
 }
 
-EXCLUDE_FOLDERS = ["성인", "19금", "Adult", "@eaDir", "#recycle", "Featurettes", "Special Effects"]
+EXCLUDE_FOLDERS = ["성인", "19금", "Adult", "@eaDir", "#recycle", "Special Effects"]
 VIDEO_EXTS = ('.mp4', '.mkv', '.avi', '.wmv', '.flv', '.ts', '.tp', '.m4v', '.m2ts', '.mov')
 # [추가] 검색 결과에서 제외할 DB 경로(시작 부분) 목록
 SEARCH_EXCLUDE_PATHS = [
@@ -1160,6 +1160,10 @@ def naruto_metadata_recovery():
 #     return season, episode
 
 def extract_episode_numbers(full_path):
+
+    if 'movies/' in full_path or 'movie_extras/' in full_path:
+        return 1, 1
+
     n = nfc(full_path)
     filename = os.path.basename(n)
 
@@ -1860,9 +1864,9 @@ def scan_and_match_targeted(target_absolute_path, prefix, cat_code, path_input):
         for file in files:
             if file.lower().endswith(VIDEO_EXTS):
                 fp = nfc(os.path.join(root, file))
-
                 # 🔴 [추가] 경로에 'featurettes'가 포함되어 있으면 카테고리를 'movie_extras'로 강제 변경
-                is_extra = "featurettes" in fp.lower()
+                normalized_path = fp.replace('\\', '/').lower()
+                is_extra = "/featurettes/" in normalized_path
                 final_cat = "movie_extras" if is_extra else cat_code
 
                 # 정제 수행
@@ -1877,7 +1881,7 @@ def scan_and_match_targeted(target_absolute_path, prefix, cat_code, path_input):
                     (full_spath, final_cat, series_name, ct, yr))
 
                 mid = hashlib.md5(fp.encode()).hexdigest()
-                sn, en = (1, 1) if cat_code == 'movies' else extract_episode_numbers(fp)
+                sn, en = (1, 1) if cat_code in ['movies', 'movie_extras'] else extract_episode_numbers(fp, category=final_cat)
 
                 cursor.execute(
                     'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl, season_number, episode_number, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -2121,31 +2125,38 @@ def run_match_missing_files(cat_code, path_input, missing_files):
             if not is_system_folder and len(grand_name_clean) > 1:
                 series_name = current_name
 
+
+            log("DEBUG_INSERT", f"SPATH값 : {spath}")
+            # 🔴 [추가] 경로에 'featurettes'가 포함되어 있으면 카테고리를 'movie_extras'로 강제 변경
+            normalized_path = spath.replace('\\', '/').lower()
+            is_extra = "/featurettes/" in normalized_path
+            final_cat = "movie_extras" if is_extra else cat_code
+
             # 3. 정제 수행
             ct, yr = clean_title_complex(series_name, full_path=None)
             if ct: found_cleaned_names.add(ct)
 
-            cursor.execute(
-                'INSERT OR IGNORE INTO series (path, category, name, cleanedName, yearVal, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
-                (spath, cat_code, series_name, ct, yr))
+            # cursor.execute(
+            #     'INSERT OR IGNORE INTO series (path, category, name, cleanedName, yearVal, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+            #     (spath, final_cat, series_name, ct, yr))
             series_status = "추가됨" if cursor.rowcount > 0 else "이미 존재"
             if cursor.rowcount > 0: inserted_series += 1
 
             mid = hashlib.md5(fp.encode()).hexdigest()
-            sn, en = (1, 1) if cat_code == 'movies' else extract_episode_numbers(fp)
+            sn, en = (1, 1) if final_cat in ('movies', 'movie_extras') else extract_episode_numbers(fp)
 
-            cursor.execute(
-                'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl, season_number, episode_number, updated_at, category) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)',
-                (mid, spath, os.path.basename(file_path_rel),
-                 f"/video_serve?type={url_prefix}&path={urllib.parse.quote(file_path_rel)}",
-                 f"/thumb_serve?type={url_prefix}&id={mid}&path={urllib.parse.quote(file_path_rel)}",
-                 sn, en, cat_code))
+            # cursor.execute(
+            #     'INSERT OR REPLACE INTO episodes (id, series_path, title, videoUrl, thumbnailUrl, season_number, episode_number, updated_at, category) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)',
+            #     (mid, spath, os.path.basename(file_path_rel),
+            #      f"/video_serve?type={url_prefix}&path={urllib.parse.quote(file_path_rel)}",
+            #      f"/thumb_serve?type={url_prefix}&id={mid}&path={urllib.parse.quote(file_path_rel)}",
+            #      sn, en, final_cat))
             if cursor.rowcount > 0: inserted_episodes += 1
             # 🔴 디버깅 로그: 상세 등록 정보 (DB 실행 직후 값 확인용)
             log("DEBUG_INSERT", f"--- DB 등록 디버그 ---")
             log("DEBUG_INSERT", f"파일명: {os.path.basename(file_path_rel)}")
             log("DEBUG_INSERT", f"시리즈 경로(spath): {spath}")
-            log("DEBUG_INSERT", f"카테고리(cat_code): {cat_code}")
+            log("DEBUG_INSERT", f"카테고리(cat_code): {final_cat}")
             log("DEBUG_INSERT", f"시리즈 이름(series_name): {series_name}")
             log("DEBUG_INSERT", f"시리즈 등록상태: {series_status}")
             log("DEBUG_INSERT", f"에피소드 정보: S{sn}E{en}")
@@ -2166,18 +2177,18 @@ def run_match_missing_files(cat_code, path_input, missing_files):
         #
         # log("MATCH_MISSING", "🎉 핀셋 매칭 및 모든 작업이 성공적으로 완료되었습니다.")
         # 🟢 [수정] 스레드를 직접 만들지 않고 큐에 넣기만 함
-        if found_cleaned_names:
-            global WORKER_RUNNING
-            for name in found_cleaned_names:
-                MATCH_QUEUE.put((name, cat_code))
+        # if found_cleaned_names:
+        #     global WORKER_RUNNING
+        #     for name in found_cleaned_names:
+        #         MATCH_QUEUE.put((name, cat_code))
+        #
+        #     with WORKER_LOCK:
+        #         if not WORKER_RUNNING:
+        #             WORKER_RUNNING = True
+        #             log("MATCH_MISSING", "워커 스레드를 시작합니다.")
+        #             threading.Thread(target=metadata_worker, daemon=True).start()
 
-            with WORKER_LOCK:
-                if not WORKER_RUNNING:
-                    WORKER_RUNNING = True
-                    log("MATCH_MISSING", "워커 스레드를 시작합니다.")
-                    threading.Thread(target=metadata_worker, daemon=True).start()
-
-            log("MATCH_MISSING", f"메타데이터 매칭 요청됨: {len(found_cleaned_names)}개 시리즈를 큐에 등록")
+            # log("MATCH_MISSING", f"메타데이터 매칭 요청됨: {len(found_cleaned_names)}개 시리즈를 큐에 등록")
         return len(found_cleaned_names)
 
     except Exception as e:
@@ -3987,7 +3998,6 @@ def get_list():
 _DETAIL_MEM_CACHE = {}
 
 
-# 자막 더빙 중복 해결 버전
 # @app.route('/api/series_detail')
 # def get_series_detail_api():
 #     try:
@@ -4014,26 +4024,41 @@ _DETAIL_MEM_CACHE = {}
 #         is_dub = "더빙" in nfc(db_path + series_data.get('name', '')).lower()
 #         is_sub = "자막" in nfc(db_path + series_data.get('name', '')).lower()
 #
+#         # SQL에 적용할 태그 조건문 생성
+#         if is_dub:
+#             tag_clause = "AND (path LIKE '%더빙%' OR name LIKE '%더빙%')"
+#         elif is_sub:
+#             tag_clause = "AND (path LIKE '%자막%' OR name LIKE '%자막%')"
+#         else:
+#             tag_clause = "AND path NOT LIKE '%더빙%' AND name NOT LIKE '%더빙%' AND path NOT LIKE '%자막%' AND name NOT LIKE '%자막%'"
+#
 #         # 극장판(단일 영화) 여부
 #         is_single_movie = (cat == 'movies') or ("극장판" in nfc(series_data.get('name', '')))
 #
 #         all_refined_eps = []
+#
+#         # if is_single_movie:
+#         #     query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path = ? OR e.series_path = ?"
+#         #     rows = conn.execute(query, (db_path, nfd(db_path))).fetchall()
+#         # else:
+#         #     if t_id:
+#         #         query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE tmdbId = ? AND cleanedName = ?)"
+#         #         q_params = [t_id, c_name]
+#         #     else:
+#         #         query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE cleanedName = ?)"
+#         #         q_params = [c_name]
+#
 #         if is_single_movie:
 #             query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path = ? OR e.series_path = ?"
 #             rows = conn.execute(query, (db_path, nfd(db_path))).fetchall()
 #         else:
+#             # 3. 🔴 쿼리 수정: 서브쿼리 내에 tag_clause를 추가하여 동일 태그 시리즈만 조회
 #             if t_id:
-#                 query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE tmdbId = ? AND cleanedName = ?)"
+#                 query = f"SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE tmdbId = ? AND cleanedName = ? {tag_clause})"
 #                 q_params = [t_id, c_name]
 #             else:
-#                 query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE cleanedName = ?)"
+#                 query = f"SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path IN (SELECT path FROM series WHERE cleanedName = ? {tag_clause})"
 #                 q_params = [c_name]
-#
-#             # 🔴 [수정] 자막/더빙 필터링 제거 -> 두 종류 영상을 모두 가져옴
-#             # if is_dub:
-#             #     query += " AND e.series_path NOT LIKE '%자막%' AND e.title NOT LIKE '%자막%'"
-#             # elif is_sub:
-#             #     query += " AND e.series_path NOT LIKE '%더빙%' AND e.title NOT LIKE '%더빙%'"
 #
 #             is_special = any(k in (c_name or "") for k in SPECIAL_GRANULAR_GROUPS)
 #             if is_special:
@@ -4055,33 +4080,55 @@ _DETAIL_MEM_CACHE = {}
 #             ep_is_sub = "자막" in nfc(ep_path + ep_title).lower()
 #             tag = "[더빙]" if ep_is_dub else ("[자막]" if ep_is_sub else "")
 #
-#             # DB에서 가져온 기본값 (실제 번호)
-#             # actual_sn = d.get('season_number') or 1
-#             # actual_en = d.get('episode_number') or 1
+#             # ================= [이 아래부터 덮어쓰기] =================
 #
-#             # DB에서 가져온 기본값 (실제 번호)
+#             # 1. 1차적으로 DB에서 값을 가져옵니다. (없으면 1로 임시 세팅)
 #             actual_sn = d.get('season_number') if d.get('season_number') is not None else 1
 #             actual_en = d.get('episode_number') if d.get('episode_number') is not None else 1
 #
+#             # 2. 🔴 [핵심: 예외 처리 및 강제 보정] DB 값이 비어있거나, 파일명에 더 정확한 정보가 있으면 덮어씁니다!
+#             s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
+#             e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
+#             h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
+#
+#             if s_match:
+#                 # 파일명에 S00E01 등 명확한 시즌/회차가 있으면 무조건 이걸 믿습니다.
+#                 actual_sn = int(s_match.group(1))
+#                 actual_en = int(s_match.group(2))
+#             elif e_match:
+#                 actual_en = int(e_match.group(1))
+#             elif h_match:
+#                 actual_en = int(h_match.group(1))
+#             else:
+#                 nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
+#                 if nums:
+#                     actual_en = int(nums[0])
+#                 else:
+#                     nums = re.findall(r'\d+', ep_title)
+#                     nums = re.findall(r'\d+', ep_title)
+#                     if nums: actual_en = int(nums[-1])
+#
+#             # 최종 확정된 에피소드 번호를 변수에 할당
+#             en = actual_en
+#
+#             # 3. 화면 표시용 탭 이름(s_disp)과 정렬 가중치(s_weight) 결정
 #             if is_single_movie:
-#                 s_disp, s_weight, en = "영화", 1, 1
-#             # 추가된 부분
+#                 s_disp, s_weight = "영화", 1
 #             elif actual_sn == 0:
-#                 # 🔴 [핵심] DB의 시즌 번호가 0이면 무조건 스페셜로 분류!
+#                 # 🔴 [핵심 분기] 시즌 0 (S00)은 무조건 "스페셜" 탭으로 보냅니다!
 #                 s_disp, s_weight = "스페셜", 999
 #             else:
+#                 # 그 외의 경우: DB 값 또는 파싱된 값을 기반으로 기본 탭 이름 생성
 #                 s_disp = f"{actual_sn}시즌"
 #                 s_weight = actual_sn
-#                 en = actual_en
-#
-#                 path_parts = ep_path.split('/')
-#                 parent_folder = path_parts[-2] if len(path_parts) >= 2 else ""
-#
-#                 full_name_upper = f"{ep_path}/{ep_title}".upper()
-#                 combined_name_nfc = nfc(parent_folder + " " + ep_title)
 #                 temp_season = actual_sn
 #
-#                 # --- [엄격한 특별 분기: 애니메이션 카테고리 + 코난 미공개X파일 한정] ---
+#                 # 폴더명 기반 예외 처리 로직 (코난 등 특수 케이스)
+#                 path_parts = ep_path.split('/')
+#                 parent_folder = path_parts[-2] if len(path_parts) >= 2 else ""
+#                 full_name_upper = f"{ep_path}/{ep_title}".upper()
+#                 combined_name_nfc = nfc(parent_folder + " " + ep_title)
+#
 #                 if cat == 'animations_all' and "코난" in combined_name_nfc and "미공개X파일" in combined_name_nfc:
 #                     xfile_match = re.search(r'(?i)미공개\s*X\s*파일\s*(\d+)', combined_name_nfc)
 #                     if xfile_match:
@@ -4093,7 +4140,6 @@ _DETAIL_MEM_CACHE = {}
 #                         s_disp = "미공개X파일"
 #                         s_weight = 800
 #                         actual_sn = 800
-#                 # ------------------------------------------------------------------------
 #                 elif any(kw in full_name_upper for kw in ["극장판", "MOVIE"]):
 #                     s_disp, s_weight = "극장판", 1000
 #                 elif any(kw in full_name_upper for kw in ["스페셜", "OVA", "OAD", "대괴수", "수학여행", "실종사건", "에피소드 원"]):
@@ -4128,68 +4174,12 @@ _DETAIL_MEM_CACHE = {}
 #                             else:
 #                                 s_disp, s_weight = f"{temp_season}시즌", temp_season
 #
-#                 is_high_quality = any(k in ep_path.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"])
-#                 if is_high_quality:
-#                     s_disp = f"고화질 ({s_disp})"
+#             # 4. 🔴 고화질 태그 붙이기 (모든 탭 배정이 끝난 가장 마지막에 1번만 실행)
+#             is_high_quality = any(k in ep_path.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"])
+#             if is_high_quality:
+#                 s_disp = f"고화질 ({s_disp})"
 #
-#                 ep_match = re.search(r'(?i)(?:[.\s_-](?:E|EP))\s*(\d+)|(\d+)\s*(?:화|회)', ep_title)
-#                 if ep_match:
-#                     en = int(ep_match.group(1) or ep_match.group(2))
-#                 else:
-#                     nums = re.findall(r'(?<!\d)\d{1,2}(?!\d)', ep_title)
-#                     en = int(nums[-1]) if nums else actual_en
-#
-#             # 상세 파싱 (S/E 마커)
-#             # s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
-#             # e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
-#             # h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
-#             #
-#             # if s_match:
-#             #     actual_sn, en = int(s_match.group(1)), int(s_match.group(2))
-#             # elif e_match:
-#             #     en = int(e_match.group(1))
-#             # elif h_match:
-#             #     en = int(h_match.group(1))
-#             # else:
-#             #     nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
-#             #     if nums:
-#             #         en = int(nums[0])
-#             #     else:
-#             #         nums = re.findall(r'\d+', ep_title)
-#             #         en = int(nums[-1]) if nums else actual_en
-#
-#             # 상세 파싱 (S/E 마커)
-#             # s_match = re.search(r'(?i)S(\d+)[.\s_-]E(\d+)', ep_title)
-#             # e_match = re.search(r'(?i)(?:.\s_-)(?:\s|일)(\d+)', ep_title)
-#             # h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
-#             #
-#             # if s_match:
-#             #     actual_sn, en = int(s_match.group(1)), int(s_match.group(2))
-#             #
-#             #     # 🔴 [핵심 수정] s_disp를 무조건 덮어쓰지 않고,
-#             #     # '스페셜' 처리(S00)가 필요한 경우에만 '고화질' 태그를 유지하면서 변경합니다.
-#             #     if actual_sn == 0:
-#             #         if "고화질" in s_disp:
-#             #             s_disp = "고화질 (스페셜)"
-#             #         else:
-#             #             s_disp = "스페셜"
-#             #         s_weight = 999
-#             #     else:
-#             #         # 시즌 0이 아닌 일반 시즌(S01 등)일 때는,
-#             #         # 이미 위에서 잘 만들어진 s_disp("고화질 (1시즌)" 등)를 절대 건드리지 않습니다!
-#             #         pass
-#             #
-#             # elif e_match:
-#             #     en = int(e_match.group(1))
-#             # elif h_match:
-#             #     en = int(h_match.group(1))
-#             # else:
-#             #     nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
-#             #     if nums:
-#             #         en = int(nums[0])
-#             #     else:
-#             #         nums = re.findall(r'\d+', ep_title)
-#             #         en = int(nums[-1]) if nums else actual_en
+#             # ================= [이 위까지 덮어쓰기 완료] =================
 #
 #             # 썸네일 보정 로직
 #             thumb_raw = d.get('thumbnailUrl')
@@ -4210,6 +4200,7 @@ _DETAIL_MEM_CACHE = {}
 #             all_refined_eps.append({
 #                 "id": str(d.get('id')),
 #                 "title": display_title,  # 🔴 태그가 포함된 제목 전송
+#                 "tag": "더빙" if ep_is_dub else ("자막" if ep_is_sub else "기타"),
 #                 "videoUrl": d.get('videoUrl'),
 #                 "thumbnailUrl": final_thumb,
 #                 "overview": d.get('overview'),
@@ -4270,7 +4261,6 @@ _DETAIL_MEM_CACHE = {}
 #     except Exception as e:
 #         return gzip_response({"error": str(e)})
 
-
 @app.route('/api/series_detail')
 def get_series_detail_api():
     try:
@@ -4306,8 +4296,9 @@ def get_series_detail_api():
             tag_clause = "AND path NOT LIKE '%더빙%' AND name NOT LIKE '%더빙%' AND path NOT LIKE '%자막%' AND name NOT LIKE '%자막%'"
 
         # 극장판(단일 영화) 여부
-        is_single_movie = (cat == 'movies') or ("극장판" in nfc(series_data.get('name', '')))
-
+        # is_single_movie = (cat == 'movies') or ("극장판" in nfc(series_data.get('name', '')))
+        # 극장판(단일 영화) 여부
+        is_single_movie = (cat in ['movies', 'movie', 'movie_extras']) or ("극장판" in nfc(series_data.get('name', '')))
         all_refined_eps = []
 
         # if is_single_movie:
@@ -4322,8 +4313,14 @@ def get_series_detail_api():
         #         q_params = [c_name]
 
         if is_single_movie:
-            query = "SELECT e.*, p.position, p.duration FROM episodes e LEFT JOIN playback_progress p ON e.id = p.episode_id WHERE e.series_path = ? OR e.series_path = ?"
-            rows = conn.execute(query, (db_path, nfd(db_path))).fetchall()
+            query = """
+                SELECT e.*, p.position, p.duration
+                FROM episodes e
+                LEFT JOIN playback_progress p ON e.id = p.episode_id
+                WHERE e.series_path = ? OR e.series_path = ?
+                   OR e.series_path IN (SELECT path FROM series WHERE category = 'movie_extras' AND cleanedName = ?)
+            """
+            rows = conn.execute(query, (db_path, nfd(db_path), c_name)).fetchall()
         else:
             # 3. 🔴 쿼리 수정: 서브쿼리 내에 tag_clause를 추가하여 동일 태그 시리즈만 조회
             if t_id:
@@ -4353,104 +4350,119 @@ def get_series_detail_api():
             ep_is_sub = "자막" in nfc(ep_path + ep_title).lower()
             tag = "[더빙]" if ep_is_dub else ("[자막]" if ep_is_sub else "")
 
+            # DB에서 가져온 원본 값 (파싱 전)
+            db_sn = d.get('season_number')
+            db_en = d.get('episode_number')
+
+            log("DEBUG_FINAL", f"제목: {ep_title}, DB_EN: {db_en}, Cat: {d.get('category')}")
+            is_movie_like = d.get('category') in ['movies', 'movie_extras']
             # ================= [이 아래부터 덮어쓰기] =================
+            if not is_movie_like:
+                # 1. 1차적으로 DB에서 값을 가져옵니다. (없으면 1로 임시 세팅)
+                actual_sn = d.get('season_number') if d.get('season_number') is not None else 1
+                actual_en = d.get('episode_number') if d.get('episode_number') is not None else 1
 
-            # 1. 1차적으로 DB에서 값을 가져옵니다. (없으면 1로 임시 세팅)
-            actual_sn = d.get('season_number') if d.get('season_number') is not None else 1
-            actual_en = d.get('episode_number') if d.get('episode_number') is not None else 1
+                # 2. 🔴 [핵심: 예외 처리 및 강제 보정] DB 값이 비어있거나, 파일명에 더 정확한 정보가 있으면 덮어씁니다!
+                s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
+                e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
+                h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
 
-            # 2. 🔴 [핵심: 예외 처리 및 강제 보정] DB 값이 비어있거나, 파일명에 더 정확한 정보가 있으면 덮어씁니다!
-            s_match = re.search(r'(?i)S(\d+)[.\s_-]*E(\d+)', ep_title)
-            e_match = re.search(r'(?i)(?:[.\s_-](?:E|EP|Episode))(?:\s*|일)(\d+)', ep_title)
-            h_match = re.search(r'(\d+)\s*(?:화|회)', ep_title)
-
-            if s_match:
-                # 파일명에 S00E01 등 명확한 시즌/회차가 있으면 무조건 이걸 믿습니다.
-                actual_sn = int(s_match.group(1))
-                actual_en = int(s_match.group(2))
-            elif e_match:
-                actual_en = int(e_match.group(1))
-            elif h_match:
-                actual_en = int(h_match.group(1))
-            else:
-                nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
-                if nums:
-                    actual_en = int(nums[0])
+                if s_match:
+                    # 파일명에 S00E01 등 명확한 시즌/회차가 있으면 무조건 이걸 믿습니다.
+                    actual_sn = int(s_match.group(1))
+                    actual_en = int(s_match.group(2))
+                elif e_match:
+                    actual_en = int(e_match.group(1))
+                elif h_match:
+                    actual_en = int(h_match.group(1))
                 else:
-                    nums = re.findall(r'\d+', ep_title)
-                    nums = re.findall(r'\d+', ep_title)
-                    if nums: actual_en = int(nums[-1])
-
-            # 최종 확정된 에피소드 번호를 변수에 할당
-            en = actual_en
-
-            # 3. 화면 표시용 탭 이름(s_disp)과 정렬 가중치(s_weight) 결정
-            if is_single_movie:
-                s_disp, s_weight = "영화", 1
-            elif actual_sn == 0:
-                # 🔴 [핵심 분기] 시즌 0 (S00)은 무조건 "스페셜" 탭으로 보냅니다!
-                s_disp, s_weight = "스페셜", 999
-            else:
-                # 그 외의 경우: DB 값 또는 파싱된 값을 기반으로 기본 탭 이름 생성
-                s_disp = f"{actual_sn}시즌"
-                s_weight = actual_sn
-                temp_season = actual_sn
-
-                # 폴더명 기반 예외 처리 로직 (코난 등 특수 케이스)
-                path_parts = ep_path.split('/')
-                parent_folder = path_parts[-2] if len(path_parts) >= 2 else ""
-                full_name_upper = f"{ep_path}/{ep_title}".upper()
-                combined_name_nfc = nfc(parent_folder + " " + ep_title)
-
-                if cat == 'animations_all' and "코난" in combined_name_nfc and "미공개X파일" in combined_name_nfc:
-                    xfile_match = re.search(r'(?i)미공개\s*X\s*파일\s*(\d+)', combined_name_nfc)
-                    if xfile_match:
-                        season_num = int(xfile_match.group(1))
-                        s_disp = f"미공개X파일 {season_num}"
-                        s_weight = 800 + season_num
-                        actual_sn = season_num
+                    nums = re.findall(r'(?i)(?<=E)(\d+)', ep_title)
+                    if nums:
+                        actual_en = int(nums[0])
                     else:
-                        s_disp = "미공개X파일"
-                        s_weight = 800
-                        actual_sn = 800
-                elif any(kw in full_name_upper for kw in ["극장판", "MOVIE"]):
-                    s_disp, s_weight = "극장판", 1000
-                elif any(kw in full_name_upper for kw in ["스페셜", "OVA", "OAD", "대괴수", "수학여행", "실종사건", "에피소드 원"]):
+                        nums = re.findall(r'\d+', ep_title)
+                        nums = re.findall(r'\d+', ep_title)
+                        if nums: actual_en = int(nums[-1])
+
+                # 최종 확정된 에피소드 번호를 변수에 할당
+                en = actual_en
+
+                # 3. 화면 표시용 탭 이름(s_disp)과 정렬 가중치(s_weight) 결정
+                if is_single_movie:
+                    s_disp, s_weight = "영화", 1
+                elif actual_sn == 0:
+                    # 🔴 [핵심 분기] 시즌 0 (S00)은 무조건 "스페셜" 탭으로 보냅니다!
                     s_disp, s_weight = "스페셜", 999
                 else:
-                    clean_folder = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', parent_folder).strip()
-                    season_match = re.search(r'(?i)(?:시즌|Season|S)\s*(\d+)|(\d+)\s*(?:기|시즌)', clean_folder)
+                    # 그 외의 경우: DB 값 또는 파싱된 값을 기반으로 기본 탭 이름 생성
+                    s_disp = f"{actual_sn}시즌"
+                    s_weight = actual_sn
+                    temp_season = actual_sn
 
-                    if season_match:
-                        season_num = int(season_match.group(1) or season_match.group(2))
-                        s_disp, s_weight = f"{season_num}시즌", season_num
-                        actual_sn = season_num
-                    elif re.search(r'^\d{1,2}$', clean_folder):
-                        season_num = int(clean_folder)
-                        s_disp, s_weight = f"{season_num}시즌", season_num
-                        actual_sn = season_num
-                    elif any(kw in (parent_folder + ep_title).upper() for kw in ["극장판", "MOVIE"]):
+                    # 폴더명 기반 예외 처리 로직 (코난 등 특수 케이스)
+                    path_parts = ep_path.split('/')
+                    parent_folder = path_parts[-2] if len(path_parts) >= 2 else ""
+                    full_name_upper = f"{ep_path}/{ep_title}".upper()
+                    combined_name_nfc = nfc(parent_folder + " " + ep_title)
+
+                    if cat == 'animations_all' and "코난" in combined_name_nfc and "미공개X파일" in combined_name_nfc:
+                        xfile_match = re.search(r'(?i)미공개\s*X\s*파일\s*(\d+)', combined_name_nfc)
+                        if xfile_match:
+                            season_num = int(xfile_match.group(1))
+                            s_disp = f"미공개X파일 {season_num}"
+                            s_weight = 800 + season_num
+                            actual_sn = season_num
+                        else:
+                            s_disp = "미공개X파일"
+                            s_weight = 800
+                            actual_sn = 800
+                    elif any(kw in full_name_upper for kw in ["극장판", "MOVIE"]):
                         s_disp, s_weight = "극장판", 1000
-                    elif any(kw in (parent_folder + ep_title).upper() for kw in ["스페셜", "OVA", "OAD", "특전"]):
+                    elif any(kw in full_name_upper for kw in ["스페셜", "OVA", "OAD", "대괴수", "수학여행", "실종사건", "에피소드 원"]):
                         s_disp, s_weight = "스페셜", 999
                     else:
-                        base_c_name = re.sub(r'\[.*?\\]|\(.*?\)|{.*?}', '', c_name).strip()
-                        short_name = clean_folder.replace(base_c_name, '').strip()
+                        clean_folder = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', parent_folder).strip()
+                        season_match = re.search(r'(?i)(?:시즌|Season|S)\s*(\d+)|(\d+)\s*(?:기|시즌)', clean_folder)
 
-                        if short_name and len(short_name) > 1 and any(c.isalnum() for c in short_name):
-                            s_disp = short_name
-                            num_match = re.search(r'\d+', short_name)
-                            s_weight = int(num_match.group(0)) if num_match else 900
+                        if season_match:
+                            season_num = int(season_match.group(1) or season_match.group(2))
+                            s_disp, s_weight = f"{season_num}시즌", season_num
+                            actual_sn = season_num
+                        elif re.search(r'^\d{1,2}$', clean_folder):
+                            season_num = int(clean_folder)
+                            s_disp, s_weight = f"{season_num}시즌", season_num
+                            actual_sn = season_num
+                        elif any(kw in (parent_folder + ep_title).upper() for kw in ["극장판", "MOVIE"]):
+                            s_disp, s_weight = "극장판", 1000
+                        elif any(kw in (parent_folder + ep_title).upper() for kw in ["스페셜", "OVA", "OAD", "특전"]):
+                            s_disp, s_weight = "스페셜", 999
                         else:
-                            if temp_season == 0:
-                                s_disp, s_weight = "스페셜", 999
-                            else:
-                                s_disp, s_weight = f"{temp_season}시즌", temp_season
+                            base_c_name = re.sub(r'\[.*?\\]|\(.*?\)|{.*?}', '', c_name).strip()
+                            short_name = clean_folder.replace(base_c_name, '').strip()
 
-            # 4. 🔴 고화질 태그 붙이기 (모든 탭 배정이 끝난 가장 마지막에 1번만 실행)
-            is_high_quality = any(k in ep_path.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"])
-            if is_high_quality:
-                s_disp = f"고화질 ({s_disp})"
+                            if short_name and len(short_name) > 1 and any(c.isalnum() for c in short_name):
+                                s_disp = short_name
+                                num_match = re.search(r'\d+', short_name)
+                                s_weight = int(num_match.group(0)) if num_match else 900
+                            else:
+                                if temp_season == 0:
+                                    s_disp, s_weight = "스페셜", 999
+                                else:
+                                    s_disp, s_weight = f"{temp_season}시즌", temp_season
+
+                # 4. 🔴 고화질 태그 붙이기 (모든 탭 배정이 끝난 가장 마지막에 1번만 실행)
+                is_high_quality = any(k in ep_path.upper() for k in ["4K", "UHD", "고화질", "BD", "BLURAY"])
+                if is_high_quality:
+                    s_disp = f"고화질 ({s_disp})"
+            else:
+                # 🔴 [추가] 영화/부가영상은 파싱하지 않고 DB 값(또는 기본값) 사용
+                s_disp, s_weight = "영화", 1
+                if d.get('category') == 'movie_extras':
+                    s_disp, s_weight = "부가 영상", 2
+                en = d.get('episode_number') or 1
+                actual_sn = d.get('season_number') or 1
+                # actual_en = d.get('episode_number') or 1
+                # en = actual_en
 
             # ================= [이 위까지 덮어쓰기 완료] =================
 
@@ -4515,6 +4527,12 @@ def get_series_detail_api():
 
         final_season_count = len(seasons_map)
 
+        extras = []
+        if t_id:
+            extras_rows = conn.execute("SELECT * FROM series WHERE category = 'movie_extras' AND tmdbId = ?",
+                                       (t_id,)).fetchall()
+            extras = [dict(r) for r in extras_rows]
+
         # 시리즈 제목 설정
         tag_series = "더빙" if is_dub else "자막" if is_sub else ""
         base_title = c_name if c_name else nfc(series_data.get('tmdbTitle') or series_data.get('name'))
@@ -4523,6 +4541,7 @@ def get_series_detail_api():
 
         response_data = {
             **series_data,
+            "extras": extras,
             "seasonCount": final_season_count,
             "episodes": final_sorted_eps, "movies": final_sorted_eps, "seasons": sorted_seasons_map,
             "genreIds": json.loads(series_data.get('genreIds', '[]')) if series_data.get('genreIds') else [],
@@ -4533,7 +4552,6 @@ def get_series_detail_api():
         return gzip_response(response_data)
     except Exception as e:
         return gzip_response({"error": str(e)})
-
 
 def pre_generate_individual_task(ep_thumb_url):
     try:
@@ -4681,17 +4699,29 @@ def search_videos():
             query += " AND s.path NOT LIKE ?"
             params.append(f"{exclude_path}%")
 
+        query += " AND s.category != 'movie_extras'"
         special_names_cond = " OR ".join([f"s.cleanedName LIKE '%{g}%'" for g in SPECIAL_GRANULAR_GROUPS])
 
+        # query += f"""
+        #     GROUP BY s.category, s.tmdbId, s.cleanedName,
+        #         (CASE WHEN ({special_names_cond})
+        #               THEN (CASE WHEN s.path LIKE '%/%/%' THEN SUBSTR(s.path, INSTR(s.path, '/') + 1, INSTR(SUBSTR(s.path, INSTR(s.path, '/') + 1), '/') - 1) ELSE '' END)
+        #               ELSE '' END),
+        #         CASE WHEN (s.path LIKE '%더빙%' OR s.name LIKE '%더빙%') THEN '더빙' WHEN (s.path LIKE '%자막%' OR s.name LIKE '%자막%') THEN '자막' ELSE '' END
+        #     ORDER BY s.seasonCount DESC, s.name ASC
+        # """
+
         query += f"""
-            GROUP BY s.category, s.tmdbId, s.cleanedName,
+            GROUP BY
+                CASE WHEN s.category IN ('movies', 'movie', 'movie_extras') THEN s.path ELSE s.category END,
+                CASE WHEN s.category IN ('movies', 'movie', 'movie_extras') THEN s.path ELSE s.tmdbId END,
+                CASE WHEN s.category IN ('movies', 'movie', 'movie_extras') THEN s.path ELSE s.cleanedName END,
                 (CASE WHEN ({special_names_cond})
                       THEN (CASE WHEN s.path LIKE '%/%/%' THEN SUBSTR(s.path, INSTR(s.path, '/') + 1, INSTR(SUBSTR(s.path, INSTR(s.path, '/') + 1), '/') - 1) ELSE '' END)
                       ELSE '' END),
                 CASE WHEN (s.path LIKE '%더빙%' OR s.name LIKE '%더빙%') THEN '더빙' WHEN (s.path LIKE '%자막%' OR s.name LIKE '%자막%') THEN '자막' ELSE '' END
             ORDER BY s.seasonCount DESC, s.name ASC
         """
-
         cursor = conn.execute(query, params)
         rows = []
 
@@ -5388,19 +5418,33 @@ def _generate_thumb_file(path_raw, prefix, tid, t, w):
             # 🔴 [주의] -fastseek 옵션 제거 (오류 원인)
             result = None
             try:
+                # cmd = [
+                #     FFMPEG_PATH, "-y",
+                #     "-skip_frame", "nokey",  # 👈 고사양 코덱(H.265 10bit 등)에서 연산량 90% 이상 감소
+                #     "-ss", str(t),
+                #     "-i", vp,
+                #     "-threads", "1",  # 다중 생성 시 오버헤드 최소화
+                #     "-vframes", "1",
+                #     "-q:v", "15",
+                #     "-preset", "ultrafast",  # 최고 속도 디코딩
+                #     "-vf", f"scale={target_w}:-1",
+                #     tp
+                # ]
                 cmd = [
                     FFMPEG_PATH, "-y",
-                    "-skip_frame", "nokey",  # 👈 고사양 코덱(H.265 10bit 등)에서 연산량 90% 이상 감소
+                    "-skip_frame", "nokey",
                     "-ss", str(t),
                     "-i", vp,
-                    "-threads", "1",  # 다중 생성 시 오버헤드 최소화
+                    "-threads", "1",
                     "-vframes", "1",
                     "-q:v", "15",
-                    "-preset", "ultrafast",  # 최고 속도 디코딩
-                    "-vf", f"scale={target_w}:-1",
+                    "-preset", "ultrafast",
+                    # 기존 스케일 필터 뒤에 format 필터를 추가하여 호환성 해결
+                    "-vf", f"scale={target_w}:-1,format=yuv420p",
+                    # 인코더에 따라 -strict unofficial이 필요할 경우 추가
+                    "-strict", "unofficial",
                     tp
                 ]
-
                 result = subprocess.run(cmd, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
             except subprocess.TimeoutExpired:
@@ -7430,14 +7474,25 @@ def _rebuild_fast_memory_cache():
                 if tag != "일반" and f"[{tag}]" not in display_name:
                     display_name = f"{display_name} [{tag}]"
 
+            # item = {
+            #     "path": path, "name": display_name.strip(), "cleanedName": r['cleanedName'],
+            #     "posterPath": r['posterPath'],
+            #     "year": r['year'], "genreNames": [], "tmdbId": r['tmdbId'], "rating": r['rating'],
+            #     "seasonCount": r['actual_seasons'] if r['actual_seasons'] and r['actual_seasons'] > 0 else (
+            #                 r['seasonCount'] or 1),
+            #     "_search_name": display_name.lower()
+            # }
+
             item = {
                 "path": path, "name": display_name.strip(), "cleanedName": r['cleanedName'],
                 "posterPath": r['posterPath'],
                 "year": r['year'], "genreNames": [], "tmdbId": r['tmdbId'], "rating": r['rating'],
                 "seasonCount": r['actual_seasons'] if r['actual_seasons'] and r['actual_seasons'] > 0 else (
-                            r['seasonCount'] or 1),
-                "_search_name": display_name.lower()
+                        r['seasonCount'] or 1),
+                "_search_name": display_name.lower(),
+                "category": r['category']
             }
+
             try:
                 if r['genreNames']: item["genreNames"] = json.loads(r['genreNames'])
             except:
@@ -11059,8 +11114,15 @@ def api_sql_query():
 
         # 4. 데이터 변경 문(UPDATE/INSERT 등)인 경우
         conn.commit()
+        count = cursor.rowcount
         conn.close()
-        return jsonify({"status": "success", "message": f"실행 완료. 행 수: {cursor.rowcount}"})
+        # 🔴 [핵심 수정] 표 형식을 기대하는 프론트엔드를 위해 더미 데이터 반환
+        return jsonify({
+            "status": "success",
+            "message": f"실행 완료. 행 수: {count}",
+            "columns": ["message"],  # 더미 컬럼
+            "data": [{"message": f"Successfully updated {count} rows."}]  # 더미 데이터
+        })
 
     except Exception as e:
         conn.close()
@@ -12640,6 +12702,7 @@ def find_folders_v2():
     log("V2_SEARCH", f"검색어 '{query}' 결과: {len(results)}건 (504 방지 최적화 적용)")
     return jsonify(results)
 
+# 스캔 및 메타데이터 매칭 실행 기능 함수
 @app.route('/api/admin/v2_action')
 def v2_action():
     path = request.args.get('path')  # 예: 'UHD/가'
