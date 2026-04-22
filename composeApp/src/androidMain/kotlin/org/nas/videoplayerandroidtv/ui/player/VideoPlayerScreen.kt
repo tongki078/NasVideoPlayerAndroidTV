@@ -57,6 +57,7 @@ import org.nas.videoplayerandroidtv.domain.repository.VideoRepository
 import org.nas.videoplayerandroidtv.util.TitleUtils.cleanTitle
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractEpisode
 import org.nas.videoplayerandroidtv.util.TitleUtils.extractSeason
+import org.nas.videoplayerandroidtv.util.TitleUtils.prettyTitle
 
 /**
  * Pause 아이콘
@@ -88,6 +89,7 @@ fun VideoPlayerScreen(
     movie: Movie,
     playlist: List<Movie> = emptyList(),
     initialPosition: Long = 0L,
+    isMovieContext: Boolean = false,
     repository: VideoRepository,
     onPositionUpdate: (Long, Long) -> Unit = { _, _ -> },
     onNextMovie: (Movie) -> Unit,
@@ -213,20 +215,6 @@ fun VideoPlayerScreen(
         try { mainBoxFocusRequester.requestFocus() } catch(e: Exception) {}
     }
 
-//    LaunchedEffect(currentPosition, totalDuration, movie.id) {
-//        if (currentPosition > 0 && totalDuration > 0 && !isSeeking) {
-//            onPositionUpdate(currentPosition, totalDuration)
-//            if (currentPosition % 10000 < 1000 || currentPosition > totalDuration - 5000) {
-//                scope.launch {
-//                    repository.updateProgress(
-//                        movie.id ?: "",
-//                        currentPosition / 1000.0,
-//                        totalDuration / 1000.0
-//                    )
-//                }
-//            }
-//        }
-//    }
     // 🔥 [버그 수정] 서버 디도스 및 영상 정지 방지를 위한 변수 추가
     var lastUpdatePos by remember(movie.id) { mutableLongStateOf(0L) }
 
@@ -393,8 +381,18 @@ fun VideoPlayerScreen(
                         modifier = Modifier.padding(top = 32.dp, end = 48.dp),
                         horizontalAlignment = Alignment.End
                     ) {
+                        // 🔴 [수정] 0화, 0시즌이거나, "영화" 카테고리로 간주되는 경우 시즌/회차 표시 숨김
+                        // 1. isMovieContext 파라미터 활용
+                        val tagRegex = Regex("""\[(더빙|자막)\]|\((더빙|자막)\)|【(더빙|자막)】""", RegexOption.IGNORE_CASE)
+                        val displayTitle = if (isMovieContext) {
+                            // 영화일 때는 제목에서 1화 같은 넘버링과 더빙 태그를 완전히 제거하고 순수 제목만 보여줍니다.
+                            (movie.title ?: "").replace(tagRegex, "").trim().prettyTitle(showEpisode = false)
+                        } else {
+                            movie.title ?: ""
+                        }
+
                         Text(
-                            text = movie.title ?: "",
+                            text = displayTitle,
                             color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
                             style = LocalTextStyle.current.copy(shadow = Shadow(Color.Black, androidx.compose.ui.geometry.Offset(2f, 2f), 4f))
                         )
@@ -402,9 +400,12 @@ fun VideoPlayerScreen(
                         val season = movie.season_number ?: 0
                         val episode = movie.episode_number ?: 0
 
+                        // 🔴 [수정] isMovieContext일 때는 하단의 "시즌 1 : 1화" 텍스트 렌더링 자체를 스킵합니다.
                         val infoLabel = buildString {
-                            if (season > 0) append("시즌 $season ")
-                            if (episode > 0) append(": ${episode}화")
+                            if (!isMovieContext && season > 0 && episode > 0) {
+                                append("시즌 $season ")
+                                append(": ${episode}화")
+                            }
                         }
 
                         if (infoLabel.isNotBlank()) {

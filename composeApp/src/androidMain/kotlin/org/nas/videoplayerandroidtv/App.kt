@@ -266,6 +266,7 @@ fun App(driver: SqlDriver) {
                                 movie = selectedMovie!!, 
                                 playlist = moviePlaylist, 
                                 initialPosition = lastPlaybackPosition, 
+                                isMovieContext = selectedSeries?.category == "movies" || selectedSeries?.category == "movie_extras" || (selectedSeries == null && moviePlaylist.size <= 1),
                                 repository = repository,
                                 onPositionUpdate = { pos: Long, dur: Long -> 
                                     lastPlaybackPosition = pos; 
