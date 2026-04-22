@@ -102,9 +102,11 @@ object TitleUtils {
         return 0 
     }
 
-    fun String.prettyTitle(): String {
-        val ep = this.extractEpisode()
+    fun String.prettyTitle(showEpisode: Boolean = true): String {
         val cleaned = this.cleanTitle(keepAfterHyphen = false, includeYear = false)
+        if (!showEpisode) return cleaned
+        
+        val ep = this.extractEpisode()
         if (ep == null) return cleaned
         if (cleaned.contains(ep) || cleaned.contains(ep.replace("화", "회"))) return cleaned
         return "$ep $cleaned".trim()

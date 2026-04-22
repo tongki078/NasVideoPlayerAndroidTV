@@ -25,7 +25,13 @@ import org.nas.videoplayerandroidtv.ui.common.shimmerBrush
 import org.nas.videoplayerandroidtv.util.TitleUtils.prettyTitle
 
 @Composable
-fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String? = null, onPlay: () -> Unit) {
+fun EpisodeItem(
+    movie: Movie, 
+    seriesOverview: String?, 
+    seriesPosterPath: String? = null, 
+    showEpisode: Boolean = true,
+    onPlay: () -> Unit
+) {
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) { 1.03f } else 1f, label = "EpisodeItemScale")
 
@@ -116,7 +122,7 @@ fun EpisodeItem(movie: Movie, seriesOverview: String?, seriesPosterPath: String?
             val tagRegex = Regex("""\[(더빙|자막)\]|\((더빙|자막)\)|【(더빙|자막)】""", RegexOption.IGNORE_CASE)
             
             // 🔴 제목에서 태그를 제거하고 깨끗한 제목만 추출
-            val displayTitle = fullTitle.replace(tagRegex, "").trim().prettyTitle()
+            val displayTitle = fullTitle.replace(tagRegex, "").trim().prettyTitle(showEpisode = showEpisode)
             
             // 🔴 뱃지 표시용 태그만 따로 추출
             val typeTag = remember(fullTitle) {
