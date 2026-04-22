@@ -151,7 +151,7 @@ fun SeriesDetailScreen(
 
         Row(modifier = Modifier.fillMaxSize().padding(horizontal = 64.dp).padding(top = 48.dp)) { 
             LazyColumn(
-                modifier = Modifier.weight(1.5f).fillMaxHeight(),
+                modifier = Modifier.fillMaxWidth().fillMaxHeight(),
                 verticalArrangement = Arrangement.Top
             ) {
                 item {
@@ -216,22 +216,19 @@ fun SeriesDetailScreen(
                     Spacer(modifier = Modifier.height(32.dp))
                 }
 
-                // 🔴 부가 영상 섹션
+                // 🔴 부가 영상 섹션 - 영화 필름 디자인 (가로 영역 확장)
                 if (state.extras.isNotEmpty()) {
                     item {
                         Text("부가 영상", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(vertical = 12.dp))
                     }
                     item {
                         LazyRow(
-                            modifier = Modifier.fillMaxWidth().height(140.dp),
-                            contentPadding = PaddingValues(bottom = 16.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp) // 간격 줄임
                         ) {
                             items(state.extras) { extra ->
-                                Box(modifier = Modifier.width(100.dp)) {
-                                    MovieCard(series = Series(title = extra.title ?: "", episodes = listOf(extra), posterPath = extra.thumbnailUrl)) {
-                                        onPlay(extra, listOf(extra), 0L)
-                                    }
-                                }
+                                FilmStripItem(movie = extra) { onPlay(extra, listOf(extra), 0L) }
                             }
                         }
                     }
@@ -278,7 +275,6 @@ fun SeriesDetailScreen(
                     }
                 }
             }
-            Box(modifier = Modifier.weight(0.6f))
         }
 
         if (state.showEpisodeOverlay && state.seasons.isNotEmpty()) {
@@ -297,6 +293,41 @@ fun SeriesDetailScreen(
                 }, 
                 onClose = { state = state.copy(showEpisodeOverlay = false) }
             )
+        }
+    }
+}
+
+@Composable
+fun FilmStripItem(movie: Movie, onClick: () -> Unit) {
+    var isFocused by remember { mutableStateOf(false) }
+    
+    Surface(
+        onClick = onClick,
+        color = Color.Transparent,
+        modifier = Modifier
+            .width(160.dp)
+            .height(90.dp)
+            .onFocusChanged { isFocused = it.isFocused }
+            .graphicsLayer { scaleX = if (isFocused) 1.1f else 1f; scaleY = if (isFocused) 1.1f else 1f }
+    ) {
+        Box(modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp).border(2.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(4.dp)).clip(RoundedCornerShape(4.dp))) {
+            AsyncImage(
+                model = movie.thumbnailUrl,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+            // 필름 느낌의 구멍(Sprocket holes)
+            Column(modifier = Modifier.fillMaxHeight().width(12.dp).align(Alignment.CenterStart), verticalArrangement = Arrangement.SpaceEvenly) {
+                repeat(4) { Box(modifier = Modifier.size(6.dp).background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))) }
+            }
+            Column(modifier = Modifier.fillMaxHeight().width(12.dp).align(Alignment.CenterEnd), verticalArrangement = Arrangement.SpaceEvenly) {
+                repeat(4) { Box(modifier = Modifier.size(6.dp).background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))) }
+            }
+            
+            if (isFocused) {
+                Box(modifier = Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.2f)))
+            }
         }
     }
 }
