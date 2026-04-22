@@ -77,7 +77,7 @@ fun SeriesDetailScreen(
         
         if (seriesForSeasons.episodes.isNotEmpty() || seriesForSeasons.seasons.isNotEmpty()) {
             val initialSeasons = withContext(Dispatchers.Default) { loadSeasons(seriesForSeasons) }
-            state = state.copy(seasons = initialSeasons, extras = extraEpisodes, isLoading = initialSeasons.isEmpty())
+            state = state.copy(seasons = initialSeasons, extras = extraEpisodes.distinctBy { it.videoUrl?.substringAfterLast("/") }, isLoading = initialSeasons.isEmpty())
         }
 
         val fullSeries = if (series.fullPath != null) {
@@ -95,9 +95,16 @@ fun SeriesDetailScreen(
             it.videoUrl?.contains("Featurettes", ignoreCase = true) == true
         }
         
+        // 중복 해결: videoUrl의 경로 전체가 아니라 '마지막 파일명'을 기준으로 중복 제거
+        val uniqueExtras = fullExtra.distinctBy { 
+            it.videoUrl?.substringAfterLast("/") 
+        }
+        
+        state = state.copy(extras = uniqueExtras, isLoading = false)
+
         // 3. 본편 에피소드(fullMain)로만 시즌 정보 생성
         val finalSeasons = withContext(Dispatchers.Default) { loadSeasons(fullSeries.copy(episodes = fullMain)) }
-        state = state.copy(seasons = finalSeasons, extras = fullExtra, isLoading = false)
+        state = state.copy(seasons = finalSeasons, isLoading = false)
     }
 
     val allEpisodes = state.seasons.flatMap { it.episodes }
