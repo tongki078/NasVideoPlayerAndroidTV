@@ -69,16 +69,10 @@ fun SeriesDetailScreen(
     LaunchedEffect(series.fullPath) {
         state = state.copy(isLoading = true)
         
-        // 🔴 [수정] 에피소드 및 시즌에서 부가 영상 파티션
         val (extraEpisodes, mainEpisodes) = series.episodes.partition {
             it.videoUrl?.contains("Featurettes", ignoreCase = true) == true
         }
-
-        val filteredSeasons = series.seasons.mapValues { (_, episodes) ->
-            episodes.filter { it.videoUrl?.contains("Featurettes", ignoreCase = true) != true }
-        }.filter { it.value.isNotEmpty() }
-
-        val seriesForSeasons = series.copy(episodes = mainEpisodes, seasons = filteredSeasons)
+        val seriesForSeasons = series.copy(episodes = mainEpisodes)
         
         if (seriesForSeasons.episodes.isNotEmpty() || seriesForSeasons.seasons.isNotEmpty()) {
             val initialSeasons = withContext(Dispatchers.Default) { loadSeasons(seriesForSeasons) }
@@ -94,16 +88,10 @@ fun SeriesDetailScreen(
         } else series
         
         currentSeries = fullSeries
-
-        // 🔴 fullSeries도 분리
         val (fullExtra, fullMain) = fullSeries.episodes.partition {
             it.videoUrl?.contains("Featurettes", ignoreCase = true) == true
         }
-        val fullFilteredSeasons = fullSeries.seasons.mapValues { (_, episodes) ->
-            episodes.filter { it.videoUrl?.contains("Featurettes", ignoreCase = true) != true }
-        }.filter { it.value.isNotEmpty() }
-
-        val finalSeasons = withContext(Dispatchers.Default) { loadSeasons(fullSeries.copy(episodes = fullMain, seasons = fullFilteredSeasons)) }
+        val finalSeasons = withContext(Dispatchers.Default) { loadSeasons(fullSeries.copy(episodes = fullMain)) }
         state = state.copy(seasons = finalSeasons, extras = fullExtra, isLoading = false)
     }
 
@@ -281,6 +269,7 @@ fun SeriesDetailScreen(
 
         if (state.showEpisodeOverlay && state.seasons.isNotEmpty()) {
             EpisodeOverlay(
+                series = currentSeries,
                 seriesTitle = currentSeries.title,
                 seriesYear = currentSeries.year,
                 state = state, 
@@ -415,6 +404,7 @@ private data class ResumeInfo(val episode: Movie, val position: Long, val isNew:
 
 @Composable
 private fun EpisodeOverlay(
+    series: Series,
     seriesTitle: String,
     seriesYear: String?,
     state: SeriesDetailState, 
@@ -499,8 +489,15 @@ private fun EpisodeOverlay(
                     Spacer(modifier = Modifier.height(20.dp))
                     LazyColumn(state = episodeListState, verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
                         items(currentSeason?.episodes ?: emptyList()) { movie -> 
-                            val episodeNum = movie.episode_number ?: 0
-                            val displayTitle = if (episodeNum > 0) "${episodeNum}화 - ${movie.title}" else (movie.title ?: "제목 없음")
+                            val tagRegex = Regex("""\d+화|\d+회|화 -|회 -""", RegexOption.IGNORE_CASE)
+                            val cleanTitle = movie.title?.replace(tagRegex, "")?.trim() ?: "제목 없음"
+
+                            val displayTitle = if (series.category != "movies" && series.category != "movie_extras" && (movie.episode_number ?: 0) > 0) {
+                                "${movie.episode_number}화 - $cleanTitle"
+                            } else {
+                                cleanTitle
+                            }
+
                             EpisodeItem(movie = movie.copy(title = displayTitle), seriesOverview = seriesOverview, seriesPosterPath = seriesPosterPath, onPlay = { onEpisodeClick(movie) })
                         }
                     }
@@ -549,7 +546,6 @@ private fun loadSeasons(series: Series): List<Season> {
                 else NasApiClient.BASE_URL + "/" + rawThumb
             } else rawThumb
             
-            // 🔴 [핵심] 영화 카테고리라면 DB값 무시하고 인덱스(1, 2, 3...) 사용
             val epNum = if (series.category == "movies" || series.category == "movie_extras") index + 1 else (movie.episode_number ?: 0)
             
             movie.copy(videoUrl = videoUrl, thumbnailUrl = thumbUrl, episode_number = epNum)
