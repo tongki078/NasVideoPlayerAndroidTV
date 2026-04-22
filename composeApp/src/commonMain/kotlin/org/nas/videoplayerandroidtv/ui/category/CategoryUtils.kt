@@ -19,16 +19,22 @@ suspend fun processThemedSections(result: List<Series>): List<ThemeSection> {
     if (result.isEmpty()) return emptyList()
 
     // [최적화] 제목 기반 그룹화 시 cleanTitle을 미리 한 번만 수행
+    // 🔴 [수정] 카테고리가 'movies' 계열이면(단일 영화) 동일한 제목이라도 경로가 다르면 병합하지 않도록 분리합니다.
     val groupedResult = result.groupBy { 
-        it.title.cleanTitle(includeYear = false) 
+        if (it.category == "movies" || it.category == "movie" || it.category == "movie_extras") {
+            it.fullPath ?: it.title
+        } else {
+            it.title.cleanTitle(includeYear = false) 
+        }
     }.map { (baseTitle, seriesList) ->
-        if (seriesList.size > 1) {
-            // 여러 시즌이 있는 경우 에피소드를 합침
+        if (seriesList.size > 1 && seriesList[0].category != "movies" && seriesList[0].category != "movie" && seriesList[0].category != "movie_extras") {
+            // 여러 시즌이 있는 경우 에피소드를 합침 (TV 시리즈만 해당)
             seriesList[0].copy(
                 title = baseTitle,
                 episodes = seriesList.flatMap { it.episodes }.distinctBy { it.videoUrl ?: it.id }
             )
         } else {
+            // 영화의 경우 병합하지 않고 그대로 사용
             seriesList[0]
         }
     }
