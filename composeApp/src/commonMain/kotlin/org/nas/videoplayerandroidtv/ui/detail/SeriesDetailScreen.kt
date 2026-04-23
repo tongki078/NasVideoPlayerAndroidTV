@@ -574,8 +574,24 @@ private fun EpisodeOverlay(
 private fun loadSeasons(series: Series): List<Season> {
     val mainEpisodes = series.episodes.filter { it.videoUrl?.contains("Featurettes", ignoreCase = true) != true }
 
+    fun getSourceTag(url: String): String {
+        // Simple manual un-escaping of korean strings for keywords
+        val unescaped = url.replace("%EB%9D%BC%ED%94%84%ED%85%94", "라프텔")
+                           .replace("%EA%B3%A0%ED%99%94%EC%A7%88", "고화질")
+                           .replace("%EB%8D%94%EB%B9%99", "더빙")
+                           .replace("%EC%9E%90%EB%A7%89", "자막")
+        return when {
+            unescaped.contains("라프텔") || unescaped.contains("laftel", ignoreCase = true) -> "라프텔"
+            unescaped.contains("고화질") -> "고화질"
+            unescaped.contains("더빙") -> "더빙"
+            unescaped.contains("자막") -> "자막"
+            else -> "일반"
+        }
+    }
+
     if (series.seasons.isNotEmpty()) {
-        return series.seasons.entries.map { entry ->
+        val allSeasons = mutableListOf<Season>()
+        series.seasons.entries.forEach { entry ->
             val seasonName = entry.key 
             val seasonNum = seasonName.filter { it.isDigit() }.toIntOrNull() ?: 1
 
@@ -590,12 +606,50 @@ private fun loadSeasons(series: Series): List<Season> {
                 } else rawThumb
                 
                 movie.copy(videoUrl = videoUrl, thumbnailUrl = thumbUrl)
-            }.sortedBy { it.episode_number } 
+            }
             
-            Season(number = seasonNum, name = seasonName, episodes = processedEpisodes)
-        }.filter { it.episodes.isNotEmpty() }.sortedWith(compareBy(
-                { when { "스페셜" in it.name -> 3; "고화질" in it.name -> 2; else -> 1 } },
-                { it.number }
+            val distinctEpisodes = processedEpisodes.distinctBy { it.videoUrl }
+            val subGroups = distinctEpisodes.groupBy { getSourceTag(it.videoUrl ?: "") }
+            
+            subGroups.forEach { (source, eps) ->
+                val finalSeasonName = if (source != "일반") {
+                    if (seasonName.contains(source)) seasonName else "$seasonName ($source)"
+                } else {
+                    seasonName
+                }
+                allSeasons.add(Season(number = seasonNum, name = finalSeasonName, episodes = eps.sortedBy { it.episode_number }))
+            }
+        }
+        
+        val refinedSeasons = mutableListOf<Season>()
+        allSeasons.forEach { season ->
+            val hasDuplicates = season.episodes.filter { (it.episode_number ?: 0) > 0 }.groupBy { it.episode_number }.any { it.value.size > 1 }
+            if (hasDuplicates) {
+                val dirGroups = season.episodes.groupBy { 
+                    val path = it.videoUrl ?: ""
+                    val pathWithoutFile = path.substringBeforeLast("/")
+                    val parentName = pathWithoutFile.substringAfterLast("/")
+                    // if it's url encoded, we can just use it as is, or attempt simple replace
+                    parentName.replace("%20", " ")
+                }
+                if (dirGroups.size > 1) {
+                    var version = 1
+                    dirGroups.forEach { (_, eps) ->
+                        refinedSeasons.add(Season(number = season.number, name = "${season.name} (버전 $version)", episodes = eps))
+                        version++
+                    }
+                } else {
+                    refinedSeasons.add(season)
+                }
+            } else {
+                refinedSeasons.add(season)
+            }
+        }
+
+        return refinedSeasons.filter { it.episodes.isNotEmpty() }.sortedWith(compareBy(
+                { when { "스페셜" in it.name -> 3; "고화질" in it.name -> 2; "라프텔" in it.name -> 1; else -> 0 } },
+                { it.number },
+                { it.name }
             ))
     }
 
@@ -611,17 +665,57 @@ private fun loadSeasons(series: Series): List<Season> {
     }
 
     val distinctMovies = processedMovies.distinctBy { it.videoUrl }
+    
     val seasonsMap = distinctMovies.groupBy { movie ->
         val s = movie.season_number ?: movie.videoUrl?.extractSeason() ?: movie.title?.extractSeason() ?: 1
-        if (s <= 0) 1 else s
+        val num = if (s <= 0) 1 else s
+        Pair(num, getSourceTag(movie.videoUrl ?: ""))
     }
 
-    return seasonsMap.entries.map { entry ->
-        val num = entry.key
+    val uniqueSeasonNumbers = seasonsMap.keys.map { it.first }.distinct()
+    
+    val initialSeasons = seasonsMap.entries.map { entry ->
+        val (num, source) = entry.key
+        val seasonName = if (source != "일반") {
+            "${num}시즌 ($source)"
+        } else {
+            if (uniqueSeasonNumbers.size > 1 || seasonsMap.size > 1) "${num}시즌" else "회차 정보"
+        }
+        
         Season(
             number = num,
-            name = if (seasonsMap.size > 1) "${num}시즌" else "회차 정보",
+            name = seasonName,
             episodes = entry.value.sortedBy { it.episode_number }
         )
-    }.sortedBy { it.number }
+    }
+    
+    val refinedSeasons = mutableListOf<Season>()
+    initialSeasons.forEach { season ->
+        val hasDuplicates = season.episodes.filter { (it.episode_number ?: 0) > 0 }.groupBy { it.episode_number }.any { it.value.size > 1 }
+        if (hasDuplicates) {
+            val dirGroups = season.episodes.groupBy { 
+                val path = it.videoUrl ?: ""
+                val pathWithoutFile = path.substringBeforeLast("/")
+                val parentName = pathWithoutFile.substringAfterLast("/")
+                parentName.replace("%20", " ")
+            }
+            if (dirGroups.size > 1) {
+                var version = 1
+                dirGroups.forEach { (_, eps) ->
+                    refinedSeasons.add(Season(number = season.number, name = "${season.name} (버전 $version)", episodes = eps))
+                    version++
+                }
+            } else {
+                refinedSeasons.add(season)
+            }
+        } else {
+            refinedSeasons.add(season)
+        }
+    }
+
+    return refinedSeasons.sortedWith(compareBy(
+        { when { "스페셜" in it.name -> 3; "고화질" in it.name -> 2; "라프텔" in it.name -> 1; else -> 0 } },
+        { it.number },
+        { it.name }
+    ))
 }
